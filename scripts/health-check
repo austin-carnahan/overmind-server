@@ -1,0 +1,78 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+usage() {
+  cat <<'HELP'
+Usage: health-check [--mount /absolute/mount ...] [service ...]
+Read-only checks of selected systemd services (default: ssh).
+Use service names such as ssh or ssh.service. No installation is performed.
+Repeat --mount to check the exact mounts required by the selected services.
+Example: health-check --mount /mnt/library --mount /var/spool/overmind ssh
+Only request paths configured as exact filesystem/bind mount points.
+Exit 0: requested checks passed; 1: a check failed; 2: usage/unsupported host.
+Application-specific health, VPN, permissions, and backup checks remain separate.
+HELP
+}
+
+services=()
+required_mounts=()
+while [[ $# -gt 0 ]]; do
+  case "$1" in
+    --help|-h) usage; exit 0 ;;
+    --mount)
+      if [[ $# -lt 2 || "$2" != /* ]]; then
+        echo "--mount requires an absolute mount path." >&2
+        exit 2
+      fi
+      required_mounts+=("$2")
+      shift 2
+      ;;
+    -*) echo "Unknown option: $1" >&2; exit 2 ;;
+    *)
+      if [[ ! "$1" =~ ^[[:alnum:]_][[:alnum:]_.@:-]*$ ]]; then
+        echo "Invalid service name: $1" >&2
+        exit 2
+      fi
+      services+=("$1")
+      shift
+      ;;
+  esac
+done
+
+if [[ "$(uname -s)" != "Linux" ]] || ! command -v systemctl >/dev/null 2>&1; then
+  echo "This check requires a Linux host running systemd." >&2
+  exit 2
+fi
+if [[ ${#required_mounts[@]} -gt 0 ]] && ! command -v mountpoint >/dev/null 2>&1; then
+  echo "mountpoint is required for --mount." >&2
+  exit 2
+fi
+if [[ ${#services[@]} -eq 0 ]]; then services=(ssh); fi
+
+result=0
+for required_mount in "${required_mounts[@]+"${required_mounts[@]}"}"; do
+  if mountpoint --quiet -- "$required_mount"; then
+    printf 'OK   mounted %s\n' "$required_mount"
+  else
+    printf 'FAIL not mounted: %s\n' "$required_mount"
+    result=1
+  fi
+done
+
+for service in "${services[@]}"; do
+  unit="$service"
+  [[ "$unit" == *.service ]] || unit="$unit.service"
+  if ! load_state="$(systemctl show --property=LoadState --value -- "$unit")"; then
+    printf 'FAIL cannot inspect %s\n' "$unit"
+    result=1
+  elif [[ "$load_state" != "loaded" ]]; then
+    printf 'FAIL %s load state: %s\n' "$unit" "$load_state"
+    result=1
+  elif systemctl is-active --quiet -- "$unit"; then
+    printf 'OK   %s\n' "$unit"
+  else
+    printf 'FAIL inactive %s\n' "$unit"
+    result=1
+  fi
+done
+exit "$result"

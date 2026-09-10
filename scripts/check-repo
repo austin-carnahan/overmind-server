@@ -1,0 +1,76 @@
+#!/usr/bin/env python3
+"""Read-only validation of repository examples, links, and shell scripts."""
+import argparse
+import json
+from pathlib import Path
+import re
+import shutil
+import subprocess
+import sys
+from urllib.parse import unquote, urlsplit
+
+parser = argparse.ArgumentParser(description=__doc__)
+parser.add_argument("--require-shellcheck", action="store_true")
+args = parser.parse_args()
+root = Path(__file__).resolve().parent.parent
+files = sorted(p for p in root.rglob("*") if p.is_file() and ".git" not in p.relative_to(root).parts)
+errors = []
+shell_files = []
+markdown_count = 0
+json_count = 0
+for path in files:
+    relative = path.relative_to(root)
+    if path.suffix == ".json":
+        try:
+            json.loads(path.read_text())
+            json_count += 1
+        except (ValueError, UnicodeError) as exc:
+            errors.append(f"{relative}: invalid JSON: {exc}")
+    if path.suffix == ".md":
+        markdown_count += 1
+        body = re.sub(r"```.*?```", "", path.read_text(), flags=re.S)
+        for link in re.findall(r"\[[^\]]*\]\(([^)]+)\)", body):
+            link = link.strip().strip("<>")
+            parsed = urlsplit(link)
+            if parsed.scheme or link.startswith(("#", "//")):
+                continue
+            target = unquote(parsed.path)
+            if target.startswith("/"):
+                errors.append(f"{relative}: nonportable absolute file link: {target}")
+            elif target and not (path.parent / target).exists():
+                errors.append(f"{relative}: missing local link: {target}")
+    if path.suffix == ".sh" or path.parent == root / "scripts":
+        if path.read_bytes().splitlines()[:1] == [b"#!/usr/bin/env bash"]:
+            shell_files.append(str(path))
+            result = subprocess.run(["bash", "-n", str(path)], capture_output=True, text=True)
+            if result.returncode:
+                errors.append(f"{relative}: {result.stderr.strip()}")
+
+shellcheck = shutil.which("shellcheck")
+if shellcheck and shell_files:
+    result = subprocess.run([shellcheck, "--", *shell_files], capture_output=True, text=True)
+    if result.returncode:
+        errors.append(result.stdout + result.stderr)
+elif args.require_shellcheck:
+    errors.append("ShellCheck is required but was not found on PATH")
+else:
+    print("SKIP ShellCheck (not installed; CI requires it)")
+
+if (root / ".git").exists():
+    if not shutil.which("git"):
+        errors.append("Git is required to check repository ignore rules")
+    else:
+        for path in files:
+            rel = str(path.relative_to(root))
+            if path.suffix == ".md" or rel.endswith(".env.example"):
+                result = subprocess.run(["git", "check-ignore", "--no-index", "-q", "--", rel], cwd=root)
+                if result.returncode == 0:
+                    errors.append(f"Required documentation/example is ignored: {rel}")
+                elif result.returncode != 1:
+                    errors.append(f"Could not check ignore rules for: {rel}")
+
+if errors:
+    print("\n".join(f"FAIL {error}" for error in errors), file=sys.stderr)
+    sys.exit(1)
+print(f"OK   {markdown_count} Markdown files, {json_count} JSON examples, {len(shell_files)} shell scripts")
+print("Repository checks passed; no live host or deployment was tested.")

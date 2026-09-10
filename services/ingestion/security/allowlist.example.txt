@@ -1,0 +1,13 @@
+# Example extension allowlist for media payloads.
+# Extension alone is not sufficient validation; pair with file/ffprobe checks.
+mkv
+mp4
+m4v
+srt
+ass
+ssa
+vtt
+nfo
+jpg
+jpeg
+png

@@ -1,0 +1,13 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+if [[ "${1:-}" == "--help" || "${1:-}" == "-h" ]]; then
+  echo "Usage: backup --help"
+  echo "Backup is not implemented. See runbooks/backup-restore.md."
+  exit 0
+fi
+
+echo "Backup is not implemented; no backup was created." >&2
+echo "Choose sources, consistent service exports, destination, and restore tests first." >&2
+echo "See runbooks/backup-restore.md." >&2
+exit 2

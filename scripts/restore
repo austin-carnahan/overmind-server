@@ -1,0 +1,13 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+if [[ "${1:-}" == "--help" || "${1:-}" == "-h" ]]; then
+  echo "Usage: restore --help"
+  echo "Restore is not implemented. See runbooks/backup-restore.md."
+  exit 0
+fi
+
+echo "Restore is not implemented; no files were restored." >&2
+echo "Verify the backup, targets, credentials, and rollback procedure first." >&2
+echo "See runbooks/backup-restore.md." >&2
+exit 2

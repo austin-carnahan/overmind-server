@@ -1,0 +1,30 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+case "${1:-}" in
+  --help|-h)
+    echo "Usage: bootstrap --plan"
+    echo "Print the Overmind setup plan. Host installation is not implemented."
+    ;;
+  --plan)
+    if [[ $# -ne 1 ]]; then
+      echo "Usage: bootstrap --plan" >&2
+      exit 2
+    fi
+    cat <<'PLAN'
+Overmind setup plan — no host changes are performed.
+1. Inspect hosts/overmind-01 inventory and verify OS, disks, mounts, and accounts.
+2. Select independent backups and protected identity/credential recovery.
+3. Define backing for /mnt/substrate, /mnt/library, /var/spool/overmind,
+   and each selected service's documented default state/cache locations.
+4. Establish scoped ownership, mount dependencies, and private host access.
+5. Deploy only services with verified procedures; restore content/state as needed.
+6. Verify remote project work, media access, reboot, absent-disk behavior, restores.
+See runbooks/rebuild-overmind-01.md and TODO.md. Installation remains unimplemented.
+PLAN
+    ;;
+  *)
+    echo "Bootstrap installation is not implemented. Use bootstrap --plan." >&2
+    exit 2
+    ;;
+esac
