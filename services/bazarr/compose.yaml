@@ -1,0 +1,20 @@
+services:
+  bazarr:
+    # Verify and pin an exact current tag before real deployment; this is an
+    # example, not a version selection.
+    image: linuxserver/bazarr:latest
+    container_name: bazarr
+    env_file:
+      - ./.env
+    environment:
+      PUID: "1000"
+      PGID: "1000"
+      TZ: "Etc/UTC"
+    ports:
+      - "6767:6767" # WebUI, reachable only over Tailscale (no router port-forward)
+    volumes:
+      - ${BAZARR_CONFIG_ROOT}:/config
+      # Read-write: Bazarr writes subtitle files alongside the media itself.
+      - ${MOVIES_ROOT}:/movies
+      - ${TV_ROOT}:/tv
+    restart: unless-stopped

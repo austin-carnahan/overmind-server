@@ -10,20 +10,28 @@
 
 ## 1. Inspect and establish the foundation
 
-- [ ] Inspect overmind-01: exact Ubuntu release, RAM, architecture, packages, services.
+- [x] Inspect overmind-01: exact Ubuntu release, RAM, architecture, packages, services.
 - [ ] Identify the SSD/filesystem by stable identity; record its existing contents.
+      Blocked: SSD not yet acquired.
 - [ ] Decide SSD backing for `/mnt/substrate`, `/mnt/library`,
-  `/var/spool/overmind`, and selected service-default locations.
+  `/var/spool/overmind`, and selected service-default locations. Blocked on SSD.
 - [ ] Define per-project/service ownership and required-mount startup behavior.
-- [ ] Choose an independent backup destination and secret/host-identity recovery.
-- [ ] Document and test host networking, SSH, private remote access, and reboot.
+- [x] Choose an independent backup destination and secret/host-identity recovery:
+      Backblaze B2 + restic, see [backup-restore.md](runbooks/backup-restore.md).
+      Bucket/key creation and repository init are still pending.
+- [x] Document and test host networking, SSH, private remote access, and reboot:
+      Tailscale enrolled, OpenSSH + agent-forwarded key, VS Code Remote-SSH, reboot verified.
 - [ ] Implement bootstrap only after those manual procedures are verified.
 - [ ] Demonstrate remote project editing, one media/game client, and sample restores.
+      Remote project editing works (VS Code Remote-SSH); media client and
+      sample restores still need Library storage (blocked on SSD).
 
 ## 2. Repeatable daily use
 
 - [ ] Implement service definitions using verified ARM-compatible deployment methods.
+      Transmission + PIA (gluetun) deployed; Jellyfin/Radarr/Sonarr/Bazarr not started.
 - [ ] Verify Transmission's private egress and failure behavior before unattended use.
+      Deployed; kill-switch/failure test still pending.
 - [ ] Establish manual media/ROM checks and imports, then resolve automation gating.
 - [ ] Select research capture, citation/attachment ownership, and note synchronization.
 - [ ] Define shared dataset manifests, versioning, and project-local data practices.

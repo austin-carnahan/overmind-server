@@ -1,0 +1,22 @@
+services:
+  radarr:
+    # Verify and pin an exact current tag before real deployment; this is an
+    # example, not a version selection.
+    image: linuxserver/radarr:latest
+    container_name: radarr
+    env_file:
+      - ./.env
+    environment:
+      PUID: "1000"
+      PGID: "1000"
+      TZ: "Etc/UTC"
+    ports:
+      - "7878:7878" # WebUI, reachable only over Tailscale (no router port-forward)
+    volumes:
+      - ${RADARR_CONFIG_ROOT}:/config
+      - ${MOVIES_ROOT}:/movies
+      # Read-only: Radarr copies promoted files out to /movies; it must not
+      # mutate or delete Transmission's seeding data directly (see
+      # design-notes/security-model.md).
+      - ${TRANSMISSION_DOWNLOAD_ROOT}:/downloads:ro
+    restart: unless-stopped

@@ -2,11 +2,13 @@
   "download-dir": "/downloads/complete",
   "incomplete-dir": "/downloads/incomplete",
   "incomplete-dir-enabled": true,
+  "peer-port": 51413,
   "rpc-authentication-required": true,
   "rpc-bind-address": "0.0.0.0",
   "rpc-enabled": true,
   "rpc-port": 9091,
   "rpc-username": "CHANGE_ME",
+  "rpc-password": "CHANGE_ME",
   "rpc-whitelist-enabled": false,
   "rpc-host-whitelist-enabled": false,
   "umask": 2

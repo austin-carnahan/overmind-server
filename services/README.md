@@ -37,3 +37,9 @@ selected via Compose's `include:`, so `docker compose -f services/compose.yaml
 up -d` runs the whole enabled stack without a custom orchestrator — comment a
 line out to disable a service, add one when a new service gets a
 `compose.yaml`.
+
+Adopted convention so far, not an imposed hierarchy (see
+[storage](../design-notes/storage-layout.md)): small, low-write app state/config
+lives at `/var/lib/overmind/<service>/...` and is usable without the SSD; a
+service that reads/writes Library content stays disabled (commented out of the
+root `compose.yaml`) until the SSD is actually attached and mounted there.

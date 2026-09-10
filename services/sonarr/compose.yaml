@@ -1,0 +1,22 @@
+services:
+  sonarr:
+    # Verify and pin an exact current tag before real deployment; this is an
+    # example, not a version selection.
+    image: linuxserver/sonarr:latest
+    container_name: sonarr
+    env_file:
+      - ./.env
+    environment:
+      PUID: "1000"
+      PGID: "1000"
+      TZ: "Etc/UTC"
+    ports:
+      - "8989:8989" # WebUI, reachable only over Tailscale (no router port-forward)
+    volumes:
+      - ${SONARR_CONFIG_ROOT}:/config
+      - ${TV_ROOT}:/tv
+      # Read-only: Sonarr copies promoted files out to /tv; it must not
+      # mutate or delete Transmission's seeding data directly (see
+      # design-notes/security-model.md).
+      - ${TRANSMISSION_DOWNLOAD_ROOT}:/downloads:ro
+    restart: unless-stopped

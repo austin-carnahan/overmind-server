@@ -8,3 +8,12 @@
 include:
   - path: pia/compose.yaml
   - path: transmission/compose.yaml
+  # Jellyfin/Radarr/Sonarr/Bazarr are designed (see their compose.yaml and
+  # README) but bind-mount /mnt/library, which doesn't exist until the SSD is
+  # attached and mounted. Uncomment once that's real — bringing them up
+  # before then makes Docker silently create empty directories on the
+  # microSD at those paths.
+  # - path: jellyfin/compose.yaml
+  # - path: radarr/compose.yaml
+  # - path: sonarr/compose.yaml
+  # - path: bazarr/compose.yaml

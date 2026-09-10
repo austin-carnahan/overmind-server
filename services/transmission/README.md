@@ -23,6 +23,15 @@ only through Tailscale, not the previously-assumed loopback binding:
   rejected by the default host whitelist. `rpc-authentication-required` plus
   the facts that this box is reachable only over Tailscale and never
   port-forwarded are the actual boundary here.
+- `peer-port` is pinned to `51413` explicitly, matching the port
+  [gluetun publishes](../pia/compose.yaml) for this container — don't rely on
+  it being Transmission's undeclared default.
+
+`rpc-username`/`rpc-password` are the WebUI/RPC login, unrelated to the `austin`
+Linux account. Set both to real values in `settings.json` **before** the first
+start: Transmission hashes a plaintext `rpc-password` on load and rewrites the
+file, so an edit made while the daemon is already running can be overwritten
+by its own state write-back.
 
 ## Storage: temporary until the SSD arrives
 

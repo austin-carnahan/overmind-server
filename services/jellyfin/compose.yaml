@@ -1,0 +1,23 @@
+services:
+  jellyfin:
+    # Verify and pin an exact current tag before real deployment; this is an
+    # example, not a version selection.
+    image: jellyfin/jellyfin:latest
+    container_name: jellyfin
+    env_file:
+      - ./.env
+    environment:
+      PUID: "1000"
+      PGID: "1000"
+      TZ: "Etc/UTC"
+    ports:
+      - "8096:8096" # WebUI, reachable only over Tailscale (no router port-forward)
+    volumes:
+      - ${JELLYFIN_CONFIG_ROOT}:/config
+      - ${JELLYFIN_CACHE_ROOT}:/cache
+      # Read-only: Jellyfin serves the canonical Library, it doesn't own it.
+      # No /dev/dri passthrough — direct-play only until Pi hardware
+      # transcoding is deliberately tested (see AGENTS.md).
+      - ${MOVIES_ROOT}:/media/movies:ro
+      - ${TV_ROOT}:/media/tv:ro
+    restart: unless-stopped
