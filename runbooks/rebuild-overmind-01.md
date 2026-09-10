@@ -12,7 +12,9 @@ mount configuration when adding SSD mappings.
 ## Sequence to validate
 
 1. Install the selected Ubuntu Server image and establish local SSH/networking.
-2. Clone the Overmind infrastructure repo, targeting `/opt/overmind` for deployment.
+2. Clone the Overmind infrastructure repo, targeting `/opt/overmind` for deployment,
+   using a repo-scoped deploy key for this first checkout (see
+   [git credentials](../design-notes/security-model.md#git-credentials)).
 3. Identify SSD contents/filesystem and establish the agreed physical mounts.
 4. Expose work at `/mnt/substrate`, archive content at `/mnt/library`, and intake
    at `/var/spool/overmind`. Back selected service-default locations with SSD

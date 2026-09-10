@@ -2,7 +2,9 @@
 
 Status: manual proposed procedure; no daemon/automatic gate is implemented.
 
-1. Finish the download in `/var/spool/overmind/torrents` behind verified egress.
+1. Finish the download in [Transmission](../services/transmission/README.md),
+   routed through [PIA via gluetun](../services/pia/README.md). Once seeding-safe,
+   treat it as an ordinary `/var/spool/overmind/media/movies` or `media/tv` arrival.
 2. Hold it in pending/quarantine state; scan and inspect types, archives, sidecars.
 3. Probe the candidate with the helper under `services/ingestion/media`.
 4. Review results and classify it before importing into `/mnt/library/movies`

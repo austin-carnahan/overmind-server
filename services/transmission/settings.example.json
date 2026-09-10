@@ -1,13 +1,13 @@
 {
-  "download-dir": "/var/spool/overmind/torrents/completed",
-  "incomplete-dir": "/var/spool/overmind/torrents/incomplete",
+  "download-dir": "/downloads/complete",
+  "incomplete-dir": "/downloads/incomplete",
   "incomplete-dir-enabled": true,
   "rpc-authentication-required": true,
-  "rpc-bind-address": "127.0.0.1",
+  "rpc-bind-address": "0.0.0.0",
   "rpc-enabled": true,
   "rpc-port": 9091,
   "rpc-username": "CHANGE_ME",
-  "rpc-whitelist-enabled": true,
-  "umask": 2,
-  "rpc-whitelist": "127.0.0.1"
+  "rpc-whitelist-enabled": false,
+  "rpc-host-whitelist-enabled": false,
+  "umask": 2
 }

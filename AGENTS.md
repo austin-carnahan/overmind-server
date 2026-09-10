@@ -20,6 +20,7 @@ Read [README.md](README.md) and [the design index](design-notes/README.md) first
 8. For torrent privacy, encrypted DNS is not a VPN. PIA (or equivalent outbound VPN) must remain the egress privacy boundary for Transmission where configured.
 9. Remote-access VPN and outbound-privacy VPN are separate concerns: Tailscale gets **into** the home network; PIA gets **out** privately.
 10. Keep low-powered Pi services conservative. Heavy transcoding, subtitle synchronization, and high-end emulation belong on the future mini-PC unless explicitly tested.
+11. **Never let an agent/runner use a human's personal or forwarded git credentials.** Each agent gets its own scoped, revocable, expiring credential covering only the repo(s) it touches. See [git credentials](design-notes/security-model.md#git-credentials).
 
 ## Ownership and filesystem boundaries
 

@@ -1,0 +1,10 @@
+# Brings up whichever service fragments are currently selected. Comment a
+# line out to remove that service from the stack; add a line when a new
+# service gets a compose.yaml. No custom orchestrator beyond Compose itself —
+# see design-notes/architecture.md.
+#
+# Usage: docker compose -f services/compose.yaml up -d
+#        docker compose -f services/compose.yaml down
+include:
+  - path: pia/compose.yaml
+  - path: transmission/compose.yaml

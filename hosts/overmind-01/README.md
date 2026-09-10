@@ -1,17 +1,35 @@
 # overmind-01
 
 **Status:** PARTIAL — see [status legend](../../design-notes/README.md#status-legend);
-hardware is owner-reported, host inspection and provisioning are pending.
+base OS/hardware inspected below; storage, network addressing, and services
+beyond the base image are pending.
 
-| Item | Reported value |
+| Item | Value |
 | --- | --- |
-| Machine | Raspberry Pi 4 |
-| OS | Fresh Ubuntu Server 26 LTS |
-| OS storage | 128 GB microSD |
-| Attached storage | 2 TB SSD |
+| Machine | Raspberry Pi 4 (Cortex-A72, 4 cores, aarch64) |
+| OS | Ubuntu 26.04.1 LTS "Resolute Raccoon", kernel 7.0.0-1017-raspi |
+| RAM | 7.6 GiB |
+| OS storage | 128 GB microSD (`mmcblk0`: 512 MB `/boot/firmware`, 117 GB `/`, 4.2 GB used) |
+| Attached storage | 2 TB SSD (planned; not yet acquired — no second block device present) |
+| Network interface | Wi-Fi (`wlan0` via netplan/`wpa_supplicant`); no Ethernet link observed |
 
-Unverified: exact OS release, RAM, architecture, SSD identity/filesystem/content,
-current mounts, accounts/groups, network addressing, and installed services.
+Unverified: SSD identity/filesystem/content once attached, current mounts
+beyond the base image, remaining accounts/groups beyond `root`/`austin`, and
+LAN addressing/DHCP details.
+
+## Verified access
+
+- Unix account `austin` exists and is used for interactive access.
+- Tailscale is enrolled (hostname `overmind-01`, MagicDNS on, node key expiry
+  disabled); see [networking](../../design-notes/networking.md).
+- Interactive SSH uses plain OpenSSH with a forwarded personal key, including
+  through VS Code Remote-SSH; see
+  [remote project work](../../runbooks/clients/remote-work.md) for setup.
+- `ufw` is inactive.
+- Only base-image services are running: `tailscaled`, `ssh`, `chrony`, `cron`,
+  `unattended-upgrades`, `ModemManager`, `fwupd`, `snapd`. No application
+  services are installed yet.
+- Login-capable accounts: `root`, `austin`.
 
 ## Intended first roles
 

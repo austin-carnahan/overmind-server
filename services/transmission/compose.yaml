@@ -1,0 +1,25 @@
+services:
+  transmission:
+    # Verify and pin an exact current tag before real deployment; this is an
+    # example, not a version selection.
+    image: linuxserver/transmission:latest
+    container_name: transmission
+    # No network of its own: every packet routes through the gluetun
+    # container's PIA tunnel (see services/pia/compose.yaml), so Transmission
+    # cannot leak traffic outside it even if misconfigured.
+    network_mode: service:gluetun
+    depends_on:
+      gluetun:
+        condition: service_healthy
+    env_file:
+      - ./.env
+    environment:
+      PUID: "1000"
+      PGID: "1000"
+      TZ: "Etc/UTC"
+    volumes:
+      # Copy settings.example.json to settings.json (git-ignored once it holds
+      # a real rpc password) before first run.
+      - ./settings.json:/config/settings.json
+      - ${TRANSMISSION_DOWNLOAD_ROOT}:/downloads
+    restart: unless-stopped

@@ -1,7 +1,31 @@
 # Backup and restore
 
-Status: design checklist; `scripts/backup` and `scripts/restore` do not perform
-operations and exit nonzero. No backup destination/tool has been selected.
+**Status:** PARTIAL — see [status legend](../design-notes/README.md#status-legend);
+destination and tool are selected below, but `scripts/backup` and
+`scripts/restore` do not yet perform operations and exit nonzero.
+
+## Selected approach
+
+- **Destination:** Backblaze B2 (a bucket, not Backblaze's separate Windows/Mac
+  Personal Backup product, which has no Linux client). Continues the approach
+  used on the previous Overmind host. Use a B2 application key scoped to this
+  one bucket, not the account's master key.
+- **Tool:** `restic`. Client-side encryption before anything leaves the host
+  (B2 never sees plaintext), deduplication so repeated snapshots don't re-charge
+  for unchanged data, and `restic forget --prune` for a bounded retention policy
+  (exact schedule, e.g. daily/weekly/monthly counts, still to be set once real
+  data volume is known).
+- **Included, to keep size and cost minimal:** Substrate projects (source/docs,
+  not build artifacts/dependencies/venvs), notes, papers, curated datasets/models;
+  romset masters; reviewed agent-notes; host config and credential-recovery notes.
+- **Excluded as reproducible, not backed up:** Library movies/TV (re-obtainable
+  via Radarr/Sonarr/Transmission), romset curated output (regenerable from
+  masters, DATs, and Igir), and any service cache/vector index/other state
+  already treated as a proven-rebuildable index elsewhere in this repo.
+- **Still pending:** bucket and scoped key creation, `restic` repository
+  initialization, a separate durable backup of the `restic` repository password
+  itself (losing it makes every snapshot unreadable), the actual prune/retention
+  schedule, wiring `scripts/backup`/`scripts/restore`, and a real restore test.
 
 ## Recovery inputs
 

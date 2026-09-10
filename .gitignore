@@ -9,6 +9,7 @@ local/
 *.key
 *.pem
 *.token
+settings.json
 
 # Runtime and accidental live collections at repository root
 /state/

@@ -9,7 +9,7 @@ a time. Existing helper scripts are manual components, not an ingestion daemon.
 | [Tailscale](tailscale/README.md) | Private remote access |
 | [File sharing](file-sharing/README.md) | Selected Substrate collections for clients |
 | [Jellyfin](jellyfin/README.md) | Media browsing/playback |
-| [Transmission](transmission/README.md) | Downloads into the torrents Inbox |
+| [Transmission](transmission/README.md) | Downloads, routed through PIA |
 | [PIA](pia/README.md) | Selected traffic's private outbound egress |
 | [Ingestion](ingestion/README.md) | Manual scan/validation and promotion contract |
 | [Radarr](radarr/README.md), [Sonarr](sonarr/README.md), [Bazarr](bazarr/README.md) | Library organization and subtitles |
@@ -28,3 +28,12 @@ mounts before enabling startup. Use the application's supported data layout.
 
 Follow [storage](../design-notes/storage-layout.md) and
 [security](../design-notes/security-model.md). Do not deploy every plan together.
+
+## Containerized services
+
+A containerized service keeps a `compose.yaml` next to its README. The root
+[compose.yaml](compose.yaml) brings in whichever fragments are currently
+selected via Compose's `include:`, so `docker compose -f services/compose.yaml
+up -d` runs the whole enabled stack without a custom orchestrator — comment a
+line out to disable a service, add one when a new service gets a
+`compose.yaml`.

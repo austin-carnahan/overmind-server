@@ -22,5 +22,26 @@
 - Prefer deliberate application upgrades and tested security-update policy.
   Bound logs and verify backup/restore before trusting unattended operations.
 
+## Git credentials
+
+- Human interactive git access, across any repo, uses the person's own SSH key
+  via agent forwarding (`ssh -A`) from their client machine. The private key
+  never lives at rest on a host.
+- Bootstrapping a fresh host's first checkout of this repository, before an
+  interactive session or agent forwarding is configured, may use a repository
+  deploy key scoped to Overmind only — read-only unless that host also needs
+  to push. A deploy key is repo-scoped, not identity-scoped: every process
+  using it is indistinguishable, so treat it as a bootstrap convenience, not a
+  long-term credential for ongoing work.
+- Agents/runners never reuse a human's forwarded key or a shared deploy key.
+  Each gets its own credential, scoped to only the repo(s) it touches, with an
+  expiry: a fine-grained GitHub personal access token for now, a short-lived
+  GitHub App installation token once Paperclip mints per-job credentials.
+  Revoking one agent's access must not affect another's.
+- Bind git identity to the working directory, not global config: `~/.ssh/config`
+  `Host` aliases with `IdentitiesOnly yes`, or `.gitconfig` `includeIf
+  "gitdir:..."` blocks. This prevents an agent worktree from accidentally
+  pushing under a human's identity by running from the wrong directory.
+
 See [AGENTS.md](../AGENTS.md), [storage](storage-layout.md), and
 [service onboarding](../services/README.md).

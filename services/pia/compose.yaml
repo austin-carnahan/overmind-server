@@ -1,0 +1,28 @@
+services:
+  gluetun:
+    # Verify and pin an exact current tag before real deployment; this is an
+    # example, not a version selection.
+    image: qmcgaw/gluetun:latest
+    container_name: gluetun
+    cap_add:
+      - NET_ADMIN
+    devices:
+      - /dev/net/tun:/dev/net/tun
+    env_file:
+      - ./.env
+    environment:
+      VPN_SERVICE_PROVIDER: "private internet access"
+      VPN_TYPE: openvpn # gluetun has no native WireGuard support for PIA
+    ports:
+      # Transmission has no network namespace of its own (see
+      # services/transmission/compose.yaml's network_mode: service:gluetun),
+      # so its ports are published here instead.
+      - "9091:9091" # Transmission WebUI, reachable only over Tailscale (no router port-forward)
+      - "51413:51413" # Transmission peer port, TCP
+      - "51413:51413/udp" # Transmission peer port, UDP
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "--timeout=5", "https://ipinfo.io/ip"]
+      interval: 60s
+      timeout: 15s
+      retries: 3
