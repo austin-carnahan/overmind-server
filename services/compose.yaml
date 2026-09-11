@@ -9,6 +9,7 @@ include:
   - path: pia/compose.yaml
   - path: transmission/compose.yaml
   - path: paperclip/compose.yaml
+  - path: prowlarr/compose.yaml
   # /mnt/library is live (SSD attached/mounted) as of 2026-09-11.
   - path: jellyfin/compose.yaml
   - path: radarr/compose.yaml
