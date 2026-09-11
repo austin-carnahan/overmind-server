@@ -11,10 +11,14 @@
 ## 1. Inspect and establish the foundation
 
 - [x] Inspect overmind-01: exact Ubuntu release, RAM, architecture, packages, services.
-- [ ] Identify the SSD/filesystem by stable identity; record its existing contents.
-      Blocked: SSD not yet acquired.
-- [ ] Decide SSD backing for `/mnt/substrate`, `/mnt/library`,
-  `/var/spool/overmind`, and selected service-default locations. Blocked on SSD.
+- [x] Identify the SSD/filesystem by stable identity; record its existing contents:
+      2 TB SABRENT (JMicron JMS579) USB SSD, reformatted ext4, empty. See
+      [host README](hosts/overmind-01/README.md) for the UAS quirk this
+      enclosure needs to avoid crashing the Pi's USB controller.
+- [x] Decide SSD backing for `/mnt/substrate`, `/mnt/library`,
+  `/var/spool/overmind`, and selected service-default locations: single ext4
+  partition, bind-mounted per logical path; `/var/spool/overmind` not yet
+  moved off the microSD.
 - [ ] Define per-project/service ownership and required-mount startup behavior.
 - [x] Choose an independent backup destination and secret/host-identity recovery:
       Backblaze B2 + restic, see [backup-restore.md](runbooks/backup-restore.md).
@@ -23,13 +27,14 @@
       Tailscale enrolled, OpenSSH + agent-forwarded key, VS Code Remote-SSH, reboot verified.
 - [ ] Implement bootstrap only after those manual procedures are verified.
 - [ ] Demonstrate remote project editing, one media/game client, and sample restores.
-      Remote project editing works (VS Code Remote-SSH); media client and
-      sample restores still need Library storage (blocked on SSD).
+      Remote project editing works (VS Code Remote-SSH); Library is mounted
+      but empty — no media imported and no client demonstrated yet.
 
 ## 2. Repeatable daily use
 
 - [ ] Implement service definitions using verified ARM-compatible deployment methods.
-      Transmission + PIA (gluetun) deployed; Jellyfin/Radarr/Sonarr/Bazarr not started.
+      Transmission + PIA (gluetun) and Paperclip deployed; Jellyfin/Radarr/Sonarr/Bazarr
+      enabled in compose but not yet run against real content.
 - [ ] Verify Transmission's private egress and failure behavior before unattended use.
       Deployed; kill-switch/failure test still pending.
 - [ ] Establish manual media/ROM checks and imports, then resolve automation gating.
@@ -43,6 +48,9 @@
 ## 3. Bounded agent work
 
 - [ ] Deploy Paperclip and one runner using supported configuration/state locations.
+      Paperclip + Postgres containers running on SSD-backed storage; no runner
+      configured and no pilot task run yet (see
+      [services/paperclip/README.md](services/paperclip/README.md)).
 - [ ] Define scoped credentials, worktree lifecycle, limits, review, output retention.
 - [ ] Test state recovery and ordinary project work with orchestration stopped.
 

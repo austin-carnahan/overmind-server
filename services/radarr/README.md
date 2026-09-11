@@ -1,7 +1,8 @@
 # Radarr
 
 **Status:** PROPOSED — see [status legend](../../design-notes/README.md#status-legend);
-[compose.yaml](compose.yaml) below, blocked from running by the missing SSD.
+[compose.yaml](compose.yaml) below and enabled in [services/compose.yaml](../compose.yaml)
+now that the SSD is attached and `/mnt/library` is mounted, but not yet run.
 
 ## Selected implementation
 
@@ -27,10 +28,3 @@ published port. Credentials are whatever was set in Transmission's
 `settings.json`.
 
 Automatic imports must not bypass the [ingestion gate](../ingestion/README.md).
-
-## Blocked until the SSD arrives
-
-`MOVIES_ROOT` in [.env.example](.env.example) points at
-`/mnt/library/movies`, which doesn't exist yet — don't bring this container up
-until Library is actually mounted there. See
-[storage](../../design-notes/storage-layout.md).

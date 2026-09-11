@@ -54,6 +54,16 @@ true.
   on the SSD today.
 - [Substrate standards research](substrate_standards_research.md) — research
   on a portable, agent/tool-agnostic project-context convention.
+- [Overmind operating model](overmind_operating_model_design_plan.md) — a
+  full future operating model (project lifecycle stages, indexing, code
+  intelligence, a "Kerrigan" resident-operator role, a chief-of-staff routing
+  agent, human-facing board views). Most of it is deferred, same as the rest
+  of this section — but its Paperclip execution-seam principle (Workstream E)
+  is adopted now, see [services/paperclip/README.md](../services/paperclip/README.md#work-item-convention).
+  Its intake-pattern principle (Workstream B) validates the existing
+  [ingestion](../services/ingestion/README.md) design rather than changing
+  it; ignore this doc's `/incoming/...` path examples, which don't match and
+  aren't a rename to make.
 
 ## Discussion history
 

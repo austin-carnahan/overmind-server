@@ -1,7 +1,8 @@
 # Jellyfin
 
 **Status:** PROPOSED — see [status legend](../../design-notes/README.md#status-legend);
-[compose.yaml](compose.yaml) below, blocked from running by the missing SSD.
+[compose.yaml](compose.yaml) below and enabled in [services/compose.yaml](../compose.yaml)
+now that the SSD is attached and `/mnt/library` is mounted, but not yet run.
 
 ## Selected implementation
 
@@ -16,14 +17,6 @@ Pi by default).
 
 WebUI on `8096`, reachable only over Tailscale like everything else on this
 host — never port-forwarded.
-
-## Blocked until the SSD arrives
-
-`MOVIES_ROOT`/`TV_ROOT` in [.env.example](.env.example) point at
-`/mnt/library/...`, which doesn't exist yet. Don't bring this container up
-until Library is actually mounted there — Docker will otherwise silently
-create empty directories on the microSD at those paths. See
-[storage](../../design-notes/storage-layout.md).
 
 ## Still to verify before real use
 

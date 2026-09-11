@@ -75,6 +75,40 @@ all three together, not just the database. Paperclip has built-in scheduled
 and manual logical backup support (`db:backup`) for both deployment shapes;
 prefer that over an ad hoc `pg_dump` where available.
 
+## Work-item convention
+
+Per the [operating model](../../design-notes/overmind_operating_model_design_plan.md#8-workstream-e--paperclip-execution-seam)'s
+Paperclip execution-seam principle, refined for the durable-intent/execution
+split:
+
+```text
+repo / Substrate  → durable intent and project knowledge
+Paperclip         → execution state and work coordination
+repo / Substrate  → durable result
+```
+
+The repo retains the **durable intent, specification, and project state**
+around a piece of work; Paperclip legitimately owns **execution-specific**
+context that never needs to be copied back verbatim — assignment, agent runs,
+blockers, reviews, approvals, and execution discussion. For the pilot task,
+represent the work with a small file in the repo carrying minimal frontmatter:
+
+```yaml
+---
+stage: ready
+type: pilot
+project: overmind
+paperclip:
+  issue: <id>   # filled in once the Paperclip issue exists
+---
+```
+
+When the task completes, durable outputs — code, configuration, decisions,
+runbooks, or documentation — return to the appropriate canonical file, not
+just Paperclip's own history. Paperclip is never the only place that explains
+what changed or why. Getting this right on the pilot avoids having to untangle
+Paperclip from canonical project state later.
+
 ## Still to verify before real use
 
 That `PAPERCLIP_ALLOWED_HOSTNAMES` plus the Tailscale Serve endpoint actually

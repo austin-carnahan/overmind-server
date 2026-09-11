@@ -33,14 +33,12 @@ start: Transmission hashes a plaintext `rpc-password` on load and rewrites the
 file, so an edit made while the daemon is already running can be overwritten
 by its own state write-back.
 
-## Storage: temporary until the SSD arrives
+## Storage
 
-`TRANSMISSION_DOWNLOAD_ROOT` in [.env.example](.env.example) currently points
-at a microSD-backed directory — there is no SSD attached yet. Keep this to
-small/test downloads only; the microSD has limited capacity and write
-endurance and is not where sustained downloading should happen. Once the SSD
-is attached, update `TRANSMISSION_DOWNLOAD_ROOT` and treat any temporary
-downloads as disposable.
+`TRANSMISSION_DOWNLOAD_ROOT` in [.env.example](.env.example) points at
+`/mnt/ssd/downloads` — SSD-backed, no fixed logical path name for this one
+(unlike `/mnt/substrate` etc.), so it's a plain directory on the SSD mount
+rather than a bind mount.
 
 Once a download completes and is seeding-safe, it becomes an ordinary
 `media/<type>` Inbox arrival for the [ingestion](../ingestion/README.md)
