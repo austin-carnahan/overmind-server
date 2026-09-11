@@ -1,0 +1,14 @@
+services:
+  flaresolverr:
+    # Verified: flaresolverr/flaresolverr publishes linux/arm64. Pin an exact
+    # tag before real deployment; this is an example, not a version selection.
+    image: flaresolverr/flaresolverr:latest
+    container_name: flaresolverr
+    env_file:
+      - ./.env
+    environment:
+      TZ: "Etc/UTC"
+    ports:
+      - "8191:8191" # Reachable only over Tailscale; also reachable by other
+                     # containers on the shared network as http://flaresolverr:8191
+    restart: unless-stopped

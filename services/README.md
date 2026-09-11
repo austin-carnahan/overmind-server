@@ -14,6 +14,7 @@ a time. Existing helper scripts are manual components, not an ingestion daemon.
 | [Ingestion](ingestion/README.md) | Manual scan/validation and promotion contract |
 | [Radarr](radarr/README.md), [Sonarr](sonarr/README.md), [Bazarr](bazarr/README.md) | Library organization and subtitles |
 | [Prowlarr](prowlarr/README.md) | Centralized indexer management for Radarr/Sonarr |
+| [FlareSolverr](flaresolverr/README.md) | Cloudflare bypass proxy for indexers that require it |
 | [Paperclip](paperclip/README.md) | Bounded agent coordination |
 | [Research](research/README.md) | Capture, notes, papers, and future search |
 | [Inference](inference/README.md) | Deferred model-serving capability |
@@ -44,3 +45,16 @@ Adopted convention so far, not an imposed hierarchy (see
 lives at `/var/lib/overmind/<service>/...` and is usable without the SSD; a
 service that reads/writes Library content stays disabled (commented out of the
 root `compose.yaml`) until the SSD is actually attached and mounted there.
+
+**Always run `docker compose -f compose.yaml ...` from this directory
+(`services/`), never bare `docker compose up -d` from inside an individual
+service's own subdirectory.** Every fragment is also independently valid as
+its own standalone compose file — bare `docker compose up -d` run from e.g.
+`services/prowlarr/` auto-discovers that directory's `compose.yaml` alone and
+creates an isolated project/network (`prowlarr_default`) instead of joining
+the shared one, so that service silently can't reach any other by container
+name even though everything looks fine in `docker ps`. Hit this repeatedly
+while bringing services up one at a time; if it recurs, `docker network ls`
+showing more than one `*_default` network is the tell, and the fix is
+`docker compose -f compose.yaml down`, remove the stray containers/networks,
+then `up -d` again in one pass so everything lands on the same network.
