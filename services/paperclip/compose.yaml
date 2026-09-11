@@ -1,0 +1,49 @@
+services:
+  paperclip-db:
+    image: postgres:17-alpine
+    container_name: paperclip-db
+    env_file:
+      - ./.env
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+      POSTGRES_DB: ${POSTGRES_DB}
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER} -d ${POSTGRES_DB}"]
+      interval: 2s
+      timeout: 5s
+      retries: 30
+    volumes:
+      - /var/lib/overmind/paperclip/postgres:/var/lib/postgresql/data
+    restart: unless-stopped
+
+  paperclip:
+    # Verified: ghcr.io/paperclipai/paperclip publishes multi-arch (amd64 +
+    # arm64) images. Pinned by stable version tag AND immutable digest —
+    # resolve a fresh digest at actual deploy time rather than reusing this
+    # one verbatim; this project publishes frequently.
+    image: ghcr.io/paperclipai/paperclip:2026.831.1@sha256:f58ff8e28757eaaf1f58b7ae608e56f2a473fd0688aaab2dbade8c392fad0758
+    container_name: paperclip
+    depends_on:
+      paperclip-db:
+        condition: service_healthy
+    env_file:
+      - ./.env
+    environment:
+      HOST: "0.0.0.0"
+      PORT: "3100"
+      SERVE_UI: "true"
+      DATABASE_URL: postgres://${POSTGRES_USER}:${POSTGRES_PASSWORD}@paperclip-db:5432/${POSTGRES_DB}
+      PAPERCLIP_HOME: /paperclip
+      PAPERCLIP_DEPLOYMENT_MODE: authenticated
+      PAPERCLIP_DEPLOYMENT_EXPOSURE: private
+    ports:
+      # Bound to loopback only — PAPERCLIP_DEPLOYMENT_EXPOSURE=private is an
+      # application-level policy, not a network restriction. Docker's own
+      # port publishing would otherwise bind 0.0.0.0 regardless of that
+      # setting. Tailscale Serve fronts this with a tailnet-only HTTPS
+      # endpoint (see README) instead of publishing more broadly.
+      - "127.0.0.1:3100:3100"
+    volumes:
+      - /var/lib/overmind/paperclip/app:/paperclip
+    restart: unless-stopped

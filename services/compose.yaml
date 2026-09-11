@@ -8,6 +8,7 @@
 include:
   - path: pia/compose.yaml
   - path: transmission/compose.yaml
+  - path: paperclip/compose.yaml
   # Jellyfin/Radarr/Sonarr/Bazarr are designed (see their compose.yaml and
   # README) but bind-mount /mnt/library, which doesn't exist until the SSD is
   # attached and mounted. Uncomment once that's real — bringing them up

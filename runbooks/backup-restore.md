@@ -36,6 +36,10 @@ destination and tool are selected below, but `scripts/backup` and
 - ROM masters as required, saves, manually curated metadata, and media per policy.
 - Application-consistent private databases, task/approval history, annotations,
   accounts, and other valuable service state, including SSD-backed native paths.
+- Any local encryption/secret key a service's database depends on (e.g.
+  [Paperclip's `master.key`](../services/paperclip/README.md)) — back it up
+  alongside the database it belongs to. A DB dump without the matching key can
+  be a useless pile of ciphertext, not a recoverable backup.
 
 Only omit data known reproducible. A vector database may contain valuable manual
 metadata; do not infer disposability from its name. Public models/media may have
