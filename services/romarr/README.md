@@ -12,9 +12,23 @@ production against a 166,578-game library per its own README. Transmission
 support specifically is documented as "high confidence — proven against live
 daemons" (9/9 live tests against real Transmission 4.1).
 
-Pinned `0.8.0` + digest — resolve a fresh digest before actually deploying,
-this project publishes frequently. Port `6868` deliberately (not `7878`,
-which is Radarr's — the project explicitly avoids that collision).
+**Not pinned to `0.8.0`** — that tag has a confirmed bug (see below). Pinned
+instead to the exact commit that fixes it (`sha-8c94adb` + digest); resolve a
+fresh digest before actually redeploying, this project publishes frequently.
+Port `6868` deliberately (not `7878`, which is Radarr's — the project
+explicitly avoids that collision).
+
+## Known bug in v0.8.0, already fixed — why we're not on the latest numbered tag
+
+`v0.8.0`'s `Transmission` download-client class is missing a `name`
+attribute, crashing with `AttributeError: 'Transmission' object has no
+attribute 'name'` the moment it tries to grab a release. Hit this directly
+on first use. Confirmed via the actual source (`git log -S` against
+`romarr/downloaders.py`): fixed in commit `8c94adb` ("Repair torrents
+qBittorrent emptied, and stop importing them"), which hasn't landed in a
+numbered release yet. Pinned to that exact commit's published image
+(`sha-8c94adb`, confirmed `arm64`) instead of `0.8.0` or a floating `latest`.
+Revisit this pin once a numbered release ships that includes the fix.
 
 ## Staging, not the canonical library
 
