@@ -12,11 +12,19 @@ services:
       PGID: ${PGID}
       UMASK: ${UMASK}
       TZ: "Etc/UTC"
+      # LIBRARY_KIND defaults to "romm" — must be set explicitly or ROMarr
+      # expects a RomM connection we don't have.
+      LIBRARY_KIND: ${LIBRARY_KIND}
+      LIBRARY_PATH: ${LIBRARY_PATH}
+      PROWLARR_URL: ${PROWLARR_URL}
+      PROWLARR_API_KEY: ${PROWLARR_API_KEY}
+      DAT_PATH: ${DAT_PATH}
     ports:
       - "6868:6868" # WebUI, reachable only over Tailscale (no router port-forward)
     volumes:
       - ${ROMARR_CONFIG_ROOT}:/config
       - ${ROMARR_STAGING_ROOT}:/roms
+      - ${ROMARR_DATS_ROOT}:/dats
       # Read-write: ROMarr imports finished downloads out of here. Same host
       # path Transmission writes to, same container path (/downloads) as
       # Radarr/Sonarr use, so ROMarr's download-client integration finds

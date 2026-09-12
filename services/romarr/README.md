@@ -29,17 +29,30 @@ aggressive cleanup across what's in staging before anything is promoted to
 the one-tier library (AGENTS.md rule 3 — no separate master archive to fall
 back on if that gate is skipped).
 
-## Setup (in ROMarr's own WebUI, not stored in compose)
+## Configuration: env-seeded vs. WebUI-only
 
-- **Download client**: Transmission, host `gluetun`, port `9091` — same
-  reasoning as [Radarr](../radarr/README.md)/[Sonarr](../sonarr/README.md):
-  Transmission has no network identity of its own.
-- **Indexer**: Prowlarr (already running) — ROMarr can query it directly as
-  a Torznab-compatible source; confirm in ROMarr's Settings whether that
-  needs registering there as well as (or instead of) a Prowlarr Application
-  entry.
-- **Library**: "folder" mode, pointed at `/roms` (this container's staging
-  mount) — no RomM/Gaseous/Retrom needed, matching the earlier decision.
+Verified against ROMarr's actual configuration reference — not every setting
+works the way the other `*arr` apps do:
+
+- **`LIBRARY_KIND`/`LIBRARY_PATH`** — set in `.env`, not the UI. **Required**:
+  `LIBRARY_KIND` defaults to `romm`, not `folder` — left unset, ROMarr expects
+  a RomM connection that doesn't exist. Set to `folder` + `/roms` (this
+  container's staging mount) — no RomM/Gaseous/Retrom needed, matching the
+  earlier decision.
+- **`PROWLARR_URL`/`PROWLARR_API_KEY`** — also set in `.env` (get the key from
+  Prowlarr's Settings → General). ROMarr queries Prowlarr directly as its own
+  indexer source; Prowlarr's "Applications" sync (how Radarr/Sonarr connect)
+  doesn't apply here — ROMarr isn't one of Prowlarr's built-in app types.
+- **`DAT_PATH`** — set in `.env`, pointed at a directory holding *only*
+  No-Intro/Redump DATs (pointing it at a ROM library instead hung the
+  maintainer's own install for ten minutes on startup). DAT sourcing itself
+  — where they come from, how they stay current — is still an open decision;
+  the directory can stay empty until that's resolved.
+- **Download client (Transmission)** — this one genuinely is WebUI-only:
+  Settings → Download Clients → host `gluetun`, port `9091` — same reasoning
+  as [Radarr](../radarr/README.md)/[Sonarr](../sonarr/README.md): Transmission
+  has no network identity of its own. Transmission isn't one of ROMarr's three
+  env-seeded clients (only qBittorrent/SABnzbd/NZBGet are).
 
 Test against one small, static-console collection first (e.g. a SNES set)
 before pointing it at a whole library, per the design brief's own suggested
