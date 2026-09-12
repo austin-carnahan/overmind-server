@@ -21,9 +21,13 @@ universal loading dock, drained by Overmind into the appropriate destination.
   movies/
   tv/
   music/                          # when needed
-  romsets/                        # curated emulator ROM collections
-    masters/                      # preserved original collection
-    curated/                      # client-facing selections
+  romsets/                        # one tier: DAT-validated, curated output.
+                                   # No separate immutable master archive —
+                                   # aggressive ingestion-time cleanup keeps
+                                   # only what's actually wanted; validation
+                                   # at ingestion is the only safety net.
+  saves/                          # per-user namespace, not per-device
+    <user>/                       # e.g. saves/austin/ — see fire-tv.md
 /var/spool/overmind/               # Inbox, outside both destinations
   documents/
     agent-notes/                  # proposed reusable lessons awaiting review
@@ -41,9 +45,14 @@ Only completed, seeding-safe downloads become ordinary arrivals under
 removed. There is no separate `torrents/` Inbox root.
 
 The archive's internal subdivisions are examples to refine as content arrives.
-Provisional pending user preference: live saves remain at emulator-native
-locations; optional save exports/backups belong in Library. No live save migration
-is implemented. Preserve unique saves and define conflicts before synchronization.
+
+Romset saves: decided as a per-**user** namespace, not per-device
+(`/mnt/library/saves/<user>/`, see
+[Fire TV client doc](../runbooks/clients/fire-tv.md)) — a user's save state
+follows them across devices, so different users never conflict even on the
+same game, and no locking/merge machinery is needed as
+long as this shape is preserved from the start. Synced via Syncthing-Fork,
+not a custom sync service. No live save migration is implemented yet.
 
 ## Service internals
 
@@ -86,8 +95,10 @@ recovery independent of attached collections. Do not relocate all of `/var`.
 - Runtime weight caches/vector indexes are service internals; curated model
   artifacts or embedding datasets used in projects can be Substrate content.
 - Passive archives remain available to clients and designated importers. Protect
-  romset masters from destructive curation. A project actively analyzing media owns
-  its analysis/output in Substrate and can reference source files in Library.
+  the romset library from destructive curation — DAT validation at ingestion
+  is the only safety net now that there's no separate master tier. A project
+  actively analyzing media owns its analysis/output in Substrate and can
+  reference source files in Library.
 - Apply scoped permissions; do not make every client/agent a writer to all roots.
 
 ## Inbox routing and retention
@@ -102,7 +113,7 @@ only where validated; there is no universal inbox daemon.
 | `documents` | Substrate papers, notes, datasets, or a project |
 | `documents/agent-notes` | Reviewed entries under Substrate notes/agents |
 | `media/movies`, `media/tv` | Reviewed Library movies/TV, or project-specific media |
-| `media/romsets` | Reviewed Library romsets (masters/curated, see above) |
+| `media/romsets` | Reviewed Library romsets (one validated tier, see above) |
 | `media/music` | Reviewed Library music, when needed |
 
 Process only completed inputs. Verify the destination before removing an intake

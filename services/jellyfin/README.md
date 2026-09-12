@@ -1,8 +1,8 @@
 # Jellyfin
 
-**Status:** PROPOSED — see [status legend](../../design-notes/README.md#status-legend);
-[compose.yaml](compose.yaml) below and enabled in [services/compose.yaml](../compose.yaml)
-now that the SSD is attached and `/mnt/library` is mounted, but not yet run.
+**Status:** PARTIAL — see [status legend](../../design-notes/README.md#status-legend);
+deployed and verified: a movie imported by Radarr showed up and played back
+successfully. Backup/restore of `/config` not yet tested.
 
 ## Selected implementation
 

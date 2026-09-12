@@ -1,8 +1,10 @@
 # Radarr
 
-**Status:** PROPOSED — see [status legend](../../design-notes/README.md#status-legend);
-[compose.yaml](compose.yaml) below and enabled in [services/compose.yaml](../compose.yaml)
-now that the SSD is attached and `/mnt/library` is mounted, but not yet run.
+**Status:** PARTIAL — see [status legend](../../design-notes/README.md#status-legend);
+deployed and verified end to end: search via [Prowlarr](../prowlarr/README.md),
+download via Transmission, import into `/movies`, playback in Jellyfin — all
+confirmed working. Set the Quality Profile deliberately (uncheck Remux/2160p
+unless you actually want 40-80GB+ files) rather than trusting the default.
 
 ## Selected implementation
 

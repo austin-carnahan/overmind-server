@@ -7,7 +7,7 @@ a time. Existing helper scripts are manual components, not an ingestion daemon.
 | Plan | Purpose |
 | --- | --- |
 | [Tailscale](tailscale/README.md) | Private remote access |
-| [File sharing](file-sharing/README.md) | Selected Substrate collections for clients |
+| [File sharing](file-sharing/README.md) | Read-only SMB export of the romset library |
 | [Jellyfin](jellyfin/README.md) | Media browsing/playback |
 | [Transmission](transmission/README.md) | Downloads, routed through PIA |
 | [PIA](pia/README.md) | Selected traffic's private outbound egress |
@@ -15,6 +15,8 @@ a time. Existing helper scripts are manual components, not an ingestion daemon.
 | [Radarr](radarr/README.md), [Sonarr](sonarr/README.md), [Bazarr](bazarr/README.md) | Library organization and subtitles |
 | [Prowlarr](prowlarr/README.md) | Centralized indexer management for Radarr/Sonarr |
 | [Cloudflare solver](cloudflare-solver/README.md) | Cloudflare bypass proxy for indexers that require it (not FlareSolverr — see its README) |
+| [ROMarr](romarr/README.md) | Prowlarr-backed ROM acquisition, writes to staging |
+| [Syncthing](syncthing/README.md) | Server-side save-sync hub for the Fire TV |
 | [Paperclip](paperclip/README.md) | Bounded agent coordination |
 | [Research](research/README.md) | Capture, notes, papers, and future search |
 | [Inference](inference/README.md) | Deferred model-serving capability |

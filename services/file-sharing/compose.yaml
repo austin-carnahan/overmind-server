@@ -1,0 +1,31 @@
+services:
+  samba:
+    # Verified: ghcr.io/servercontainers/samba publishes linux/amd64, arm64,
+    # and arm. Pin an exact <alpine>-<samba> version tag before real
+    # deployment (e.g. a3.15.0-s4.15.2); this is an example, not a version
+    # selection.
+    image: ghcr.io/servercontainers/samba:latest
+    container_name: samba
+    env_file:
+      - ./.env
+    environment:
+      TZ: "Etc/UTC"
+      # One dedicated account, scoped to this one share — not a general
+      # Overmind login. Password comes from .env.
+      ACCOUNT_romsets: ${SAMBA_PASSWORD}
+      UID_romsets: "1000"
+      SAMBA_VOLUME_CONFIG_romsets: "[romsets];path=/shares/romsets;valid users=romsets;read only=yes;browseable=yes;guest ok=no"
+      # Neither Bonjour discovery (Apple) nor WSD (Windows) are relevant to
+      # an Android/Fire TV client — disabled to reduce surface, not because
+      # either is known to cause a problem.
+      AVAHI_DISABLE: "1"
+      WSDD2_DISABLE: "1"
+    ports:
+      - "445:445" # SMB, reachable only over Tailscale/LAN (no router port-forward)
+      - "139:139" # NetBIOS session (legacy compatibility)
+    volumes:
+      # Read-only at the mount level, not just via the Samba share config —
+      # defense in depth for a share whose whole purpose is distributing a
+      # library that shouldn't be mutated by a client.
+      - /mnt/library/romsets:/shares/romsets:ro
+    restart: unless-stopped

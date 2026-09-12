@@ -1,8 +1,10 @@
 # Sonarr
 
-**Status:** PROPOSED — see [status legend](../../design-notes/README.md#status-legend);
-[compose.yaml](compose.yaml) below and enabled in [services/compose.yaml](../compose.yaml)
-now that the SSD is attached and `/mnt/library` is mounted, but not yet run.
+**Status:** PARTIAL — see [status legend](../../design-notes/README.md#status-legend);
+deployed and connected to Prowlarr/Transmission the same way as
+[Radarr](../radarr/README.md); not yet separately exercised with a real TV
+download the way Radarr's movie pipeline was. Set the Quality Profile
+deliberately (uncheck Remux/2160p unless wanted) — same reasoning as Radarr.
 
 ## Selected implementation
 

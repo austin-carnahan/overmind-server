@@ -17,11 +17,14 @@ destination and tool are selected below, but `scripts/backup` and
   data volume is known).
 - **Included, to keep size and cost minimal:** Substrate projects (source/docs,
   not build artifacts/dependencies/venvs), notes, papers, curated datasets/models;
-  romset masters; reviewed agent-notes; host config and credential-recovery notes.
+  the romset library; reviewed agent-notes; host config and credential-recovery
+  notes. Romsets moved from excluded to included when the masters/curated
+  split was dropped in favor of one DAT-validated tier — there's no longer a
+  preserved original to re-derive it from, so this backup is now the only
+  recovery path if it's damaged.
 - **Excluded as reproducible, not backed up:** Library movies/TV (re-obtainable
-  via Radarr/Sonarr/Transmission), romset curated output (regenerable from
-  masters, DATs, and Igir), and any service cache/vector index/other state
-  already treated as a proven-rebuildable index elsewhere in this repo.
+  via Radarr/Sonarr/Transmission), and any service cache/vector index/other
+  state already treated as a proven-rebuildable index elsewhere in this repo.
 - **Still pending:** bucket and scoped key creation, `restic` repository
   initialization, a separate durable backup of the `restic` repository password
   itself (losing it makes every snapshot unreadable), the actual prune/retention

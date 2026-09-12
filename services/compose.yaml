@@ -16,3 +16,10 @@ include:
   - path: radarr/compose.yaml
   - path: sonarr/compose.yaml
   - path: bazarr/compose.yaml
+  # ROM pipeline v2 (design brief: overmind_rom_emulator_design_brief.md)
+  - path: romarr/compose.yaml
+  - path: file-sharing/compose.yaml
+  # Stubbed, not active: nothing to sync to until a Fire TV (running
+  # Syncthing-Fork) actually exists to pair with. Files are built and ready;
+  # uncomment when there's a real device.
+  # - path: syncthing/compose.yaml

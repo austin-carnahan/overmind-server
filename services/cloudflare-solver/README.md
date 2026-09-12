@@ -1,7 +1,11 @@
 # Cloudflare bypass proxy
 
-**Status:** PROPOSED — see [status legend](../../design-notes/README.md#status-legend);
-[compose.yaml](compose.yaml) below, deployed but unresolved — see below.
+**Status:** PARTIAL — see [status legend](../../design-notes/README.md#status-legend);
+deployed and confirmed working against a real Cloudflare-protected tracker
+(every test request returned 200, ~17-18s each, where FlareSolverr had failed
+100% of the time). Ultimately not needed for the indexer actually in use —
+switched to one that doesn't require Cloudflare bypass — but proven
+functional and left in place for whichever indexer needs it next.
 
 ## Selected implementation: `simple-cloudflare-solver`, not FlareSolverr
 
@@ -28,10 +32,9 @@ instead. Default port is `8000`, not FlareSolverr's `8191`; update
 [compose.yaml](compose.yaml)'s port mapping and Prowlarr's proxy URL together
 if you change it.
 
-## Still unresolved
+## Resolved
 
-Whether this one actually succeeds where FlareSolverr didn't, against the
-same real Cloudflare-protected tracker. If it also fails, that's a stronger
-signal this specific site is simply not solvable by either tool on this
-hardware right now, and the answer is a different indexer, not a third
-bypass tool.
+Confirmed working (see Status above). Not currently wired to any indexer in
+active use, since the indexer that needed it was swapped for one that
+doesn't — reconnect it the same way described above (Settings → Indexer
+Proxies) whenever an indexer actually needs Cloudflare bypass again.

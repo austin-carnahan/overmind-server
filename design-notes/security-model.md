@@ -11,8 +11,11 @@
 - Incoming files remain untrusted through quarantine, scan, type/archive checks,
   and domain validation. A successful ffprobe or malware scan is one check, not
   proof of safety or permission to bypass the rest of the import gate.
-- Preserve romset masters and unique mutable content. Media clients see only curated
-  libraries. Automated library managers must not bypass the validation gate.
+- Validate romsets against DAT checksums before promotion — there is no
+  separate master archive to fall back on if a destructive operation damages
+  the library, so this validation gate is the only protection. Preserve other
+  unique mutable content (saves). Automated library managers must not bypass
+  the validation gate.
 - Transmission's outbound VPN, private remote access, and DNS privacy are distinct.
   Verify fail-closed download behavior without breaking host administration.
 - Consider `noexec,nodev,nosuid` only for compatible payload/import paths. Projects

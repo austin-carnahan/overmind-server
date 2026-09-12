@@ -1,7 +1,8 @@
 # Prowlarr
 
-**Status:** PROPOSED — see [status legend](../../design-notes/README.md#status-legend);
-[compose.yaml](compose.yaml) below, not yet deployed.
+**Status:** PARTIAL — see [status legend](../../design-notes/README.md#status-legend);
+deployed and verified: connected to Radarr/Sonarr, indexer sync confirmed
+working end to end (search results reach both apps).
 
 ## Selected implementation
 
@@ -19,6 +20,16 @@ downloads itself; Radarr/Sonarr still hand off to
 
 WebUI on `9696`, reachable only over Tailscale like everything else on this
 host — never port-forwarded.
+
+## Tags do double duty — a real gotcha, not a hypothetical one
+
+Prowlarr's own UI warns: "an indexer with a tag will only sync to apps with
+the same tag." Tags aren't just for binding an indexer to a proxy (see
+[cloudflare-solver](../cloudflare-solver/README.md)) — tagging an indexer for
+that reason silently stops it syncing to Radarr/Sonarr unless those
+Application entries carry the same tag too. Hit this directly: tagged an
+indexer for its proxy, and it stopped appearing in Radarr/Sonarr until the
+same tag was added to both Application entries under Settings → Apps.
 
 ## Not this repo's decision
 

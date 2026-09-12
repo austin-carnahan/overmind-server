@@ -1,0 +1,24 @@
+services:
+  syncthing:
+    # Official image. Pin an exact tag before real deployment; this is an
+    # example, not a version selection.
+    image: syncthing/syncthing:latest
+    container_name: syncthing
+    hostname: overmind-01-syncthing
+    env_file:
+      - ./.env
+    environment:
+      PUID: ${PUID}
+      PGID: ${PGID}
+      TZ: "Etc/UTC"
+    volumes:
+      - /var/lib/overmind/syncthing/config:/var/syncthing/config
+      - /mnt/library/saves:/var/syncthing/saves
+    # Host networking is Syncthing's own documented recommendation, not this
+    # repo's default pattern — verified against its official Docker README:
+    # Docker's bridge network hides real LAN addresses from Syncthing's own
+    # discovery/NAT traversal, causing broken local discovery and poor
+    # transfer rates otherwise. Same category of deliberate exception as
+    # Transmission's network_mode: service:gluetun.
+    network_mode: host
+    restart: unless-stopped

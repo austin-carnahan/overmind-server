@@ -1,0 +1,25 @@
+services:
+  romarr:
+    # Verified: ghcr.io/blizzhacker/romarr publishes linux/amd64, arm64, and
+    # armv7. Pinned by stable version tag and immutable digest — resolve a
+    # fresh digest before actually deploying, don't reuse this one verbatim.
+    image: ghcr.io/blizzhacker/romarr:0.8.0@sha256:5e12b12f4c48b2fdd65ef668d56da16de4978bd85bcf796b718a61927eae6058
+    container_name: romarr
+    env_file:
+      - ./.env
+    environment:
+      PUID: ${PUID}
+      PGID: ${PGID}
+      UMASK: ${UMASK}
+      TZ: "Etc/UTC"
+    ports:
+      - "6868:6868" # WebUI, reachable only over Tailscale (no router port-forward)
+    volumes:
+      - ${ROMARR_CONFIG_ROOT}:/config
+      - ${ROMARR_STAGING_ROOT}:/roms
+      # Read-write: ROMarr imports finished downloads out of here. Same host
+      # path Transmission writes to, same container path (/downloads) as
+      # Radarr/Sonarr use, so ROMarr's download-client integration finds
+      # completed files without a remote path mapping.
+      - ${TRANSMISSION_DOWNLOAD_ROOT}:/downloads
+    restart: unless-stopped

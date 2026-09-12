@@ -1,9 +1,10 @@
 # overmind-01
 
 **Status:** PARTIAL — see [status legend](../../design-notes/README.md#status-legend);
-base OS/hardware inspected, SSD attached/formatted/mounted, and PIA/Transmission/
-Paperclip running below; network addressing (LAN/DHCP) and the remaining media
-services are still pending.
+base OS/hardware inspected, SSD attached/formatted/mounted, and the full media
+pipeline (below) validated end to end — a real movie flowed through
+Radarr → Transmission → Library → Jellyfin playback. Network addressing
+(LAN/DHCP) and ROM/romset ingestion are still pending.
 
 | Item | Value |
 | --- | --- |
@@ -46,9 +47,12 @@ reliably crashes the USB controller without it under real write load.
   through VS Code Remote-SSH; see
   [remote project work](../../runbooks/clients/remote-work.md) for setup.
 - `ufw` is inactive.
-- Docker is installed; `gluetun` (PIA), `transmission`, `paperclip`, and
-  `paperclip-db` are running via [services/compose.yaml](../../services/compose.yaml).
-  Jellyfin/Radarr/Sonarr/Bazarr are designed but not yet enabled.
+- Docker is installed; `gluetun` (PIA), `transmission`, `paperclip`,
+  `paperclip-db`, `jellyfin`, `radarr`, `sonarr`, `bazarr`, `prowlarr`, and
+  `cloudflare-solver` are all running via
+  [services/compose.yaml](../../services/compose.yaml). The movie pipeline
+  (Prowlarr → Radarr → Transmission → Library → Jellyfin) is verified
+  working end to end, not just deployed.
 - Login-capable accounts: `root`, `austin`.
 - SSD mounted (ext4, `noatime`, `nofail`) at `/mnt/ssd`, with `/mnt/substrate`,
   `/mnt/library`, and `/var/lib/overmind` bind-mounted from subdirectories of
@@ -59,9 +63,10 @@ reliably crashes the USB controller without it under real write load.
 ## Intended first roles
 
 Private remote project work and modest media access, supported by tested storage
-and recovery. Substrate and Library are mounted but still empty — nothing has
-been imported into them yet. Do not assume RetroPie, a GUI, a local display,
-or hardware acceleration. DNS on another device is optional.
+and recovery. Library has real content (movies, verified playable); Substrate
+is mounted but still empty — no project work moved there yet. Do not assume
+RetroPie, a GUI, a local display, or hardware acceleration. DNS on another
+device is optional.
 
 [paths.env.example](paths.env.example) records the logical paths; SSD bindings
 for them are live (see above). Per-service ownership beyond `austin` for

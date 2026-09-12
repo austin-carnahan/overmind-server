@@ -24,6 +24,12 @@ not restate what the label already means.
 - [Security boundaries](security-model.md)
 - [Future compute roles](future-compute.md)
 - [Repository first-pass changes](2026-09-09-repository-first-pass.md)
+- [ROM & emulator design brief](overmind_rom_emulator_design_brief.md) —
+  adopted architecture for the ROM pipeline and Fire TV client (ROMarr, Igir,
+  SMB, R-Shop, RetroArch, Syncthing-Fork); tool names verified real before
+  adoption. DEFERRED overall (nothing built yet) — see
+  [runbooks/clients/fire-tv.md](../runbooks/clients/fire-tv.md) for the
+  summary and current status.
 
 The [host inventory](../hosts/overmind-01/README.md) separates reported hardware
 from unverified details. Service plans live under [services](../services/README.md).

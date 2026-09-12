@@ -9,7 +9,8 @@
 - [Add a ROM](add-new-rom.md)
 - [Configure a travel device](configure-fire-tv.md)
 - [Remote project work](clients/remote-work.md)
-- [Kodi](clients/kodi.md), [travel device](clients/travel-device.md),
+- [Kodi](clients/kodi.md), [Fire TV (primary)](clients/fire-tv.md),
+  [travel device](clients/travel-device.md),
   [alternate laptop host](clients/laptop-host.md), [optional DNS host](clients/optional-dns-host.md)
 - Romset notes: [DATs](romsets/dats.md), [Igir](romsets/igir.md),
   [scraping](romsets/scraper.md), [travel sync](romsets/travel-sync.md)
