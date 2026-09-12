@@ -14,7 +14,7 @@ a time. Existing helper scripts are manual components, not an ingestion daemon.
 | [Ingestion](ingestion/README.md) | Manual scan/validation and promotion contract |
 | [Radarr](radarr/README.md), [Sonarr](sonarr/README.md), [Bazarr](bazarr/README.md) | Library organization and subtitles |
 | [Prowlarr](prowlarr/README.md) | Centralized indexer management for Radarr/Sonarr |
-| [FlareSolverr](flaresolverr/README.md) | Cloudflare bypass proxy for indexers that require it |
+| [Cloudflare solver](cloudflare-solver/README.md) | Cloudflare bypass proxy for indexers that require it (not FlareSolverr — see its README) |
 | [Paperclip](paperclip/README.md) | Bounded agent coordination |
 | [Research](research/README.md) | Capture, notes, papers, and future search |
 | [Inference](inference/README.md) | Deferred model-serving capability |

@@ -10,7 +10,7 @@ include:
   - path: transmission/compose.yaml
   - path: paperclip/compose.yaml
   - path: prowlarr/compose.yaml
-  - path: flaresolverr/compose.yaml
+  - path: cloudflare-solver/compose.yaml
   # /mnt/library is live (SSD attached/mounted) as of 2026-09-11.
   - path: jellyfin/compose.yaml
   - path: radarr/compose.yaml

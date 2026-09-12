@@ -1,0 +1,21 @@
+services:
+  cloudflare-solver:
+    # Verified: nlevee/simple-cloudflare-solver publishes linux/arm64.
+    # Real, active project (89 stars, MIT, not archived as of 2026-09-11).
+    # Pin an exact tag before real deployment; this is an example, not a
+    # version selection.
+    image: ghcr.io/nlevee/simple-cloudflare-solver:main
+    container_name: cloudflare-solver
+    # Still runs a real browser under a virtual display (PyVirtualDisplay);
+    # kept from the FlareSolverr setup as a cheap precaution, not a confirmed
+    # requirement for this specific tool.
+    shm_size: "2gb"
+    # No .env: this image takes no environment-variable configuration
+    # (confirmed against its server.py and Dockerfile) — only a --port CLI
+    # arg, which the port mapping below already matches at its default.
+    environment:
+      TZ: "Etc/UTC"
+    ports:
+      - "8000:8000" # Reachable only over Tailscale; also reachable by other
+                     # containers on the shared network as http://cloudflare-solver:8000
+    restart: unless-stopped
