@@ -23,3 +23,7 @@ include:
   # Syncthing-Fork) actually exists to pair with. Files are built and ready;
   # uncomment when there's a real device.
   # - path: syncthing/compose.yaml
+  # Request/discovery + retention layer (design brief:
+  # overmind_seerr_maintainerr_setup_brief.md)
+  - path: seerr/compose.yaml
+  - path: maintainerr/compose.yaml

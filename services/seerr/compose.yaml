@@ -1,0 +1,30 @@
+services:
+  seerr:
+    # Verified: ghcr.io/seerr-team/seerr publishes linux/amd64 + arm64.
+    # Pinned by stable version tag and immutable digest — resolve a fresh
+    # digest before actually deploying, don't reuse this one verbatim.
+    image: ghcr.io/seerr-team/seerr:v3.0.1@sha256:1b5fc1ea825631d9d165364472663b817a4c58ef6aa1013f58d82c1570d7c866
+    container_name: seerr
+    init: true
+    env_file:
+      - ./.env
+    environment:
+      TZ: ${TZ}
+      PORT: "5055"
+    ports:
+      - "5055:5055" # WebUI, reachable only over Tailscale (no router port-forward)
+    volumes:
+      # Runs as the image's built-in `node` user (UID 1000) — matches
+      # austin's UID, no separate PUID/PGID env vars needed for this image.
+      - ${SEERR_CONFIG_ROOT}:/app/config
+    healthcheck:
+      test: ["CMD", "wget", "--no-verbose", "--tries=1", "--spider", "http://localhost:5055/api/v1/settings/public"]
+      start_period: 20s
+      timeout: 3s
+      interval: 15s
+      retries: 3
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    restart: unless-stopped

@@ -30,6 +30,12 @@ not restate what the label already means.
   adoption. DEFERRED overall (nothing built yet) — see
   [runbooks/clients/fire-tv.md](../runbooks/clients/fire-tv.md) for the
   summary and current status.
+- [Seerr & Maintainerr setup brief](overmind_seerr_maintainerr_setup_brief.md) —
+  adopted architecture for the request/discovery and retention/cleanup
+  layers on top of Jellyfin/Radarr/Sonarr; both tools verified real before
+  adoption. PROPOSED (not yet deployed) — see
+  [services/seerr](../services/seerr/README.md) and
+  [services/maintainerr](../services/maintainerr/README.md).
 
 The [host inventory](../hosts/overmind-01/README.md) separates reported hardware
 from unverified details. Service plans live under [services](../services/README.md).

@@ -17,6 +17,8 @@ a time. Existing helper scripts are manual components, not an ingestion daemon.
 | [Cloudflare solver](cloudflare-solver/README.md) | Cloudflare bypass proxy for indexers that require it (not FlareSolverr — see its README) |
 | [ROMarr](romarr/README.md) | Prowlarr-backed ROM acquisition, writes to staging |
 | [Syncthing](syncthing/README.md) | Server-side save-sync hub for the Fire TV |
+| [Seerr](seerr/README.md) | Human-facing discovery/request UI, requests to Radarr/Sonarr |
+| [Maintainerr](maintainerr/README.md) | Automated retention/cleanup via Radarr/Sonarr |
 | [Paperclip](paperclip/README.md) | Bounded agent coordination |
 | [Research](research/README.md) | Capture, notes, papers, and future search |
 | [Inference](inference/README.md) | Deferred model-serving capability |

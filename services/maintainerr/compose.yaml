@@ -1,0 +1,27 @@
+services:
+  maintainerr:
+    # Verified: ghcr.io/maintainerr/maintainerr publishes linux/amd64 + arm64.
+    # Its README notes a `sharp`-based feature limitation on non-x86-64-v2
+    # CPUs — explicitly does not apply to arm64. Pinned by stable version tag
+    # and immutable digest — resolve a fresh digest before actually
+    # deploying.
+    image: ghcr.io/maintainerr/maintainerr:3.13.0@sha256:077060b2c206cce97eb0539aadb0e83cb8ed2add2c3dcd62d2ca631943d1d4a7
+    container_name: maintainerr
+    user: "1000:1000"
+    env_file:
+      - ./.env
+    environment:
+      TZ: ${TZ}
+    ports:
+      - "6246:6246" # WebUI. No built-in login — Tailscale-only reachability
+                     # (no router port-forward) is the actual boundary here,
+                     # deliberately, per the design brief; revisit with an
+                     # authenticated reverse proxy only if that stops being
+                     # sufficient.
+    volumes:
+      - ${MAINTAINERR_DATA_ROOT}:/opt/data
+      # Only needed for Maintainerr's leftover-folder cleanup feature, not
+      # normal Radarr/Sonarr-managed retention. Add explicitly if that
+      # feature is ever used:
+      # - /mnt/library:/mnt/library
+    restart: unless-stopped
