@@ -36,9 +36,10 @@ by its own state write-back.
 ## Storage
 
 `TRANSMISSION_DOWNLOAD_ROOT` in [.env.example](.env.example) points at
-`/mnt/ssd/downloads` — SSD-backed, no fixed logical path name for this one
-(unlike `/mnt/substrate` etc.), so it's a plain directory on the SSD mount
-rather than a bind mount.
+`/mnt/downloads` — bind-mounted from the physical disk the same way
+`/mnt/substrate`/`/mnt/library` are (see
+[storage](../../design-notes/storage-layout.md)). No service references the
+physical disk path directly, including this one.
 
 Once a download completes and is seeding-safe, it becomes an ordinary
 `media/<type>` Inbox arrival for the [ingestion](../ingestion/README.md)

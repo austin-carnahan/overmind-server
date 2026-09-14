@@ -75,8 +75,32 @@ the project's native tooling expects them.
 - Independent backup destination: still to be selected.
 
 One SSD can back all these locations. Neither Substrate nor Library represents
-the entire disk. The stable device identity, backing mount, bindings, filesystem,
-and required-mount dependencies remain undecided; no fstab stub pretends otherwise.
+the entire disk.
+
+**Physical mounts and logical paths live in deliberately separate subtrees**,
+decided 2026-09-14 after an earlier flat layout put a physical disk
+(`/mnt/ssd`) and logical paths (`/mnt/substrate`, `/mnt/library`) side by side
+under `/mnt`, which was confusing and didn't scale to a second disk:
+
+```text
+/mnt/disks/<name>/         # physical mounts — an implementation detail no
+  ssd1/                     # service config ever references directly.
+    substrate/               # Numbered (ssd1, ssd2, ...) rather than
+    library/                 # matched to the filesystem's own label —
+    var-lib-overmind/        # simpler to scale to another disk. The actual
+    downloads/               # ext4 label (e.g. overmind-ssd) can still
+                              # differ; nothing depends on them matching.
+
+/mnt/substrate              # logical — the only paths services reference
+/mnt/library                # bind-mounted from a /mnt/disks/<name>/ subdir
+/mnt/downloads
+/var/lib/overmind
+```
+
+A second disk mounts at `/mnt/disks/<next-name>` with no naming
+collision, and backs whatever new logical path(s) it's meant for without
+touching any existing bind mount. Adding one is a decision about what it
+backs, not a namespace problem.
 
 Verify storage before dependent writers start so absent mounts do not fill the OS
 card. Only roles requiring a given surface depend on its attachment. Shared SSD
