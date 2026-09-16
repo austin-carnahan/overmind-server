@@ -19,7 +19,12 @@ question stays open separately, under passive monitoring). **Stage 5
 Phase 1 done**: [MLServer](mlserver/README.md) runs under systemd in the
 Debian guest with a trivial echo model, ~120MB steady-state RSS,
 verified health/readiness/inference endpoints and automatic restart
-recovery. Phase 2 (the `cerebrate-infer` adapter) not yet started.
+recovery. **Stage 5 Phase 2 done**: a thin custom runtime adapter wires
+MLServer's V2 interface to `cerebrate-infer` over the real production
+network path, verified end to end (correct classification output,
+monotonic request-id continuity with earlier native tests, negligible
+added memory). Phase 3 (real image input/output via MobileNet) not yet
+started.
 
 A factory-reset Pixel 6, converted into a dedicated always-on inference node
 for the home network. Second member of the "cerebrate" fleet/class (small

@@ -115,11 +115,54 @@ adapter and normal guest operation — `cerebrate-infer` itself runs on the
 **Android host**, not in this guest, so it does not compete with this
 budget.
 
+## Phase 2 — `cerebrate-infer` custom runtime adapter (done, 2026-09-16)
+
+```text
+hosts/cerebrate-pixel6/mlserver/models/cerebrate-infer/
+├── cerebrate_infer_runtime.py   # the adapter (CerebrateInferRuntime)
+└── model-settings.json
+```
+
+A thin protocol adapter, nothing more: on `predict()`, it writes a single
+trigger byte over a persistent TCP connection to `cerebrate-infer`
+(`10.70.217.78:8765` by default — the real Debian→AVF-gateway→Android-host
+path used throughout Stage 4D, not the ADB/loopback lab path), parses the
+one-line response (`request_id=... top_class=... top_score=...
+inference_us=... handle_us=...`), and returns those five fields as V2
+`INT64` outputs. It does not reimplement TFLite, NNAPI, or accelerator
+selection, and it does not yet do real image input/output — Phase 3's
+job. `cerebrate-infer` itself still always classifies its fixed internal
+dummy tensor regardless of what triggers it.
+
+Connection handling: one persistent `asyncio` TCP connection, reused
+across requests (serialized with a lock, matching `cerebrate-infer`'s own
+one-request-at-a-time design), with a single reconnect-and-retry on any
+`ConnectionError`/`OSError`/timeout before raising. Host/port are
+configurable via `parameters.extra` in `model-settings.json`.
+
+Verified end to end from inside the guest (`curl localhost:8080`, not yet
+exposed externally — that's Phase 4):
+
+- `GET /v2/models/cerebrate-infer/ready` → `200`.
+- `POST /v2/models/cerebrate-infer/infer` → correct `top_class=795`,
+  `top_score=120` (the known MobileNet dummy-input result), with
+  `request_id` continuing the same monotonic counter as the native
+  `nc`-based tests from Stage 4D — confirms the adapter is really talking
+  to the same long-running worker process (PID unchanged throughout,
+  `28046`), not spawning anything new.
+- Cold/warm latency nuance reproduced exactly as documented in Stage 4:
+  first request after idle ~9.2ms `inference_us`, settling to
+  ~1.25-1.3ms on the next two.
+- 100/100 requests over the same reused connection returned `200`, no
+  errors, no reconnects needed.
+- MLServer RSS after adding this model and running the burst: ~118.8 MB
+  — effectively unchanged from the Phase 1 example-echo-only baseline,
+  confirming the adapter itself adds negligible memory overhead.
+
 ## Not yet done (later phases)
 
-- Custom runtime adapter translating V2 requests to `cerebrate-infer`'s
-  wire protocol (Phase 2).
-- Real image classification via MobileNet (Phase 3).
+- Real image classification via MobileNet, replacing the fixed dummy
+  tensor and trigger-only request shape (Phase 3).
 - Reachability through Overmind's existing access architecture (Phase 4).
 - Supplemental Pixel telemetry (TPU temp, thermal status, worker
   liveness) alongside MLServer's own metrics (Phase 5).
