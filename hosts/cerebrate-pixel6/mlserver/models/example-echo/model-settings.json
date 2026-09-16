@@ -1,0 +1,5 @@
+{
+  "name": "example-echo",
+  "implementation": "model.EchoModel",
+  "parameters": {"version": "v0.1.0"}
+}
