@@ -1,0 +1,43 @@
+# http:// scheme forces plaintext-only per site — disables Caddy's automatic
+# HTTPS (it otherwise tries ACME/redirects for anything that looks like a
+# real domain). Deliberate per the DNS plan's Phase 4: HTTP only for now,
+# Tailscale is the actual transport-security boundary here. Routes by Host
+# header to each container by its Compose service name (this container
+# joins services_default, same network as everything else — never 127.0.0.1,
+# Caddy itself is a container here).
+
+http://transmission.home.arpa {
+	reverse_proxy gluetun:9091
+}
+
+http://jellyfin.home.arpa {
+	reverse_proxy jellyfin:8096
+}
+
+http://radarr.home.arpa {
+	reverse_proxy radarr:7878
+}
+
+http://sonarr.home.arpa {
+	reverse_proxy sonarr:8989
+}
+
+http://bazarr.home.arpa {
+	reverse_proxy bazarr:6767
+}
+
+http://prowlarr.home.arpa {
+	reverse_proxy prowlarr:9696
+}
+
+http://romarr.home.arpa {
+	reverse_proxy romarr:6868
+}
+
+http://seerr.home.arpa {
+	reverse_proxy seerr:5055
+}
+
+http://maintainerr.home.arpa {
+	reverse_proxy maintainerr:6246
+}

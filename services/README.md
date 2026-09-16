@@ -19,6 +19,7 @@ a time. Existing helper scripts are manual components, not an ingestion daemon.
 | [Syncthing](syncthing/README.md) | Server-side save-sync hub for the Fire TV |
 | [Seerr](seerr/README.md) | Human-facing discovery/request UI, requests to Radarr/Sonarr |
 | [Maintainerr](maintainerr/README.md) | Automated retention/cleanup via Radarr/Sonarr |
+| Caddy | Host-local reverse proxy for readable `home.arpa` names; see [home DNS + reverse-proxy plan](../design-notes/2026-09-15-home-dns-reverse-proxy-plan.md) |
 | [Paperclip](paperclip/README.md) | Bounded agent coordination |
 | [Research](research/README.md) | Capture, notes, papers, and future search |
 | [Inference](inference/README.md) | Deferred model-serving capability |

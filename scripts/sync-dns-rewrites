@@ -1,0 +1,204 @@
+#!/usr/bin/env python3
+import argparse
+import json
+import re
+import sys
+import urllib.error
+import urllib.request
+from http.cookiejar import CookieJar
+from pathlib import Path
+
+REPO_ROOT = Path(__file__).resolve().parent.parent
+CONFIG_PATH = REPO_ROOT / "hosts" / "dns-rewrites.yaml"
+ENV_PATH = REPO_ROOT / "hosts" / "dns-sync.env"
+STATE_PATH = REPO_ROOT / "hosts" / ".dns-rewrites.state.json"
+
+USAGE = """\
+Usage: sync-dns-rewrites [--apply] [--config PATH] [--env PATH]
+Reconciles AdGuard Home's DNS rewrites on every node listed in
+hosts/dns-rewrites.yaml against that file. Default is a dry-run report;
+pass --apply to actually add/change/remove rewrites.
+Only ever touches a rewrite this script previously created (tracked in
+hosts/.dns-rewrites.state.json) or one newly declared in the config file —
+a rewrite added by hand through AdGuard's UI is reported, never deleted.
+Exit 0: reconciled (or dry-run report produced) with no errors.
+Exit 1: an AdGuard API call failed.
+Exit 2: usage/config error (missing file, malformed YAML, missing credentials).
+"""
+
+
+def load_simple_yaml(path):
+    """Parses only the flat two-key shape hosts/dns-rewrites.yaml actually
+    uses (a `rewrites` list of {name, target} and an `adguard_endpoints`
+    list of strings) — not a general YAML parser, so this file doesn't need
+    PyYAML installed on every host that runs it. `target` may be an IP or
+    another hostname (AdGuard resolves the latter as a real CNAME chain)."""
+    rewrites, endpoints = [], []
+    section = None
+    current = {}
+    for raw_line in path.read_text().splitlines():
+        line = raw_line.split("#", 1)[0].rstrip()
+        if not line.strip():
+            continue
+        if line == "rewrites:":
+            section = "rewrites"
+            continue
+        if line == "adguard_endpoints:":
+            section = "adguard_endpoints"
+            continue
+        if section == "rewrites":
+            m = re.match(r"^\s*-\s*name:\s*(\S+)\s*$", line)
+            if m:
+                if current:
+                    rewrites.append(current)
+                current = {"name": m.group(1)}
+                continue
+            m = re.match(r'^\s*target:\s*"?([^"\s]+)"?\s*$', line)
+            if m:
+                current["target"] = m.group(1)
+                continue
+        elif section == "adguard_endpoints":
+            m = re.match(r"^\s*-\s*(\S+)\s*$", line)
+            if m:
+                endpoints.append(m.group(1))
+    if current:
+        rewrites.append(current)
+    return rewrites, endpoints
+
+
+def load_env(path):
+    values = {}
+    for raw_line in path.read_text().splitlines():
+        line = raw_line.strip()
+        if not line or line.startswith("#") or "=" not in line:
+            continue
+        key, _, value = line.partition("=")
+        values[key.strip()] = value.strip()
+    return values
+
+
+class AdGuardClient:
+    def __init__(self, base_url, user, password):
+        self.base_url = base_url.rstrip("/")
+        jar = CookieJar()
+        self.opener = urllib.request.build_opener(urllib.request.HTTPCookieProcessor(jar))
+        self._login(user, password)
+
+    def _request(self, method, path, payload=None, expect_json=True):
+        data = json.dumps(payload).encode() if payload is not None else None
+        req = urllib.request.Request(self.base_url + path, data=data, method=method)
+        if data is not None:
+            req.add_header("Content-Type", "application/json")
+        with self.opener.open(req, timeout=10) as resp:
+            body = resp.read()
+            if not expect_json or not body:
+                return None
+            return json.loads(body)
+
+    def _login(self, user, password):
+        # Responds "OK" (plain text), not JSON — the session cookie is what
+        # matters, captured by the shared CookieJar/opener.
+        self._request("POST", "/control/login", {"name": user, "password": password}, expect_json=False)
+
+    def list_rewrites(self):
+        result = self._request("GET", "/control/rewrite/list")
+        return {item["domain"]: item["answer"] for item in (result or [])}
+
+    def add_rewrite(self, domain, answer):
+        self._request("POST", "/control/rewrite/add", {"domain": domain, "answer": answer}, expect_json=False)
+
+    def delete_rewrite(self, domain, answer):
+        self._request("POST", "/control/rewrite/delete", {"domain": domain, "answer": answer}, expect_json=False)
+
+
+def reconcile(node, desired, previously_managed, apply_changes):
+    print(f"\n== {node} ==")
+    creds = load_env(ENV_PATH)
+    if "ADGUARD_USER" not in creds or "ADGUARD_PASS" not in creds:
+        print(f"missing ADGUARD_USER/ADGUARD_PASS in {ENV_PATH}", file=sys.stderr)
+        return None, False
+
+    try:
+        client = AdGuardClient(node, creds["ADGUARD_USER"], creds["ADGUARD_PASS"])
+        current = client.list_rewrites()
+    except (urllib.error.URLError, urllib.error.HTTPError) as exc:
+        print(f"FAIL could not reach/authenticate: {exc}", file=sys.stderr)
+        return None, False
+
+    to_add = {n: t for n, t in desired.items() if current.get(n) != t and n not in current}
+    to_change = {n: t for n, t in desired.items() if n in current and current[n] != t}
+    to_remove = {
+        n: current[n]
+        for n in previously_managed
+        if n in current and n not in desired
+    }
+    unmanaged = sorted(set(current) - set(desired) - previously_managed)
+
+    if not (to_add or to_change or to_remove):
+        print("OK   no changes needed")
+    for n, t in to_add.items():
+        print(f"{'APPLY' if apply_changes else 'PLAN '} add    {n} -> {t}")
+    for n, t in to_change.items():
+        print(f"{'APPLY' if apply_changes else 'PLAN '} change {n}: {current[n]} -> {t}")
+    for n, a in to_remove.items():
+        print(f"{'APPLY' if apply_changes else 'PLAN '} remove {n} (was -> {a})")
+    for n in unmanaged:
+        print(f"NOTE  unmanaged, left alone: {n} -> {current[n]}")
+
+    if not apply_changes:
+        return set(desired), True
+
+    ok = True
+    try:
+        for n, t in to_add.items():
+            client.add_rewrite(n, t)
+        for n, t in to_change.items():
+            client.delete_rewrite(n, current[n])
+            client.add_rewrite(n, t)
+        for n, a in to_remove.items():
+            client.delete_rewrite(n, a)
+    except (urllib.error.URLError, urllib.error.HTTPError) as exc:
+        print(f"FAIL apply error: {exc}", file=sys.stderr)
+        ok = False
+    return set(desired), ok
+
+
+def main():
+    parser = argparse.ArgumentParser(usage=USAGE, add_help=True)
+    parser.add_argument("--apply", action="store_true")
+    parser.add_argument("--config", default=str(CONFIG_PATH))
+    args = parser.parse_args()
+
+    config_path = Path(args.config)
+    if not config_path.exists():
+        print(f"config not found: {config_path}", file=sys.stderr)
+        return 2
+    if not ENV_PATH.exists():
+        print(f"missing credentials file: {ENV_PATH} (copy hosts/dns-sync.env.example)", file=sys.stderr)
+        return 2
+
+    rewrites, nodes = load_simple_yaml(config_path)
+    if not rewrites or not nodes:
+        print("config parsed but rewrites/nodes came back empty — check formatting", file=sys.stderr)
+        return 2
+    desired = {r["name"]: r["target"] for r in rewrites}
+
+    state = json.loads(STATE_PATH.read_text()) if STATE_PATH.exists() else {}
+    any_error = False
+    for node in nodes:
+        previously_managed = set(state.get(node, []))
+        managed_now, ok = reconcile(node, desired, previously_managed, args.apply)
+        if not ok:
+            any_error = True
+            continue
+        if args.apply:
+            state[node] = sorted(managed_now)
+
+    if args.apply and not any_error:
+        STATE_PATH.write_text(json.dumps(state, indent=2) + "\n")
+
+    return 1 if any_error else 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())

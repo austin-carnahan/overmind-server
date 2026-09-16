@@ -1,0 +1,21 @@
+services:
+  caddy:
+    # Verified: caddy publishes an official linux/arm64 image. Pinned by
+    # exact version tag + immutable digest (resolved 2026-09-16 against
+    # Docker Hub for the 2.11.4 arm64 manifest).
+    image: caddy:2.11.4@sha256:1172d4213087d3fc30bafc7ff2c2896180eb0c41ff7f75f315568fb36cabdcba
+    container_name: caddy
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy_data:/data
+    ports:
+      - "80:80"
+      # - "443:443"   # add only once HTTPS is actually pursued (see the DNS plan's Phase 4)
+    # No cap_drop here: Caddy runs as root inside its own image and needs
+    # CAP_NET_BIND_SERVICE to bind port 80 — dropping ALL capabilities would
+    # break that even for root. no-new-privileges is still safe to keep.
+    security_opt:
+      - no-new-privileges:true
+    restart: unless-stopped
+volumes:
+  caddy_data:

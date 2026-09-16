@@ -30,6 +30,10 @@ not restate what the label already means.
   adoption. DEFERRED overall (nothing built yet) — see
   [runbooks/clients/fire-tv.md](../runbooks/clients/fire-tv.md) for the
   summary and current status.
+- [Home DNS + reverse-proxy plan](2026-09-15-home-dns-reverse-proxy-plan.md) —
+  step-by-step plan for readable `home.arpa` names on both LAN and Tailscale,
+  covering AdGuard rewrites on Cerebrate and host-local Caddy on Cerebrate and
+  Overmind. PROPOSED (plan only, nothing executed).
 - [Seerr & Maintainerr setup brief](overmind_seerr_maintainerr_setup_brief.md) —
   adopted architecture for the request/discovery and retention/cleanup
   layers on top of Jellyfin/Radarr/Sonarr; both tools verified real before
@@ -37,7 +41,8 @@ not restate what the label already means.
   [services/seerr](../services/seerr/README.md) and
   [services/maintainerr](../services/maintainerr/README.md).
 
-The [host inventory](../hosts/overmind-01/README.md) separates reported hardware
+The [host inventory](../hosts/overmind-01/README.md)
+(also: [cerebrate-pi0](../hosts/cerebrate-pi0/README.md)) separates reported hardware
 from unverified details. Service plans live under [services](../services/README.md).
 Operational procedures live under [runbooks](../runbooks/README.md).
 

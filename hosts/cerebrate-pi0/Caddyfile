@@ -1,0 +1,15 @@
+# Deployed to /etc/caddy/Caddyfile on cerebrate-pi0 (native Caddy install,
+# no Docker on this host — see hosts/cerebrate-pi0/README.md). Cerebrate
+# proxies only what Cerebrate hosts, per
+# design-notes/2026-09-15-home-dns-reverse-proxy-plan.md.
+#
+# After editing: sudo caddy validate --config /etc/caddy/Caddyfile
+#                 sudo systemctl reload caddy
+
+# http:// scheme forces plaintext-only — disables Caddy's automatic HTTPS
+# (it otherwise tries ACME/redirects for anything that looks like a real
+# domain). Deliberate per the DNS plan's Phase 4: HTTP only for now,
+# Tailscale is the actual transport-security boundary here.
+http://adguard.home.arpa {
+	reverse_proxy 127.0.0.1:3000
+}

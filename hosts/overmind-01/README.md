@@ -13,10 +13,9 @@ Radarr → Transmission → Library → Jellyfin playback. Network addressing
 | RAM | 7.6 GiB |
 | OS storage | 128 GB microSD (`mmcblk0`: 512 MB `/boot/firmware`, 117 GB `/`, 4.2 GB used) |
 | Attached storage | 2 TB SSD, SABRENT USB enclosure (JMicron JMS579 bridge), ext4, label `overmind-ssd` |
-| Network interface | Wi-Fi (`wlan0` via netplan/`wpa_supplicant`); no Ethernet link observed |
+| Network interface | Wired (`eth0`), reserved LAN address `192.168.68.55/22`, DNS name `overmind-01.home.arpa`; Wi-Fi (`wlan0`) also has a reservation at `192.168.68.50/22` but is not the primary route (higher metric) and may be removed once eth0 is confirmed as the sole connection |
 
-Unverified: remaining accounts/groups beyond `root`/`austin`, and LAN
-addressing/DHCP details.
+Unverified: remaining accounts/groups beyond `root`/`austin`.
 
 ## Known hardware issue: this specific USB enclosure needs a kernel quirk
 

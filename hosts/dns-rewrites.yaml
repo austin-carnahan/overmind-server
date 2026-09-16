@@ -1,0 +1,70 @@
+# Canonical home.arpa map. Edit this file, then run
+# scripts/sync-dns-rewrites --apply — never edit AdGuard's rewrite list by
+# hand; it will just get overwritten (well, reported as unmanaged drift) on
+# the next sync. See design-notes/2026-09-15-home-dns-reverse-proxy-plan.md.
+#
+# Three tiers, verified AdGuard Home resolves a rewrite `target` that's
+# another hostname as a real CNAME chain (not just accepted syntax):
+#   node    — an actual machine, name matches its real hostname. The ONLY
+#             place a raw IP appears. "Which computer am I talking to?"
+#             "cerebrate" is a fleet/class name (small auxiliary compute
+#             nodes: cerebrate-pi0 today, future cerebrate-pixel3/pixel6,
+#             etc.) — it describes a family of devices, not a DNS role, so
+#             it never gets its own alias below.
+#   alias   — convenience shorthand for "the current primary machine for
+#             this job," ONLY where there's one unambiguous singleton.
+#             Points at a node, never an IP. No alias exists just because a
+#             fleet could theoretically get one — once a family has more
+#             than one heterogeneous member (as "cerebrate" now does),
+#             "the Cerebrate" stops having one obvious answer, so it
+#             doesn't get an alias; "overmind" still does, since there's
+#             exactly one canonical Overmind server today.
+#   service — a capability, independent of whichever node hosts it today.
+#             Also points at a node, never an IP.
+rewrites:
+  # --- Nodes ---
+  - name: cerebrate-pi0.home.arpa
+    target: 192.168.68.59
+  - name: overmind-01.home.arpa
+    target: 192.168.68.55 # eth0, the wired reservation
+
+  # --- Convenience alias (singleton only) ---
+  - name: overmind.home.arpa
+    target: overmind-01.home.arpa
+
+  # --- Services ---
+  - name: adguard.home.arpa
+    target: cerebrate-pi0.home.arpa
+  - name: transmission.home.arpa
+    target: overmind-01.home.arpa
+  - name: jellyfin.home.arpa
+    target: overmind-01.home.arpa
+  - name: radarr.home.arpa
+    target: overmind-01.home.arpa
+  - name: sonarr.home.arpa
+    target: overmind-01.home.arpa
+  - name: bazarr.home.arpa
+    target: overmind-01.home.arpa
+  - name: prowlarr.home.arpa
+    target: overmind-01.home.arpa
+  - name: romarr.home.arpa
+    target: overmind-01.home.arpa
+  - name: seerr.home.arpa
+    target: overmind-01.home.arpa
+  - name: maintainerr.home.arpa
+    target: overmind-01.home.arpa
+
+  # --- Devices we don't control — direct, node-style entry. No "node"
+  # abstraction for hardware we don't manage; an IP is fine here. ---
+  # No entry for the Deco (192.168.68.1, LAN default gateway): confirmed no
+  # browsable web interface there — it's app-managed only. Nothing to point
+  # a name at until/unless that changes.
+  - name: bgw320.home.arpa
+    target: 192.168.1.254 # AT&T gateway, passthrough mode behind the Deco
+
+# AdGuard instance(s) to reconcile against (not to be confused with the DNS
+# "node" tier above — an AdGuard instance runs on a node, it isn't one). A
+# list from the start, so adding the future second instance is a one-line
+# change, not a script rewrite.
+adguard_endpoints:
+  - http://192.168.68.59:3000
