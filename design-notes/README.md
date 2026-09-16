@@ -34,6 +34,11 @@ not restate what the label already means.
   step-by-step plan for readable `home.arpa` names on both LAN and Tailscale,
   covering AdGuard rewrites on Cerebrate and host-local Caddy on Cerebrate and
   Overmind. PROPOSED (plan only, nothing executed).
+- [Pixel 6 inference node](2026-09-16-pixel6-inference-node.md) — staged
+  plan converting a factory-reset Pixel 6 into an always-on inference node
+  (second "cerebrate" fleet member); Stage 1 (ADB baseline +
+  appliance-readiness) done, Stages 2-4 pending. See
+  [hosts/cerebrate-pixel6](../hosts/cerebrate-pixel6/README.md).
 - [Seerr & Maintainerr setup brief](overmind_seerr_maintainerr_setup_brief.md) —
   adopted architecture for the request/discovery and retention/cleanup
   layers on top of Jellyfin/Radarr/Sonarr; both tools verified real before
@@ -42,7 +47,8 @@ not restate what the label already means.
   [services/maintainerr](../services/maintainerr/README.md).
 
 The [host inventory](../hosts/overmind-01/README.md)
-(also: [cerebrate-pi0](../hosts/cerebrate-pi0/README.md)) separates reported hardware
+(also: [cerebrate-pi0](../hosts/cerebrate-pi0/README.md),
+[cerebrate-pixel6](../hosts/cerebrate-pixel6/README.md)) separates reported hardware
 from unverified details. Service plans live under [services](../services/README.md).
 Operational procedures live under [runbooks](../runbooks/README.md).
 

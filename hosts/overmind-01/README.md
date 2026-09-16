@@ -52,7 +52,13 @@ reliably crashes the USB controller without it under real write load.
   [services/compose.yaml](../../services/compose.yaml). The movie pipeline
   (Prowlarr → Radarr → Transmission → Library → Jellyfin) is verified
   working end to end, not just deployed.
-- Login-capable accounts: `root`, `austin`.
+- Login-capable accounts: `root`, `austin`, plus a scoped system account
+  `pixel-tunnel` (`/usr/sbin/nologin`, no interactive shell) — exists only
+  to terminate `cerebrate-pixel6`'s reverse SSH tunnel on
+  `127.0.0.1:2206`; see
+  [hosts/cerebrate-pixel6](../cerebrate-pixel6/README.md) and the
+  [Pixel 6 inference node design notes](../../design-notes/2026-09-16-pixel6-inference-node.md)
+  for the full credential shape and verification.
 - SSD mounted (ext4, `noatime`, `nofail`) at `/mnt/disks/ssd1` — numbered
   rather than matching the filesystem's own `overmind-ssd` label, since a
   number scales to a second/third disk more simply than a label match would.

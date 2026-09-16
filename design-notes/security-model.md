@@ -46,5 +46,23 @@
   "gitdir:..."` blocks. This prevents an agent worktree from accidentally
   pushing under a human's identity by running from the wrong directory.
 
+## Inter-host service credentials
+
+The same rule as git credentials above — every agent/process gets its own
+scoped credential, never a shared or personal key — applies beyond git.
+First real example: `cerebrate-pixel6`'s reverse SSH tunnel to Overmind
+(2026-09-16) uses a dedicated `pixel-tunnel` system account
+(`/usr/sbin/nologin`, no password) and a key generated on the Pixel's
+Debian guest that never leaves it, restricted on the server at both the
+account level (`sshd_config` `Match User`) and the individual key
+(`authorized_keys` `restrict,port-forwarding,permitlisten=,from=`) —
+redundant on purpose. See the
+[Pixel 6 inference node design notes](2026-09-16-pixel6-inference-node.md)
+for the full shape, including a documented residual limitation: the server
+can restrict where a reverse tunnel listens, but not what the client dials
+on the far end — a real asymmetry between what the server can prove and
+what the client claims, worth remembering for any future reverse-tunnel
+credential, not something this pattern solves.
+
 See [AGENTS.md](../AGENTS.md), [storage](storage-layout.md), and
 [service onboarding](../services/README.md).

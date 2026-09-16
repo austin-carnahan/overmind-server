@@ -27,6 +27,9 @@ rewrites:
     target: 192.168.68.59
   - name: overmind-01.home.arpa
     target: 192.168.68.55 # eth0, the wired reservation
+  - name: cerebrate-pixel6.home.arpa
+    target: 192.168.68.60 # wlan0, confirmed DHCP reservation — will need
+    # updating here when this host moves to a wired connection (planned)
 
   # --- Convenience alias (singleton only) ---
   - name: overmind.home.arpa

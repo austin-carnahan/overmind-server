@@ -16,7 +16,9 @@ Caddy reverse proxy not yet deployed as of this writing.
 
 "Cerebrate" is a fleet/class name for small auxiliary compute nodes, not a
 single machine — see the naming-convention section of the DNS plan linked
-above. `cerebrate-pi0` is the first and, as of this writing, only member.
+above. `cerebrate-pi0` is the first member; see
+[cerebrate-pixel6](../cerebrate-pixel6/README.md) for the second (an
+always-on inference node, in progress).
 
 ## Verified access
 

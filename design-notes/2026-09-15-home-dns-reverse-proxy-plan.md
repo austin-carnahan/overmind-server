@@ -361,6 +361,18 @@ the existing route advertisement, not a replacement.
   client — confirm Caddy answers and proxies to the right backend (compare
   response against `curl -I http://<host-ip>:<port>/` direct-port baseline).
 
+Real gotcha hit at this step, client-side rather than server-side: a
+browser (Brave, Chromium-based) failed with `ERR_ADDRESS_UNREACHABLE` on
+every `*.home.arpa` name while `dig` and `curl` from the *same Mac*, at the
+same time, resolved and connected correctly. Root cause was macOS's Local
+Network privacy permission (Settings → Privacy & Security → Local Network)
+— it gates an app's ability to reach RFC1918 addresses per-app, separate
+from any DNS/routing/firewall config, and CLI tools aren't sandboxed the
+same way a browser is. Not a Tailscale, DNS, or Caddy issue at all, despite
+initially looking like one (routing-error-shaped symptom). Grant the
+browser Local Network access and retest before suspecting anything
+server-side for this exact symptom.
+
 **Off-LAN (Tailscale, physically off the home LAN):**
 - From a device connected to the tailnet but not on `192.168.68.0/22`
   (cellular data, different network), confirm `home.arpa` names still
@@ -371,7 +383,7 @@ the existing route advertisement, not a replacement.
 
 **Failure isolation (validates principle 8):**
 - Stop Overmind's `services` stack (or the whole host) and confirm
-  `cerebrate.home.arpa` / `adguard.home.arpa` still resolve and respond —
+  `cerebrate-pi0.home.arpa` / `adguard.home.arpa` still resolve and respond —
   proves Overmind's failure doesn't take down Cerebrate or core DNS.
 - Note the converse is *not* true and isn't fixed by this plan: if Cerebrate
   or AdGuard goes down, all `home.arpa` resolution fails, Overmind's own
