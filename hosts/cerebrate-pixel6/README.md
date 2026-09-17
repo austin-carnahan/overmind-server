@@ -86,11 +86,16 @@ per connection and across fresh connections, stable process throughout.
 now exposes it as a second model, `cerebrate-generate`, alongside the
 unmodified classifier — verified correct both locally and through the
 full external `inference.home.arpa` path, both models coexisting under
-one MLServer instance without interfering with each other. One open
-item from the plan's own Success Criteria remains: incremental/
-streaming output is not yet implemented (`cerebrate-generate` only
-does synchronous generation today) — deliberately deferred, not
-forgotten.
+one MLServer instance without interfering with each other. **Streaming
+done (2026-09-17)**: MLServer was upgraded to **1.7.1** (a
+Python-3.13-compatibility resolution had silently pinned it to 1.3.5
+since Phase 1 — corrected, not a real ceiling), `cerebrate-generate`
+now streams real tokens natively via LiteRT-LM's streaming C API over a
+new typed-frame wire protocol, and the adapter relays them through
+MLServer's real `/generate_stream`. Verified end to end through the
+full production path with genuinely correct, incrementally-arriving
+tokens. **All 9 of 9 Multi-Runtime Execution Plane success criteria are
+now met.**
 
 A factory-reset Pixel 6, converted into a dedicated always-on inference node
 for the home network. Second member of the "cerebrate" fleet/class (small

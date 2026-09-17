@@ -1,5 +1,5 @@
 """Thin MLServer custom runtime: translates a V2 text-generation request
-into cerebrate-generate's length-prefixed TCP protocol and back.
+into cerebrate-generate's typed-frame TCP protocol and back.
 
 Deliberately a separate, standalone adapter -- not a shared base class
 with cerebrate_infer_runtime.py, and not a request-type branch inside
@@ -9,11 +9,15 @@ the Multi-Runtime Execution Plane design notes; the two Android-host
 processes never share code or a config file, and neither should their
 adapters.
 
-No streaming yet -- cerebrate-generate itself only supports synchronous
-generate_content today, so this adapter returns the full response in
-one shot. Streaming (MLServer's generate_stream, backed by
-cerebrate-generate's generate_content_stream) is deferred until the
-whole pipeline actually needs it.
+Wire protocol (streaming update): [1-byte type][4-byte BE length]
+[payload], types DATA(0)/DONE(1)/ERROR(2) -- replaces the earlier bare
+length-prefixed single response, since cerebrate-generate now always
+generates via LiteRT-LM's streaming C API internally (one native code
+path, not two). `predict()` buffers all DATA chunks into one response,
+for plain /infer callers; `predict_stream()` yields one InferenceResponse
+per chunk, for /generate_stream callers. Both share the same underlying
+frame-reading generator -- that sharing is fine (it's all one adapter
+module); what's kept separate is this whole module from cerebrate-infer's.
 """
 import asyncio
 import struct
@@ -29,7 +33,11 @@ DEFAULT_PORT = 8766
 CONNECT_TIMEOUT_S = 5.0
 # Generation can take much longer than a graph-inference call -- give it room.
 REQUEST_TIMEOUT_S = 120.0
-MAX_RESPONSE_BYTES = 1024 * 1024
+MAX_FRAME_BYTES = 1024 * 1024
+
+FRAME_DATA = 0
+FRAME_DONE = 1
+FRAME_ERROR = 2
 
 
 def _discover_avf_gateway() -> str:
@@ -86,46 +94,81 @@ class CerebrateGenerateRuntime(MLModel):
         self._reader = None
         self._writer = None
 
-    async def _generate(self, prompt: str) -> str:
+    async def _read_frame(self) -> tuple:
+        header = await asyncio.wait_for(
+            self._reader.readexactly(5), timeout=REQUEST_TIMEOUT_S
+        )
+        frame_type = header[0]
+        (length,) = struct.unpack(">I", header[1:5])
+        if length > MAX_FRAME_BYTES:
+            raise ValueError(
+                f"cerebrate-generate reported an implausible frame size: {length}"
+            )
+        payload = b""
+        if length > 0:
+            payload = await asyncio.wait_for(
+                self._reader.readexactly(length), timeout=REQUEST_TIMEOUT_S
+            )
+        return frame_type, payload
+
+    async def _stream_generate(self, prompt: str):
+        """Yields decoded text chunks for one prompt. Raises ConnectionError
+        on transport failure, RuntimeError on a server-reported generation
+        error. Holds the shared connection lock for the whole request --
+        cerebrate-generate is single-threaded and serial, so only one
+        request can be in flight against it at a time regardless."""
         data = prompt.encode("utf-8")
         async with self._lock:
             last_error: Exception = RuntimeError("unreachable")
-            for attempt in range(2):
+            connected = False
+            for _attempt in range(2):
                 try:
                     await self._ensure_connected()
                     self._writer.write(struct.pack(">I", len(data)) + data)
                     await self._writer.drain()
+                    connected = True
+                    break
+                except (ConnectionError, OSError, asyncio.TimeoutError) as exc:
+                    last_error = exc
+                    await self._drop_connection()
+            if not connected:
+                raise ConnectionError(
+                    f"cerebrate-generate at {self._host}:{self._port} unreachable"
+                ) from last_error
 
-                    header = await asyncio.wait_for(
-                        self._reader.readexactly(4), timeout=REQUEST_TIMEOUT_S
-                    )
-                    (response_len,) = struct.unpack(">I", header)
-                    if response_len > MAX_RESPONSE_BYTES:
-                        raise ValueError(
-                            "cerebrate-generate reported an implausible "
-                            f"response size: {response_len}"
-                        )
-                    body = await asyncio.wait_for(
-                        self._reader.readexactly(response_len),
-                        timeout=REQUEST_TIMEOUT_S,
-                    )
-                    return body.decode("utf-8", "replace")
+            while True:
+                try:
+                    frame_type, frame_payload = await self._read_frame()
                 except (
                     ConnectionError,
                     OSError,
                     asyncio.TimeoutError,
                     asyncio.IncompleteReadError,
                 ) as exc:
-                    last_error = exc
                     await self._drop_connection()
-            raise ConnectionError(
-                f"cerebrate-generate at {self._host}:{self._port} unreachable"
-            ) from last_error
+                    raise ConnectionError(
+                        f"cerebrate-generate at {self._host}:{self._port} "
+                        "unreachable mid-stream"
+                    ) from exc
+
+                if frame_type == FRAME_DATA:
+                    yield frame_payload.decode("utf-8", "replace")
+                elif frame_type == FRAME_DONE:
+                    return
+                elif frame_type == FRAME_ERROR:
+                    raise RuntimeError(
+                        "cerebrate-generate error: "
+                        + frame_payload.decode("utf-8", "replace")
+                    )
+                else:
+                    await self._drop_connection()
+                    raise ValueError(f"unknown frame type {frame_type}")
 
     async def predict(self, payload: InferenceRequest) -> InferenceResponse:
         prompt = _decode_prompt(payload)
         t0 = time.perf_counter()
-        text = await self._generate(prompt)
+        chunks = [chunk async for chunk in self._stream_generate(prompt)]
+        text = "".join(chunks)
         elapsed_us = int((time.perf_counter() - t0) * 1_000_000)
 
         outputs = [
@@ -139,3 +182,22 @@ class CerebrateGenerateRuntime(MLModel):
             model_version=self.version,
             outputs=outputs,
         )
+
+    async def predict_stream(self, payloads):
+        # REST server-streaming only ever yields one request.
+        request = None
+        async for p in payloads:
+            request = p
+            break
+        prompt = _decode_prompt(request)
+
+        async for chunk in self._stream_generate(prompt):
+            yield InferenceResponse(
+                model_name=self.name,
+                model_version=self.version,
+                outputs=[
+                    ResponseOutput(
+                        name="text", shape=[1], datatype="BYTES", data=[chunk]
+                    )
+                ],
+            )

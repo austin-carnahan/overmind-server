@@ -10,12 +10,12 @@ there vs. seconds-long stateful generation here) and are composed
 together only at the MLServer layer, never sharing a binary.
 
 Loads a `.litertlm` model and creates the LiteRT-LM `Engine` **once**,
-then serves TCP requests one at a time: create a `Session`, generate
-content, return the result text + timing. Deliberately narrow, matching
-`cerebrate-infer`'s own scope discipline: no concurrency, no auth, no
-streaming yet (synchronous `generate_content`, not
-`generate_content_stream` — real chunked streaming is deferred to the
-Debian-adapter phase, once the whole pipeline actually needs it).
+then serves TCP requests one at a time: create a `Session`,
+stream-generate content, relay each chunk as it's produced. There is
+exactly one native generation code path — `generate_content_stream` —
+used both when a caller wants the full response buffered and when it
+wants real incremental output; that choice lives entirely in the
+Debian adapter, not duplicated here.
 
 ## Build (no Bazel — prebuilt C API release, not AAR extraction this time)
 
@@ -35,7 +35,7 @@ unzip -o litert_lm_c_api.zip "lib/android_arm64/*" "include/*" -d litertlm_c
 #    this (same discipline as cerebrate-infer's NNAPI delegate check)
 NDK=~/Library/Android/sdk/ndk/27.1.12297006
 $NDK/toolchains/llvm/prebuilt/darwin-x86_64/bin/llvm-nm -D \
-  litertlm_c/lib/android_arm64/liblitert-lm.so | grep litert_lm_engine_create
+  litertlm_c/lib/android_arm64/liblitert-lm.so | grep litert_lm_session_generate_content_stream
 
 # 3. Compile as C++ (matches cerebrate-infer.cc's own convention; this
 #    file is plain C but named .cc and compiled with clang++)
@@ -50,7 +50,9 @@ CLANGXX=$NDK/toolchains/llvm/prebuilt/darwin-x86_64/bin/aarch64-linux-android24-
 `liblitert-lm.so`'s only `NEEDED` entries are stock Android system
 libraries (`libandroid`, `libz`, `libGLESv2/v3`, `libEGL`, `libdl`,
 `liblog`, `libm`, `libc`) — nothing extra to push, unlike the legacy
-TFLite C API's `libc++_shared.so` dependency.
+TFLite C API's `libc++_shared.so` dependency. pthreads are part of
+Android's bionic libc, so no separate threading library is needed
+either, despite this worker now using real threads (see below).
 
 ## Model
 
@@ -80,54 +82,79 @@ adb shell 'LD_LIBRARY_PATH=/data/local/tmp /data/local/tmp/cerebrate-generate /d
 
 `cerebrate-infer` uses port `8765`; `cerebrate-generate` uses **`8766`**.
 
-## Wire protocol
+## Wire protocol: typed frames (changed for streaming)
 
-Each request and response is a **4-byte big-endian length prefix**
-followed by that many bytes of UTF-8 text — unlike `cerebrate-infer`'s
-fixed-size image tensor, prompt/response text is variable-length and
-may contain arbitrary bytes (including newlines), so a length prefix is
-used instead of line-delimited or fixed-size framing. This is a
-native-worker validation protocol, not the final Debian-facing wire
-format — designing that is explicitly a later (Debian-adapter) phase.
-Max prompt size is capped at 64KB as a sanity guard.
+Each request is still a bare 4-byte big-endian length prefix + UTF-8
+prompt bytes (unchanged). **Responses changed**: instead of one bare
+length-prefixed response, the server now sends a sequence of typed
+frames — `[1-byte type][4-byte BE length][payload]`:
 
-Same `SO_RCVTIMEO` (30s) protection as `cerebrate-infer` picked up
-after Stage 5 Phase 4's wedged-worker bug: a client's network path can
-vanish without a clean FIN/RST, and without a timeout a blocking
-`read()` on a dead connection would wedge this single-threaded, serial
-worker forever.
+- `DATA` (0) — one generated text chunk.
+- `DONE` (1) — successful end-of-stream, empty payload.
+- `ERROR` (2) — failure description as the payload; terminal, no `DONE`
+  follows.
+
+This replaced the original bare-length-prefix response protocol
+(one request → one response) from the first Phase 2/3 pass. Breaking
+the wire protocol was judged cheap here deliberately: `cerebrate-generate`
+is brand new, has exactly one known consumer (the MLServer adapter),
+and MLServer is the actual public seam — an internal protocol between
+two processes we control is exactly what should be cheap to change,
+before it has more than one consumer.
+
+### Why threading, now
+
+`litert_lm_session_generate_content_stream` is **non-blocking and
+invokes its callback from a LiteRT-LM-owned background thread**, once
+per chunk — the first real multi-threading in this worker (everything
+before this was single-threaded and serial, matching `cerebrate-infer`).
+A `pthread` mutex/condvar hands control back to the accept-loop thread
+once a chunk reports `is_final()` or an error:
+
+```text
+accept-loop thread                 LiteRT-LM callback thread
+  generate_content_stream() ─────▶   (returns immediately)
+  lock, wait on condvar              chunk 1 → DATA frame
+                                     chunk 2 → DATA frame
+                                     ...
+                                     final chunk → DONE frame
+                                     lock, set done, signal condvar
+  wakes up, continues  ◀─────────────┘
+```
+
+Each `LiteRtLmStreamChunk` is **only valid for the duration of the
+callback** — its text/error/final-ness are read out immediately, never
+held past the call.
+
+Same `SO_RCVTIMEO` (30s) protection as `cerebrate-infer` on the read
+side. Max prompt size is capped at 64KB as a sanity guard.
 
 ## Verified (2026-09-17)
 
-Tested from the real Debian guest, over the real production path (AVF
-gateway, not a loopback/ADB shortcut), against the persistent worker
-(engine loaded once, not per-request):
+Real, end-to-end token-by-token streaming from the actual LiteRT-LM
+engine, over the typed-frame protocol, from the real Debian guest, over
+the real production AVF path — tested with the raw protocol directly
+(before touching the Python adapter): chunks arrived at real per-token
+decode latency (~20-30ms apart, not artificial delays), correctly
+terminated with `DONE`. Worker PID unchanged throughout (no crash, no
+deadlock from the new threading).
 
-- Two requests over one reused connection: `"Reply with the word
-  hello."` → coherent greeting (3.75s); `"What is the capital of
-  France? ..."` → **"The capital of France is Paris."** — correct, not
-  just coherent.
-- A third request on a fresh new connection (after the first closed)
-  succeeded too, confirming the outer `accept()` loop works across
-  multiple connections, not just multiple requests within one.
-- `request_id` incremented correctly across all three; worker PID
-  unchanged throughout (no crash, no restart needed).
-- Server-side logged timing matched client-observed elapsed time
-  closely (e.g. `generate_us=3751214` vs. 3.75s client-side).
-- CPU backend (`cpu` argument) only, this pass — GPU backend was
-  already validated functional for this exact model in the throwaway
-  feasibility spike (see the design notes' Progress Notes); not
-  re-tested against the persistent worker specifically, since that
-  wouldn't teach anything new about the worker's own design.
+Full pipeline verification (adapter, MLServer 1.7.1, Caddy,
+`inference.home.arpa`) is recorded in the
+[MLServer adapter's README](../mlserver/models/cerebrate-generate/README.md)
+and the design notes' Progress Notes.
 
 ## Not yet done
 
-- GPU backend against the persistent worker specifically (low priority
-  — already proven functional in the spike).
-- Streaming (`generate_content_stream`) — deferred until the
-  Debian-adapter/MLServer phase actually needs incremental output.
-- systemd-style supervision, health checks, restart policy — this is
-  still a manually-launched foreground `adb shell` process, same as
-  `cerebrate-infer` before its own later phases.
-- A real MLServer adapter dialing this worker (the Debian-adapter
-  phase).
+- No `max_tokens`/`temperature`/sampling parameters exposed yet — the
+  worker uses LiteRT-LM's defaults.
+- No error-path testing (worker down, malformed prompt, oversized
+  frame) — only the success path has been verified so far.
+- No watchdog timeout on the condvar wait if the callback thread never
+  reports done (e.g. an internal engine hang) — same posture as the
+  earlier synchronous design's unbounded block, not a new regression,
+  but worth hardening if it's ever observed in practice rather than
+  guarded against speculatively now.
+- GPU backend not re-tested against the streaming path specifically
+  (proven functional for this model on the synchronous path in the
+  earlier feasibility spike).

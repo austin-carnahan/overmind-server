@@ -18,37 +18,79 @@ hosts/cerebrate-pixel6/mlserver/
 └── README.md
 ```
 
-The Python virtualenv itself (`~/mlserver-venv` on the guest) is **not**
-committed — only `requirements.txt` is. Recreate it with:
+The Python virtualenv itself (`~/mlserver17-venv` on the guest) is
+**not** committed — only `requirements.txt` is. **Requires Python
+3.12** (see "MLServer version" below for why) — Debian 13's default
+`python3` is 3.13, which is outside MLServer's supported range, so this
+venv is built on a separately-obtained Python 3.12 via
+[`uv`](https://github.com/astral-sh/uv) (a static binary, no compiling
+Python from source, no apt package needed — trixie doesn't ship one):
 
 ```sh
-python3 -m venv ~/mlserver-venv
-~/mlserver-venv/bin/pip install -r requirements.txt
+uv python install 3.12
+uv venv --python 3.12 ~/mlserver17-venv
+uv pip install --python ~/mlserver17-venv/bin/python3 -r requirements.txt
 ```
 
 Do not create the venv inside this repo checkout and then move it — venv
 scripts embed the venv's absolute path in their shebang line at creation
 time, so moving the directory breaks every entry point (`mlserver`, `pip`,
 etc.) with an opaque exec failure. Create it at its final path directly.
+Note `uv`-created venvs don't bundle `pip` — use `uv pip install
+--python <venv>/bin/python3 ...` instead of activating and calling `pip`
+directly.
+
+## MLServer version: 1.7.1, not 1.3.5 (corrected 2026-09-17)
+
+Phase 1's original `pip install mlserver` silently resolved to
+**1.3.5** — not because that was the newest released version, but
+because PyPI's actual latest stable release, **1.7.1**, declares
+`requires_python: <3.13,>=3.9`, and the guest's system Python is 3.13.
+`pip` quietly picked the newest version compatible with that
+interpreter, with no obvious warning that a newer release existed.
+Verified directly against PyPI's raw release metadata (not `pip index`,
+which filters by the running interpreter and would hide this same way)
+before concluding anything.
+
+This mattered because 1.3.5 predates MLServer's real, released
+streaming support (`infer_stream`/`generate_stream`, REST and gRPC) —
+confirmed by grepping the installed 1.3.5 package for those symbols and
+finding nothing, versus finding real streaming code throughout 1.7.1's
+`dataplane.py`, `rest/app.py`, `rest/endpoints.py`. The fix was a
+version/environment correction, not a fundamental absence of the
+feature in any released MLServer — no GitHub-master install, no
+bespoke SSE server needed. See
+[`cerebrate-generate`'s MLServer adapter README](models/cerebrate-generate/README.md)
+and the [Multi-Runtime Execution Plane](../../../design-notes/Cerebrate%20Pixel%206%20%E2%80%94%20Multi-Runtime%20Execution%20Plane.md)
+design notes for the full gated migration (A: prove existing models
+survive the upgrade in a disposable environment; B: prove streaming
+itself works with a trivial fake model; C/D: wire the real thing) that
+preceded promoting 1.7.1 to production.
 
 ## Known issue: MLServer's parallel worker pool crashes on this stack
 
-MLServer 1.3.5 on Python 3.13 with `uvloop` throws
-`RuntimeError: There is no current event loop in thread 'MainThread'` in
-its multiprocessing worker pool (`mlserver/parallel/worker.py`,
-`asyncio.get_event_loop()` called outside a running loop). A
-`parallel_workers` value in `settings.json` was not reliably honored in
-testing; setting the environment variable directly was:
+MLServer's multiprocessing worker pool
+(`mlserver/parallel/worker.py`, `asyncio.get_event_loop()` called
+outside a running loop) throws
+`RuntimeError: There is no current event loop in thread 'MainThread'`
+under `uvloop` in this environment (originally hit under 1.3.5/Python
+3.13; not re-verified as fixed under 1.7.1/Python 3.12, so the
+workaround stays). A `parallel_workers` value in `settings.json` was
+not reliably honored in testing; setting the environment variable
+directly was:
 
 ```sh
 MLSERVER_PARALLEL_WORKERS=0
 ```
 
 This is set in the systemd unit. It's also the architecturally correct
-choice independent of the bug: `cerebrate-infer` (the eventual backend,
-Phase 2+) serializes requests one at a time on a single persistent Android
-worker, so a multi-process worker pool on the MLServer side has no
-downstream backend to parallelize against.
+choice independent of the bug: `cerebrate-infer` and `cerebrate-generate`
+(the Android-host backends) each serialize requests one at a time on a
+single persistent worker, so a multi-process worker pool on the
+MLServer side has no downstream backend to parallelize against. It also
+happens to be one of two settings MLServer's own documentation calls
+out as required for streaming to work at all (the other is disabling
+gzip — see the adapter README linked above).
 
 No `settings.json` is committed at the repository root — this repo's
 top-level `.gitignore` excludes any file literally named `settings.json`
@@ -77,16 +119,23 @@ Type=simple
 User=droid
 WorkingDirectory=/home/droid/code/overmind-server/hosts/cerebrate-pixel6/mlserver
 Environment=MLSERVER_PARALLEL_WORKERS=0
+Environment=MLSERVER_HOST=127.0.0.1
 Environment=MLSERVER_HTTP_PORT=8080
 Environment=MLSERVER_GRPC_PORT=8081
 Environment=MLSERVER_METRICS_PORT=8082
-ExecStart=/home/droid/mlserver-venv/bin/mlserver start /home/droid/code/overmind-server/hosts/cerebrate-pixel6/mlserver/models
+Environment=MLSERVER_GZIP_ENABLED=false
+ExecStart=/home/droid/mlserver17-venv/bin/mlserver start /home/droid/code/overmind-server/hosts/cerebrate-pixel6/mlserver/models
 Restart=on-failure
 RestartSec=5
 
 [Install]
 WantedBy=multi-user.target
 ```
+
+(`MLSERVER_HOST=127.0.0.1` was added in Stage 5 Phase 4 to keep MLServer
+off the LAN-facing interface; `MLSERVER_GZIP_ENABLED=false` was added
+for streaming, in the MLServer 1.7.1 upgrade above — gzip middleware
+doesn't work with streaming responses.)
 
 ## Verified (2026-09-16)
 

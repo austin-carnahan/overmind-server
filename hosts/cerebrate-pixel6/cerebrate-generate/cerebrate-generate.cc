@@ -1,14 +1,25 @@
 // Minimal persistent generation worker (Stage: Multi-Runtime Execution
-// Plane, Phase 2/3). The Session Execution sibling to cerebrate-infer's
-// Graph Execution -- a deliberately separate process, not a mode of that
-// one. Loads a .litertlm model + creates the LiteRT-LM Engine ONCE, then
-// serves TCP requests one at a time: create a session, generate content,
-// return the result text + timing. No concurrency, no auth, no streaming
-// yet (synchronous generate_content, matching the feasibility spike) --
-// see the Multi-Runtime Execution Plane design notes for why those are
-// deliberately deferred to later phases.
+// Plane, Phase 2/3/streaming). The Session Execution sibling to
+// cerebrate-infer's Graph Execution -- a deliberately separate process,
+// not a mode of that one. Loads a .litertlm model + creates the
+// LiteRT-LM Engine ONCE, then serves TCP requests one at a time: create
+// a session, stream-generate content, relay each chunk as it's produced.
+//
+// Streaming update: uses litert_lm_session_generate_content_stream
+// (not the earlier synchronous generate_content) as the ONLY native
+// generation path now, so there is exactly one implementation instead
+// of two side-by-side APIs. That call is non-blocking and invokes its
+// callback from a LiteRT-LM-owned BACKGROUND THREAD, one call per
+// chunk -- the first real multi-threading in this worker. A
+// pthread mutex/condvar hands control back to the accept-loop thread
+// once a chunk reports it's final (or errored). Whether a caller wants
+// the full response buffered (today's /infer-equivalent behavior) or
+// relayed incrementally is entirely the Debian adapter's decision, not
+// something duplicated here.
 #include <arpa/inet.h>
 #include <netinet/in.h>
+#include <pthread.h>
+#include <stdbool.h>
 #include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -47,21 +58,69 @@ static int write_full(int fd, const void* buf, size_t n) {
   return 0;
 }
 
-static void send_framed(int fd, const char* text) {
-  size_t len = strlen(text);
+// Typed-frame protocol: [1-byte type][4-byte BE length][payload]. Replaces
+// the earlier bare length-prefixed single response -- a breaking wire
+// change, made deliberately while this worker has exactly one known
+// consumer and is cheap to change, rather than later.
+#define FRAME_DATA 0   // one generated text chunk
+#define FRAME_DONE 1   // successful end-of-stream, empty payload
+#define FRAME_ERROR 2  // failure description as the payload
+
+#define MAX_PROMPT_BYTES (64 * 1024)
+
+static int send_frame(int fd, uint8_t type, const char* payload, size_t len) {
   uint32_t len_be = htonl((uint32_t)len);
-  if (write_full(fd, &len_be, 4) != 0) return;
-  write_full(fd, text, len);
+  if (write_full(fd, &type, 1) != 0) return -1;
+  if (write_full(fd, &len_be, 4) != 0) return -1;
+  if (len > 0 && write_full(fd, payload, len) != 0) return -1;
+  return 0;
 }
 
-// Wire protocol: each request/response is a 4-byte big-endian length
-// prefix followed by that many bytes of UTF-8 text. Unlike
-// cerebrate-infer's fixed-size image tensor, prompt/response text is
-// variable-length and may contain any byte value (including newlines),
-// so a length prefix is used instead of line-delimited framing. This is
-// a native-worker validation protocol, not the final Debian-facing wire
-// format -- that's Phase 4's job.
-#define MAX_PROMPT_BYTES (64 * 1024)
+// Shared between the accept-loop thread (which blocks waiting) and the
+// LiteRT-LM callback thread (which delivers chunks and signals done).
+typedef struct {
+  int client_fd;
+  pthread_mutex_t mutex;
+  pthread_cond_t cond;
+  int done;          // set once the stream is final, errored, or the
+                      // client connection died mid-stream
+  int write_failed;  // set if writing a frame to the client failed --
+                      // the connection is bad, stop serving it
+} StreamContext;
+
+static void stream_callback(void* callback_data, const LiteRtLmStreamChunk* chunk) {
+  StreamContext* ctx = (StreamContext*)callback_data;
+
+  // The chunk (and everything it points to) is only valid for the
+  // duration of this call -- read what's needed immediately.
+  const char* error = litert_lm_stream_chunk_get_error(chunk);
+  const char* text = litert_lm_stream_chunk_get_text(chunk);
+  bool final = litert_lm_stream_chunk_is_final(chunk);
+
+  int rc = 0;
+  if (error) {
+    rc = send_frame(ctx->client_fd, FRAME_ERROR, error, strlen(error));
+  } else if (text && text[0] != '\0') {
+    rc = send_frame(ctx->client_fd, FRAME_DATA, text, strlen(text));
+  }
+
+  if (rc != 0) {
+    pthread_mutex_lock(&ctx->mutex);
+    ctx->write_failed = 1;
+    ctx->done = 1;
+    pthread_cond_signal(&ctx->cond);
+    pthread_mutex_unlock(&ctx->mutex);
+    return;
+  }
+
+  if (final || error) {
+    if (!error) send_frame(ctx->client_fd, FRAME_DONE, NULL, 0);
+    pthread_mutex_lock(&ctx->mutex);
+    ctx->done = 1;
+    pthread_cond_signal(&ctx->cond);
+    pthread_mutex_unlock(&ctx->mutex);
+  }
+}
 
 int main(int argc, char** argv) {
   if (argc < 4) {
@@ -139,39 +198,51 @@ int main(int argc, char** argv) {
       if (!session) {
         free(prompt);
         char err[64];
-        snprintf(err, sizeof(err), "ERROR request_id=%ld session_create_failed",
+        snprintf(err, sizeof(err), "request_id=%ld session_create_failed",
                   request_id);
-        send_framed(client, err);
+        send_frame(client, FRAME_ERROR, err, strlen(err));
         continue;
       }
 
       LiteRtLmInputData* input =
           litert_lm_input_data_create(kLiteRtLmInputDataTypeText, prompt, len);
       free(prompt);
-
       const LiteRtLmInputData* inputs[1] = {input};
-      LiteRtLmResponses* responses =
-          litert_lm_session_generate_content(session, inputs, 1);
+
+      StreamContext ctx;
+      ctx.client_fd = client;
+      ctx.done = 0;
+      ctx.write_failed = 0;
+      pthread_mutex_init(&ctx.mutex, NULL);
+      pthread_cond_init(&ctx.cond, NULL);
+
+      int start_rc = litert_lm_session_generate_content_stream(
+          session, inputs, 1, stream_callback, &ctx);
+      if (start_rc != 0) {
+        char err[80];
+        snprintf(err, sizeof(err),
+                  "request_id=%ld generate_stream_start_failed rc=%d",
+                  request_id, start_rc);
+        send_frame(client, FRAME_ERROR, err, strlen(err));
+      } else {
+        pthread_mutex_lock(&ctx.mutex);
+        while (!ctx.done) {
+          pthread_cond_wait(&ctx.cond, &ctx.mutex);
+        }
+        pthread_mutex_unlock(&ctx.mutex);
+      }
+
+      pthread_mutex_destroy(&ctx.mutex);
+      pthread_cond_destroy(&ctx.cond);
+
       long t1 = now_us();
+      fprintf(stderr, "request_id=%ld generate_us=%ld write_failed=%d\n",
+              request_id, t1 - t0, ctx.write_failed);
 
-      char err_buf[64];
-      const char* text = NULL;
-      if (responses && litert_lm_responses_get_num_candidates(responses) > 0) {
-        text = litert_lm_responses_get_response_text_at(responses, 0);
-      }
-      if (!text) {
-        snprintf(err_buf, sizeof(err_buf), "ERROR request_id=%ld generate_failed",
-                  request_id);
-        text = err_buf;
-      }
-
-      fprintf(stderr, "request_id=%ld generate_us=%ld response_bytes=%zu\n",
-              request_id, t1 - t0, strlen(text));
-      send_framed(client, text);
-
-      if (responses) litert_lm_responses_delete(responses);
       litert_lm_input_data_delete(input);
       litert_lm_session_delete(session);
+
+      if (ctx.write_failed) break;  // connection is bad, stop serving it
     }
     close(client);
   }

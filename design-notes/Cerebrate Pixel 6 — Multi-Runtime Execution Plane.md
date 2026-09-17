@@ -712,6 +712,132 @@ So: 8 of 9 criteria met. The plan isn't being declared fully complete —
 streaming is the honest, explicitly-tracked remainder, not a detail
 being quietly dropped.
 
+## Streaming done: 9/9 success criteria met (2026-09-17)
+
+### Correction: MLServer 1.3.5 was an environment constraint, not a real absence of streaming support
+
+The Phase 4/5 entry above stated MLServer lacked streaming support,
+full stop. That was wrong in an important way, caught before writing
+any streaming code: PyPI's actual latest stable MLServer release is
+**1.7.1**, not 1.3.5. `pip install mlserver` on the guest silently
+resolved to 1.3.5 back in Phase 1 because 1.7.1 (and everything from
+1.4.0 onward) declares `requires_python: <3.13,>=3.9`, and the guest's
+system Python is 3.13 — `pip` quietly picked the newest
+*compatible* version with no obvious warning that a newer release
+existed. Confirmed directly against PyPI's raw JSON release metadata
+(not `pip index versions`, which filters by the running interpreter
+and would hide this the same way) before concluding anything, then
+confirmed the *installed* 1.3.5 package genuinely has no
+`infer_stream`/`generate_stream` code by grepping its source, versus
+finding real streaming code throughout 1.7.1's `dataplane.py`,
+`rest/app.py`, and `rest/endpoints.py`.
+
+This meant the "install from GitHub master" vs. "build a bespoke SSE
+layer" fork from the earlier planning conversation was a false choice
+— a fourth path existed: get a real Python 3.12 (Debian 13 doesn't
+package one; obtained via [`uv`](https://github.com/astral-sh/uv), a
+static binary that fetches a pinned prebuilt CPython build, no
+compiling from source), install pinned `mlserver==1.7.1` in a
+disposable venv there, and prove it works before touching anything
+that matters.
+
+### The four-gate migration
+
+**Gate A** — disposable Python 3.12 + `mlserver==1.7.1`, both existing
+models unchanged. Ran a second MLServer instance (alternate ports,
+production untouched) against the exact same model directories:
+classifier → `"military uniform"` 88.6% (identical); buffered
+generation → `"The capital of Italy is Rome."` (correct). Passed
+cleanly — the only snag was Pillow not being installed in the fresh
+venv (a separate venv from production, caught immediately by the
+classifier failing to load, fixed with one `uv pip install`).
+
+**Gate B** — a trivial fake `predict_stream()` model (six hardcoded
+chunks, `asyncio.sleep(0.5)` between each), hit via
+`/v2/models/fake-stream/generate_stream`. Chunks arrived at 0.72s,
+1.23s, 1.73s, 2.23s, 2.74s, 3.25s — each ~0.5s apart, matching the
+injected delay exactly. Confirmed: real SSE (`Content-Type:
+text/event-stream`), genuine incremental delivery (not a buffered
+dump), MLServer automatically attaching CloudEvents-style headers.
+Zero LiteRT-LM code touched yet — this gate is entirely about proving
+the *mechanism*.
+
+**Gate C** — rewrote `cerebrate-generate.cc` to use
+`litert_lm_session_generate_content_stream` as the only native
+generation path (removing the earlier synchronous-only
+`generate_content` call entirely, not keeping both side by side). That
+API is non-blocking and invokes its callback from a **LiteRT-LM-owned
+background thread**, once per chunk — the first real multi-threading
+in either Android worker. Added a `pthread` mutex/condvar so the
+accept-loop thread can block until a chunk reports `is_final()` or an
+error, while the callback thread does the actual chunk delivery
+directly to the socket. Replaced the wire protocol with typed frames
+(`[1-byte type][4-byte length][payload]`, `DATA`/`DONE`/`ERROR`) —
+a breaking change to a protocol shipped only hours earlier, judged
+cheap deliberately: `cerebrate-generate` has exactly one known
+consumer, and MLServer is the real public seam, so this is exactly the
+moment an internal protocol is safe to redesign.
+
+Tested directly over raw TCP, before touching the Python adapter at
+all: a real prompt produced real token-by-token output at genuine
+per-token decode latency (~20-30ms between `DATA` frames, not
+artificial delays like Gate B's), terminated cleanly with `DONE`,
+worker PID unchanged throughout (no crash, no deadlock from the new
+threading).
+
+**Gate D** — rewrote `cerebrate_generate_runtime.py`'s wire-level code
+for the new typed-frame protocol, with `predict()` (buffers all `DATA`
+frames, backs `/infer`) and a new `predict_stream()` (yields one
+`InferenceResponse` per frame, backs `/generate_stream`) sharing one
+internal `_stream_generate()` generator. Promoted MLServer 1.7.1 to
+the actual production systemd unit (`MLSERVER_GZIP_ENABLED=false`
+added — MLServer's own source comments "GZip middleware does not work
+with streaming"; `MLSERVER_PARALLEL_WORKERS=0` carried forward, already
+required for an unrelated uvloop crash and, it turns out, also required
+for streaming).
+
+Verified through the complete real path —
+`inference.home.arpa` → Caddy → relay → tunnel → MLServer 1.7.1 → this
+adapter → AVF → `cerebrate-generate` → LiteRT-LM — with a **regression
+check run immediately alongside**, not after: the classifier (unchanged
+`"military uniform"` 88.6%) and the buffered generation path (`"The
+capital of Spain is Madrid."`) both still correct under the new
+MLServer version and adapter, and then real incremental streaming
+tokens (`"The"`, `" capital"`, `" of"`, `" Germany"`, `" is"`,
+`" Berlin"`, `"."`, arriving over ~170ms) with genuinely correct
+content.
+
+### Final scorecard: 9/9
+
+1. Existing MobileNet classification unmodified — ✅
+2. Graph/Session as two independent processes by construction — ✅
+3. Official `.litertlm` model loads in `cerebrate-generate`, independent of `cerebrate-infer` — ✅
+4. Debian submits a semantic prompt with no tokenizer/tensor/KV-cache handling — ✅
+5. Android performs the full LiteRT-LM generation lifecycle — ✅
+6. **Output returned incrementally — ✅ (was the one gap; now closed).** Real SSE streaming, real per-token latency, verified end to end.
+7. Text-generation service accessible through the same MLServer/Overmind architecture as graph inference — ✅
+8. Actual Pixel 6 execution backend measured, not assumed — ✅
+9. Existing NNAPI classification performance/behavior not sacrificed — ✅ (`cerebrate-infer` untouched throughout; reverified working after every subsequent change to its sibling process)
+
+All nine of this document's own success criteria are met. The original
+five-phase Multi-Runtime Execution Plane, plus the streaming follow-on,
+is complete.
+
+### Left for later, not blocking anything
+
+- `max_tokens`/`temperature`/sampling parameters not yet exposed.
+- No error-path testing for `cerebrate-generate` (worker down,
+  malformed prompt, mid-stream disconnect).
+- No watchdog timeout if the LiteRT-LM callback thread never reports
+  done — same unbounded-block posture the synchronous design already
+  had, not a new regression, but worth hardening if ever observed in
+  practice.
+- The old `~/mlserver-venv` (1.3.5, Python 3.13) on the guest is now
+  unused dead weight, left in place rather than deleted without being
+  asked.
+- gRPC streaming (broader than REST's server-only streaming) not
+  explored — unnecessary for the current prompt-in/tokens-out shape.
+
 ## Original design-doc quote, superseded by the process-architecture revision
 
 (Retained for history — no longer the current design.) The initial
