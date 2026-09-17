@@ -1,27 +1,36 @@
 # onnxruntime-characterization
 
-Phase C Stage 1 of the
+Phase C of the
 [Operational Model Catalog v4](../../../../design-notes/cerebrate_pixel6_operational_model_catalog_v4.md)
 (Sections 3.1, 6.1-6.3): does ONNX Runtime run the same MobileNet v1
-1.0 224 quantized canary correctly on CPU and XNNPACK, on this device?
-Not a different model — the exact `.tflite` file already deployed
-elsewhere in this project, converted to ONNX, so a class mismatch can
-only mean a real backend problem, never a confounded "different ground
-truth."
+1.0 224 quantized canary correctly on CPU, XNNPACK (Stage 1), and NNAPI
+(Stage 2), on this device? Not a different model — the exact `.tflite`
+file already deployed elsewhere in this project, converted to ONNX, so
+a class mismatch can only mean a real backend problem, never a
+confounded "different ground truth."
 
 ## Result
 
-**CPU: PASS.** **XNNPACK: crashes inside ONNX Runtime's own code**
+**CPU: PASS. NNAPI: PASS, genuinely reaches `google-edgetpu`, bit-exact
+correct output — a real, positive correction of catalog v4's low-confidence
+hypothesis. XNNPACK: crashes inside ONNX Runtime's own code**
 (`libonnxruntime.so`, not this spike's code) — a real, reproducible
-defect, not a usage bug. Per catalog v4 Section 6.3, this is enough to
-promote ORT as the default *portable* CPU-tier candidate for new graph
-models; TFLite+NNAPI remains the only proven *accelerated* Pixel 6 graph
-path (Stage 2 characterizes ORT's NNAPI EP next, separately).
+defect, not a usage bug.
 
 ```text
-CPU        top_class=795 top_val=120 expected=795 [PASS] load_us=41265 run_us=16566
-XNNPACK    [SIGSEGV inside libonnxruntime.so during Run() -- see below]
+CPU           top_class=795 top_val=120 expected=795 [PASS] load_us=44026 run_us=6263
+NNAPI(no-cpu) top_class=795 top_val=120 expected=795 [PASS] load_us=916328 run_us=7726 exact_matches=1001/1001 within_tolerance(+-5)=1001/1001 max_abs_diff=0
+NNAPI(cpu-ok) top_class=795 top_val=120 expected=795 [PASS] load_us=936488 run_us=6354 exact_matches=1001/1001 within_tolerance(+-5)=1001/1001 max_abs_diff=0
+XNNPACK       [SIGSEGV inside libonnxruntime.so during Run() -- see below]
 ```
+
+Per catalog v4 Section 6.3's promotion rule: **ORT is promoted as the
+first backend attempted for new graph models on this Pixel 6**, not just
+the default portable CPU-tier fallback — the stronger outcome, since
+NNAPI genuinely reached hardware acceleration here. TFLite+NNAPI's own
+proven accelerated path isn't retired (Section 3.2's stated conditions
+for keeping it still apply case-by-case), but it's no longer the *only*
+accelerated graph option.
 
 ## Getting the ONNX model: convert the existing canary, don't re-export
 
@@ -132,8 +141,84 @@ baseline), so this is recorded as a real finding and left there rather
 than chased — XNNPACK was always the optional accelerated-CPU tier, not
 the baseline itself.
 
-## Not yet done (Stage 2)
+## Stage 2: NNAPI, verified against real delegation evidence, not just a passing Run()
 
-NNAPI execution provider correctness + delegation evidence — a
-separate, lower-confidence hypothesis per catalog v4 Section 3.1, gated
-independently of this stage's CPU/XNNPACK result.
+Per catalog v4 Section 6.2's acceptance criteria, two separate NNAPI
+configurations are run and compared against the CPU reference output
+element-by-element (`kToleranceForMatch`), not just by argmax — the
+same discipline that caught LiteRT `CompiledModel`'s GPU readback bug,
+since a delegate that "runs successfully" can still return garbage or
+an all-zero buffer:
+
+- **`NNAPI(no-cpu)`** — `NNAPI_FLAG_CPU_DISABLED` set, so CPU fallback
+  through NNAPI's own `nnapi-reference` implementation cannot silently
+  produce an "accelerated" result. This is the real test.
+- **`NNAPI(cpu-ok)`** — no flags, the permissive default. A comparison
+  point to isolate whether `CPU_DISABLED` specifically breaks something,
+  versus NNAPI integration failing regardless of the flag.
+
+Both passed with **bit-exact** output (`exact_matches=1001/1001,
+max_abs_diff=0`) against the CPU reference. An exact match on its own
+is not proof of real acceleration — it's equally consistent with a
+silent CPU fallback ORT itself didn't report as an error — so this was
+corroborated with independent, direct evidence rather than trusted at
+face value: `adb logcat` during the run shows
+
+```text
+Manager : Found interface google-edgetpu (version = 2.0)
+onnxruntime: NnapiExecutionProvider::GetCapability, number of partitions
+  supported by NNAPI: 3 number of nodes in the graph: 149 number of
+  nodes supported by NNAPI: 146
+android.hardware.neuralnetworks@service-darwinn-aidl: Ops supported = 29, not supported = 0
+Darwinn : CompilerSpawner: Started Request #13 ... Completed Request #13, Status: 0
+ExecutionPlan::SimpleBody::finish: compilation finished successfully on google-edgetpu
+```
+
+repeated once per compiled partition per run (four times total across
+both NNAPI runs) — genuine TPU device discovery, genuine graph
+partitioning (146 of 149 nodes delegated), genuine Darwinn compiler
+invocation, genuine successful compilation onto `google-edgetpu`. TPU
+temperature alone (26.0°C → 27.0°C across the whole run) was checked
+too but treated as inconclusive on its own — a single quick inference is
+too brief a workload for thermal drift to be a reliable signal either
+way; the logcat evidence is what actually settles it.
+
+The bit-exact match to CPU is itself a real, somewhat interesting
+finding, not a red flag once corroborated: unlike the LiteRT GPU
+investigation (float16 GPU compute paths genuinely diverging from
+float32 CPU, `max_abs_diff=102`), a deterministic int8-quantized MobileNet
+apparently produces identical output whether computed by CPU or by
+`google-edgetpu` for this graph — plausible for simple, fully-integer
+quantized ops, and worth remembering as a real data point rather than
+assumed to generalize to every future quantized model.
+
+**This corrects catalog v4 Section 3.1's own stated low-confidence
+hypothesis** (drawn from `microsoft/onnxruntime#20782`, reporting NNAPI
+failing to reach `google-edgetpu` on Pixel 6a/8 Pro) — for this exact
+device, this exact model, and ONNX Runtime 1.30.0, NNAPI genuinely
+reaches the TPU with `NNAPI_FLAG_CPU_DISABLED` set. That GitHub report
+predates this ORT release and may describe a since-fixed regression, a
+different model's operator set, or a device-specific difference between
+Pixel 6 and 6a/8 Pro — this result doesn't invalidate that report, it
+just means the failure mode it describes doesn't reproduce here, now,
+for this workload. Recorded as what was actually measured, per this
+project's own standing rule, not generalized beyond what was tested.
+
+Load time (`~916-936ms`) is dominated by NNAPI/Darwinn compilation
+overhead (visible directly in the logcat `CompilerSpawner` timings,
+serialized across several hundred ms each) — over 20x slower to load
+than CPU's `~44ms`. Run time itself (`~6-8ms`) is not dramatically
+faster than CPU (`~6ms`) for this specific tiny quantized model; the
+TPU's benefit for a model this small and fast may be power/thermal
+efficiency under sustained load rather than raw single-shot latency,
+consistent with what `cerebrate-infer`'s own NNAPI path found elsewhere
+in this project. Not measured here: resident memory, or behavior under
+the kind of sustained multi-minute load `cerebrate-infer`'s Stage 4C/4D
+testing used — this spike is a single-shot correctness/delegation
+check, not a soak test.
+
+## Not yet done
+
+Recording this result in the catalog's validation fields and updating
+the design docs' promotion decision (catalog v4 Phase C, item 5) is a
+separate step from this spike itself.
