@@ -191,6 +191,28 @@ static void start_worker(const char* worker, const char* model, const char* back
     return;
   }
 
+  // Pre-flight, not just post-fork readiness: our own bookkeeping says
+  // this worker isn't running, but if something is already answering on
+  // its fixed port, that's a real conflict (most likely an orphan left
+  // behind by a previous supervisor process that never adopted it, or a
+  // manually-launched instance) -- not "started successfully." Found
+  // empirically (Phase B Stage 3): without this check, wait_for_ready()'s
+  // connect_probe() can't tell "my new child is serving" apart from "an
+  // unrelated orphan was already listening the whole time," since a slow
+  // model load (NNAPI/LiteRT-LM init easily takes 1-2s) means the probe
+  // succeeds against the *orphan* long before the new child even reaches
+  // its own bind() call -- reporting a false OK while the real new child
+  // silently fails on EADDRINUSE moments later.
+  if (connect_probe(s->fixed_port, 200)) {
+    snprintf(out, out_len,
+             "ERROR: port %d already has an unmanaged listener (not started "
+             "by this supervisor) -- refusing to start a second one; STOP "
+             "won't help since this supervisor doesn't own it, investigate "
+             "manually (e.g. lsof/ps on the device)\n",
+             s->fixed_port);
+    return;
+  }
+
   pid_t pid = fork();
   if (pid < 0) {
     snprintf(out, out_len, "ERROR: fork failed: %s\n", strerror(errno));

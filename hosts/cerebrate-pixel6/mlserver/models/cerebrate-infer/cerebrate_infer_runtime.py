@@ -281,6 +281,12 @@ class CerebrateInferRuntime(MLModel):
                 except (ConnectionError, OSError, asyncio.TimeoutError) as exc:
                     last_error = exc
                     await self._drop_connection()
+            # Both attempts exhausted, not just one transient blip: reflect
+            # this in readiness so /ready and the repository index report
+            # reality instead of a stale "READY" from load() time. Found
+            # via Phase B Stage 3: a killed worker left MLServer reporting
+            # READY indefinitely until the next explicit unload().
+            self.ready = False
             raise ConnectionError(
                 f"cerebrate-infer at {self._host}:{self._port} unreachable"
             ) from last_error

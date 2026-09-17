@@ -261,6 +261,10 @@ class CerebrateGenerateRuntime(MLModel):
                     last_error = exc
                     await self._drop_connection()
             if not connected:
+                # Both attempts exhausted, not just one transient blip: see
+                # the identical readiness comment at the mid-stream raise
+                # below (Phase B Stage 3 finding).
+                self.ready = False
                 raise ConnectionError(
                     f"cerebrate-generate at {self._host}:{self._port} unreachable"
                 ) from last_error
@@ -275,6 +279,12 @@ class CerebrateGenerateRuntime(MLModel):
                     asyncio.IncompleteReadError,
                 ) as exc:
                     await self._drop_connection()
+                    # Reflect in readiness so /ready and the repository
+                    # index report reality instead of a stale "READY" from
+                    # load() time. Found via Phase B Stage 3: a worker
+                    # killed mid-generation left MLServer reporting READY
+                    # indefinitely until the next explicit unload().
+                    self.ready = False
                     raise ConnectionError(
                         f"cerebrate-generate at {self._host}:{self._port} "
                         "unreachable mid-stream"

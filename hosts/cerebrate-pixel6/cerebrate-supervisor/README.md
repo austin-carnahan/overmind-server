@@ -137,17 +137,114 @@ real engineering, explicitly deferred rather than bolted on early.
 - **No orphan-worker adoption.** If the supervisor itself is killed and
   relaunched, workers it previously started keep running (reparented to
   `init`), but the new supervisor process has no memory of them — its
-  in-memory state starts at `STOPPED` for everything. `STATUS`/`LIST`
-  will then be wrong until an operator reconciles it (e.g. `STOP` fails
-  silently as a no-op against a worker the supervisor doesn't know is
-  running, while the real orphan keeps holding the port). A future
-  version could scan for a process already bound to a worker's fixed
-  port at startup; not built here.
+  in-memory state starts at `STOPPED` for everything, confirmed exactly
+  in Phase B Stage 3 below. `STATUS`/`LIST` are wrong until an operator
+  reconciles it. `START` against an orphaned port is caught and refused
+  with a clear error (Stage 3 fix, see below) rather than silently
+  reporting false success — but there is still no automatic adoption; a
+  human has to find and kill the orphan (or just use it as-is) before
+  a tracked restart is possible. A future version could scan for a
+  process already bound to a worker's fixed port at startup and adopt
+  its PID; not built here.
 - **No automatic respawn-on-crash.** `STATUS` reports `EXITED`
   accurately; nothing restarts it automatically. Per the Phase B design
   discussion, this is intentional for Stage 1/2 — Stage 3 characterizes
   real failure modes before deciding which worker classes (if any)
   should auto-restart versus stay down until explicitly requested.
+
+## Phase B Stage 3 — failure/recovery characterization (2026-09-17)
+
+Per the Phase B design discussion: break things deliberately and record
+reality, rather than deciding recovery behavior in advance. All tests run
+against the real device and real production models.
+
+### Worker crash mid-request — clean, fast failure; MLServer readiness was stale (found and fixed)
+
+Killed `cerebrate-generate` (`kill -9`) while it was actively streaming a
+real generation response. The client-facing failure was immediate and
+clean: `IncompleteReadError` → `ConnectionError: ... unreachable
+mid-stream` → HTTP 500, no hang. `cerebrate-supervisor`'s own `STATUS`
+correctly reported `EXITED exit_code=-9` right away.
+
+But MLServer's `/v2/repository/index` kept reporting the model `READY`
+indefinitely — `self.ready` is only ever set once, at `load()` time nothing
+rechecked it afterward. This directly contradicts the intended shape
+("worker crashes → supervisor records EXITED → **MLServer sees model
+unhealthy**"), so it was fixed, not just noted: both adapters now set
+`self.ready = False` at the exact point they give up on a connection for
+good (after retries are exhausted, not on the first transient blip).
+Re-verified: after a confirmed-dead connection, `/v2/repository/index`
+correctly reports `UNKNOWN` instead of a stale `READY`; a subsequent
+`load()` call restarts the worker via the supervisor and restores `READY`
+with a genuinely fresh PID.
+
+Recovery today is **exactly one explicit `load()` call**, not automatic —
+matching the deliberate choice not to auto-restart behind MLServer's back
+until real operational needs justify it (see "Explicitly not built"
+above). A full `systemctl restart cerebrate-mlserver` also self-heals a
+crashed worker for free, since MLServer's own startup calls `load()` for
+every configured model.
+
+### Supervisor crash: workers survive untouched, but a real false-success bug was found and fixed
+
+Killing `cerebrate-supervisor` itself confirmed the documented gap above:
+both workers kept running and serving correctly (reparented to `init`,
+completely unaffected), but a freshly relaunched supervisor reported both
+as `STOPPED` — its in-memory bookkeeping starts empty, as expected.
+
+Testing what `START` does against that stale state surfaced a real,
+more dangerous bug, not just the already-known staleness: `START`
+reported `OK: started pid=19382` for a **brand-new forked child that had
+already failed with `EADDRINUSE` and exited** — because the readiness
+check (`connect_probe`, a plain TCP connect to the fixed port) can't
+distinguish "my new child is now serving" from "an unrelated orphan was
+already listening the whole time." `cerebrate-infer`'s model/NNAPI-delegate
+load takes 1-2 real seconds before it ever calls `bind()`; the orphan was
+already answering on the port from the very first readiness check, so
+`START` declared victory using someone else's socket while its own child
+silently died moments later. `STATUS` right after showed the truth
+(`EXITED exit_code=1`) — but only *after* the caller had already been told
+`OK`.
+
+Fixed with a pre-flight check: before forking at all, if our own
+bookkeeping says a worker isn't running but its fixed port already
+answers a connection, `START` now refuses outright
+(`ERROR: port 8765 already has an unmanaged listener ...`) instead of
+proceeding. Re-verified against the exact same orphan scenario: no
+phantom child is spawned, the real orphan is left alone and undisturbed,
+and the caller gets an honest, actionable error instead of a lie.
+
+### Full Debian guest VM restart: fully self-healing, zero manual intervention beyond the relaunch itself
+
+Force-stopped the Terminal app (`am force-stop
+com.android.virtualization.terminal`) — confirmed the entire guest VM
+(`crosvm`) died, while all three Android-host processes
+(`cerebrate-supervisor`, `cerebrate-infer`, `cerebrate-generate`) were
+completely unaffected, exactly as the architecture intends. Relaunched it
+(`am start -n
+com.android.virtualization.terminal/.new2.ui.MainActivity`) and waited
+for a full fresh boot.
+
+`pixel-tunnel.service`, `cerebrate-mlserver.service`, and
+`pixel-mlserver-tunnel.service` all came back active on their own —
+systemd `enable`d units, no operator action beyond the one Terminal-app
+relaunch. MLServer's fresh startup `load()` calls re-ran
+`_discover_avf_gateway()` and reconnected to the *same still-running*
+Android-host workers (confirmed via request IDs continuing to increment
+on the same long-lived `cerebrate-infer` process, never restarted) — a
+real end-to-end classification succeeded immediately after boot, no
+manual reconnection step anywhere.
+
+### Not independently tested this stage
+
+`START`/`STOP` idempotency and a nonexistent-model-path failure were
+already verified in Stages 1-2 and weren't re-run here. Swapping to a
+genuinely *different* model on the same worker (e.g. `STOP` a running
+model, `START` a different one) is mechanically identical to the
+"already running with a different configuration" guard already exercised
+in Stage 2 — not re-tested with a second real model, since the catalog
+only has one model per worker type today; real coverage of that path
+comes with Phase E.
 
 ## Deploy
 
