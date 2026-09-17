@@ -1122,26 +1122,101 @@ canonical. The `pixel-tunnel` and `pixel-mlserver-tunnel` accounts'
 both remain usable without further changes whenever Ethernet work
 resumes.
 
-### Future pass: a deliberately narrow test list
+### Update: the recovery failures were partly a separate, transport-independent bug
+
+Item 7 below was investigated immediately rather than deferred, because
+the same "tunnels won't come back" symptom recurred switching **back**
+to Wi-Fi (known-good, previously-canonical) — strong evidence some of
+what looked like "Ethernet doesn't recover" was actually a general
+reverse-tunnel defect that would have struck on *any* interface change,
+Wi-Fi-to-Wi-Fi included.
+
+Root cause, confirmed via `sudo ss -ltnp`: when the guest's active
+interface changes abruptly, its outbound SSH connection to Overmind
+dies without a clean close. The guest-side client (`ServerAliveInterval
+30`/`ServerAliveCountMax 3`) detects this and reconnects within ~90s —
+but the **server-side** sshd child process from the old connection
+doesn't know its peer is gone, so it keeps holding the forwarded port
+(`127.0.0.1:2206` / `:8500`). The fresh reconnect then fails outright
+(`remote port forwarding failed`, `ExitOnForwardFailure=yes` exiting
+immediately) because the port is still owned by that stale process —
+and this repeats on every systemd restart attempt indefinitely, since
+nothing ever kills the original zombie. Manual recovery required
+`sudo systemctl restart ssh` (sometimes insufficient) or `sudo fuser -k
+<port>/tcp` (which also incidentally killed the unrelated `socat`
+relay, harmlessly, since it self-heals via its own `Restart=always`).
+
+This is the same *class* of bug as the earlier `cerebrate-infer` fix
+(Stage 5 Phase 4) — a dead peer leaving a resource permanently held
+because nothing on the surviving side was watching for silence — just
+hitting OpenSSH's own port-forwarding instead of custom code.
+
+**Fixed**: added `ClientAliveInterval 15` / `ClientAliveCountMax 3`
+inside both `Match User pixel-tunnel` and `Match User
+pixel-mlserver-tunnel` blocks in Overmind's `sshd_config` (scoped to
+just these two accounts, not global). This gives symmetric dead-peer
+detection: the guest's `ServerAliveInterval` already let the *client*
+notice a dead server/path; this addition lets the *server* notice a
+dead client and release the stale forwarded-port listener on its own,
+typically within ~45s, instead of requiring manual intervention.
+Verified: config validated with `sshd -t`, effective per-account
+settings confirmed with `sshd -T -C user=...`, reloaded with
+`systemctl reload ssh`, and the full `inference.home.arpa` path
+re-tested successfully afterward. Not yet verified under a live
+interface-change event (the next natural transition, or the future
+Ethernet retest below, will be the real test of whether this
+self-heals without any manual `fuser`/restart step).
+
+This reframes confidence in the original Ethernet findings: at least
+some of what was attributed to "Ethernet doesn't recover" was actually
+this transport-independent tunnel bug contaminating the observation.
+The instructive layer model going forward:
+
+```text
+Layer 1 — Pixel Ethernet link (USB NIC / Android / DHCP / route)
+Layer 2 — persistent SSH tunnels (pixel-tunnel + pixel-mlserver-tunnel)
+Layer 3 — Overmind relay / Caddy
+```
+
+Layer 2 is now hardened. Layers 1 and 3 were never in question. What's
+still genuinely unresolved is Layer 1's own behavior in isolation —
+none of today's findings explain *why* Android failed to show an
+Ethernet interface at all before a reboot, why a dropped link needed a
+physical replug, or why `adb tcpip 5555` doesn't survive a reboot. Those
+remain real, separate open questions for the future pass.
+
+### Future pass: a deliberately narrow, layer-by-layer test list
 
 1. Disable Airplane Mode permanently, then reboot — does Ethernet come
    up automatically from a cold boot, with the Airplane Mode confound
-   removed?
-2. Test physical link loss/recovery without touching any Android
+   removed? (Layer 1)
+2. Does the interface get the reserved `.61`? (Layer 1)
+3. Can Overmind ping `.61`? (Layer 1)
+4. Can Overmind `adb connect .61:5555` (after the one-time USB
+   `adb tcpip 5555` touch)? (Layer 1)
+5. Have the reverse tunnels re-established on their own — and, with the
+   `ClientAliveInterval` fix in place, without needing a manual
+   `fuser`/restart step this time? (Layer 2, now hardened — this is the
+   fix's real test)
+6. Does `inference.home.arpa` work end to end? (Layer 3, was never
+   actually in question)
+7. Test physical link loss/recovery without touching any Android
    settings — does it self-recover, or still require a physical
-   replug?
-3. Test adapter power loss/recovery specifically (separate from a full
-   cable unplug, since the dongle provides USB-PD passthrough).
-4. Test repeated reboot cycles — is Ethernet's behavior consistent, or
-   does it vary run to run?
-5. Test whether Wi-Fi can stay enabled as a management fallback while
-   Android prefers Ethernet for normal traffic (rather than the two
-   being strictly either/or, which hasn't been tested — only "one
-   fully off" has).
-6. Revisit persistent ADB recovery: either get paired wireless ADB
-   working as a fallback management path alongside wired traffic, or
-   find a cleaner way to restore TCP ADB mode after a reboot than a
-   manual USB touch each time.
-7. Re-test the reverse-tunnel stale-listener behavior independently of
-   Ethernet, since it may be a general OpenSSH/tunnel-lifecycle bug in
-   this project's own setup rather than anything Ethernet-specific.
+   replug? (Layer 1)
+8. Test adapter power loss/recovery specifically (separate from a full
+   cable unplug, since the dongle provides USB-PD passthrough). (Layer 1)
+9. Test repeated reboot cycles — is Ethernet's behavior consistent, or
+   does it vary run to run? (Layer 1)
+10. Test whether Wi-Fi can stay enabled as a management fallback while
+    Android prefers Ethernet for normal traffic (rather than the two
+    being strictly either/or, which hasn't been tested — only "one
+    fully off" has). (Layer 1)
+11. Revisit persistent ADB recovery: either get paired wireless ADB
+    working as a fallback management path alongside wired traffic, or
+    find a cleaner way to restore TCP ADB mode after a reboot than a
+    manual USB touch each time. (Layer 1)
+
+If steps 1-4 recover cleanly and steps 5-6 now self-heal on their own
+because of the keepalive fix, a substantial portion of what looked like
+an Ethernet lifecycle problem will turn out to have been this tunnel bug
+all along.
