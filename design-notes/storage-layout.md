@@ -89,13 +89,24 @@ under `/mnt`, which was confusing and didn't scale to a second disk:
     library/                 # matched to the filesystem's own label —
     var-lib-overmind/        # simpler to scale to another disk. The actual
     downloads/               # ext4 label (e.g. overmind-ssd) can still
-                              # differ; nothing depends on them matching.
+    models/                  # differ; nothing depends on them matching.
 
 /mnt/substrate              # logical — the only paths services reference
 /mnt/library                # bind-mounted from a /mnt/disks/<name>/ subdir
 /mnt/downloads
+/mnt/models
 /var/lib/overmind
 ```
+
+`/mnt/models` (added 2026-09-17 for the Cerebrate Pixel 6 model cache, see
+[models/README.md](../models/README.md)) is deliberately a sibling of
+`/mnt/substrate`, not a subdirectory of it, despite `/mnt/substrate/models/`
+appearing in the tree above — the two are different things. A runtime's
+own downloaded weight cache is a service internal (see "Service internals"
+below and [services/inference/README.md](../services/inference/README.md)),
+not project-owned Substrate content; Substrate remains free to grow its own
+`models/` later for curated/reusable artifacts a project deliberately
+keeps, without colliding with anything a runtime manages on its own.
 
 A second disk mounts at `/mnt/disks/<next-name>` with no naming
 collision, and backs whatever new logical path(s) it's meant for without

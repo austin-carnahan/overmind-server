@@ -10,14 +10,23 @@ Stages 1-2 of Phase A from the
   a venv (not stdlib; see the script's docstring), since both this Mac and
   every host here treat their system Python as externally managed (PEP 668).
 
-## Artifact cache: `/mnt/substrate/models/` on overmind-01
+## Artifact cache: `/mnt/models/` on overmind-01
 
 Per catalog v4 §7.3, artifacts live on Overmind's SSD before ever reaching
 the Pixel — re-downloadable, not irreplaceable, so this directory can be
 treated as a cache rather than backed up like project state.
 
+`/mnt/models` is a sibling of `/mnt/substrate`, not a subdirectory of it
+(moved there 2026-09-17, having initially been placed under Substrate) —
+Substrate is a project workspace that may eventually consume services this
+cache powers, and a runtime's own downloaded weight cache is a service
+internal, not project-owned Substrate content (see
+[storage-layout.md](../design-notes/storage-layout.md)). Bind-mounted from
+`/mnt/disks/ssd1/models`, matching the existing physical/logical split used
+for `/mnt/substrate`, `/mnt/library`, and `/mnt/downloads`.
+
 ```text
-/mnt/substrate/models/
+/mnt/models/
   huggingface/     # HF_HOME — the standard huggingface_hub cache, for
                     # artifacts whose catalog `source` is `repo`+`revision`
   direct/<key>/    # verified plain downloads, for artifacts whose catalog
@@ -47,7 +56,7 @@ To refresh or add an entry:
 
 ```bash
 export PATH="$HOME/.local/bin:$PATH"
-export HF_HOME=/mnt/substrate/models/huggingface
+export HF_HOME=/mnt/models/huggingface
 ~/hf-cache-venv/bin/python3 -c "
 from huggingface_hub import snapshot_download
 snapshot_download(repo_id='<repo>', revision='<pinned sha>')
