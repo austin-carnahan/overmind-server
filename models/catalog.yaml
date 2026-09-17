@@ -47,6 +47,22 @@ models:
           # investigation.
           pixel6_litert_compiled_cpu: passed
           pixel6_litert_compiled_gpu: failed
+          # ONNX Runtime (Phase C, onnxruntime-characterization spike):
+          # measured via a tf2onnx conversion of this exact .tflite file
+          # (same weights, same quantization, reproducible from this
+          # artifact -- see the spike's README), not a separately
+          # cataloged artifact, since no ORT-based production worker
+          # exists yet. NNAPI genuinely reached google-edgetpu with CPU
+          # fallback explicitly disabled, verified via real logcat
+          # delegation evidence (device discovery, graph partitioning,
+          # Darwinn compilation), not just a passing Run() -- correcting
+          # catalog v4 Section 3.1's own stated low-confidence hypothesis
+          # for this exact device/model/ORT version (1.30.0). XNNPACK
+          # crashes inside ONNX Runtime's own code, a real reproducible
+          # defect, not a usage bug.
+          pixel6_ort_cpu: passed
+          pixel6_ort_xnnpack: failed
+          pixel6_ort_nnapi: passed
     worker:
       binary: cerebrate-infer
       port: 8765

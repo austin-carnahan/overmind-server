@@ -136,10 +136,10 @@ This is compelling because ONNX Runtime provides:
 
 **But that value case is entirely about portability and a dependable CPU/XNNPACK baseline. It is not evidence that ORT reaches hardware acceleration on this specific device.** Treat these as two separate, independently-gated claims:
 
-1. **ORT is a good portable graph-runtime candidate, with CPU/XNNPACK as a dependable baseline.** High confidence — this is well-established, widely-used functionality.
-2. **ORT's NNAPI execution provider reaches `google-edgetpu` (or any real accelerator) on this Pixel 6.** Low confidence going in. Real, verified ONNX Runtime GitHub reports show NNAPI failing to reach `google-edgetpu` on Pixel 6a and Pixel 8 Pro (microsoft/onnxruntime#20782, "NNAPI doesn't work on google-edgetpu [Mobile]"), and NNAPI itself is a deprecated Android API with no settled generic successor for hardware acceleration (see e.g. microsoft/onnxruntime#23565, where a user explicitly asks how to future-proof away from NNAPI). These reports predate this exact release and don't prove today's behavior, but there's no found evidence the underlying gap has been fixed either. Go into Section 6's characterization expecting NNAPI→TPU may simply fail here, the same way LiteRT `CompiledModel`'s GPU path turned out to have a real defect.
+1. **ORT is a good portable graph-runtime candidate, with CPU/XNNPACK as a dependable baseline.** High confidence — this is well-established, widely-used functionality. **Measured (Phase C Stage 1, `hosts/cerebrate-pixel6/spikes/onnxruntime-characterization/`):** CPU passes cleanly on this device against the exact MobileNet v1 1.0 224 quantized canary used everywhere else in this project (converted to ONNX via `tf2onnx`, not a different model). XNNPACK crashes — a real, reproducible defect inside ONNX Runtime's own code (ORT 1.30.0), not a usage bug; CPU alone still satisfies this claim.
+2. **ORT's NNAPI execution provider reaches `google-edgetpu` (or any real accelerator) on this Pixel 6.** Low confidence going in. Real, verified ONNX Runtime GitHub reports show NNAPI failing to reach `google-edgetpu` on Pixel 6a and Pixel 8 Pro (microsoft/onnxruntime#20782, "NNAPI doesn't work on google-edgetpu [Mobile]"), and NNAPI itself is a deprecated Android API with no settled generic successor for hardware acceleration (see e.g. microsoft/onnxruntime#23565, where a user explicitly asks how to future-proof away from NNAPI). These reports predate this exact release and don't prove today's behavior, but there's no found evidence the underlying gap has been fixed either. Go into Section 6's characterization expecting NNAPI→TPU may simply fail here, the same way LiteRT `CompiledModel`'s GPU path turned out to have a real defect. **Measured (Phase C Stage 2): the low-confidence expectation did not hold for this device.** With `NNAPI_FLAG_CPU_DISABLED` set (so a silent CPU fallback cannot masquerade as acceleration), NNAPI genuinely reached `google-edgetpu` — confirmed via real `adb logcat` delegation evidence (TPU device discovery, 146/149 graph nodes partitioned to NNAPI, Darwinn compiler invocations completing successfully on `google-edgetpu`), not just a passing `Run()` call — with bit-exact correct output against the CPU reference. This doesn't invalidate the cited GitHub reports; it means their failure mode doesn't reproduce here, now, for this exact device/model/ORT version. Recorded as what was measured, not generalized to every future model or device.
 
-This is a **preference policy for portability, not a claim that ORT already accelerates well on this Pixel**. Every backend remains correctness- and measurement-gated, and "ORT is the default candidate" and "ORT reaches Tensor G1 acceleration" must not be conflated when reporting results.
+This is a **preference policy for portability, not a claim that ORT already accelerates well on this Pixel** — that claim is now independently measured and confirmed for this specific characterization workload (Section 6.3 records the resulting promotion decision). Every *other* backend/model combination remains correctness- and measurement-gated on its own; "ORT is the default candidate" and "ORT reaches Tensor G1 acceleration for MobileNet v1" must still not be conflated with "ORT accelerates every future model" when reporting results.
 
 ### 3.2 Specialized graph path: TFLite + NNAPI
 
@@ -389,15 +389,17 @@ If ORT passes correctness and reaches useful acceleration on this Pixel, it beco
 
 If ORT is correct on CPU/XNNPACK but NNAPI does not reach real acceleration (the expected-going-in outcome per Section 3.1), ORT is still promoted as the **default portable candidate at the CPU/XNNPACK tier** — the portability and format-unification value doesn't depend on hardware acceleration succeeding. It simply means TFLite+NNAPI stays the only accelerated Pixel 6 graph path, and that gap gets recorded honestly rather than glossed over.
 
-Neither outcome automatically makes ORT the fastest backend for every model.
+**Measured outcome (Phase C, MobileNet v1 1.0 224 quantized characterization workload):** the first branch applies. NNAPI genuinely reached `google-edgetpu`, correctness passed, and delegation was independently confirmed via real logcat evidence, not just a passing `Run()`. ORT is promoted as the first backend attempted for new graph models on this Pixel 6 — the stronger outcome, not just the CPU/XNNPACK-tier fallback. This is recorded for *this* characterization workload; it is not automatically extended to every future model without its own correctness/delegation check (Section 6.2's discipline applies per model, not just once).
+
+Neither outcome automatically makes ORT the fastest backend for every model. TFLite+NNAPI is not retired: it remains the only *already-in-production* accelerated Pixel 6 graph path (served by `cerebrate-infer`, per the Multi-Runtime Execution Plane), and Section 3.2's conditions for preferring it still apply case-by-case — no ORT-based worker exists yet, so this promotion is a policy decision for future graph models, not a retroactive change to `mobilenetv1`'s live `cerebrate-infer` configuration.
 
 Backend preference should be recorded per model and device, for example:
 
 ```text
 Pixel 6 / MobileNetV1
-1. TFLite + NNAPI / google-edgetpu    # if still materially faster
-2. ORT + NNAPI                        # if correct and useful
-3. ORT + XNNPACK
+1. TFLite + NNAPI / google-edgetpu    # already in production, materially faster to load (no NNAPI/Darwinn compile step)
+2. ORT + NNAPI / google-edgetpu       # measured correct and accelerated (Phase C) -- viable once an ORT-based worker exists
+3. ORT + XNNPACK                      # measured broken for this model (Phase C): crashes inside ORT 1.30.0 itself
 
 Pixel 6 / EdgeSAM
 1. ORT + NNAPI                        # if validated
