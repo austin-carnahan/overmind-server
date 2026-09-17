@@ -2,52 +2,82 @@
 
 ## Objective
 
-Evolve `cerebrate-infer` from a single-purpose classification worker into a **general Android execution plane** supporting two distinct runtime contracts:
+Evolve the Pixel 6's Android host from running a single-purpose classification worker into a **general Android execution plane** supporting two distinct runtime contracts:
 
 1. **Graph Execution** — bounded model-graph invocation, primarily using `.tflite` deployment artifacts.
 2. **Session Execution** — stateful model sessions, primarily using `.litertlm` deployment artifacts and LiteRT-LM.
 
-Preserve the already-proven TensorFlow Lite + NNAPI → `google-edgetpu` implementation as the Pixel 6's optimized **graph compatibility backend**.
+Preserve the already-proven TensorFlow Lite + NNAPI → `google-edgetpu` implementation, unchanged, as the Pixel 6's optimized **graph compatibility backend**.
 
 The goal is not to create separate engines for classification, segmentation, OCR, speech, VLMs, etc. Instead, let the underlying deployment/runtime model determine the execution path.
 
+**Revised 2026-09-17**: Graph Execution and Session Execution are implemented as **two separate Android-host processes**, not as an internal dispatcher inside one binary. See "Process Architecture" below — this replaces the single-process dispatcher shown in earlier drafts of this document and changes the shape of the phases further down.
+
 ---
 
-# Guiding Architecture
+# Process Architecture
+
+Graph Execution and Session Execution are not just two implementations of one runtime contract — they have materially different operating characteristics:
 
 ```text
-Overmind / clients
-        │
-        ▼
-     MLServer
-   Debian control plane
-        │
-        │ semantic inference requests
-        ▼
-     AVF boundary
-        │
-        ▼
-cerebrate-infer
- Android execution plane
-        │
-        ├─────────────────────────────┐
-        │                             │
-        ▼                             ▼
- Graph Execution                Session Execution
-        │                             │
-        ├─ NNAPI compatibility        └─ LiteRT-LM
-        │  backend                       Engine / Session
-        │                               / Conversation
-        │
-        └─ future LiteRT
-           CompiledModel backend
+cerebrate-infer                 cerebrate-generate
+─────────────────               ───────────────────
+Graph execution                 Session execution
+.tflite                         .litertlm
+NNAPI / LiteRT graph            LiteRT-LM
+request → result                session → stream
+~millisecond lifetime           seconds/minutes
+tiny resident state             large model + KV/session state
+easy restart                    stateful restart
+high request concurrency        probably limited session concurrency
 ```
 
-MLServer remains the stable northbound serving layer.
+Putting both into one binary would require a backend-dispatch abstraction before there's any evidence that sharing a process buys anything. Two separate processes instead give several properties essentially for free:
 
-Android owns accelerator-facing runtime execution.
+- **Failure isolation** — a LiteRT-LM crash, OOM, bad model, or wedged generation session doesn't take down the already-stable MobileNet service.
+- **Memory lifecycle isolation** — if a generative model consumes a couple of gigabytes, the whole `cerebrate-generate` process can be terminated and Android reclaims the entire address space, rather than hoping a shared runtime fully releases every allocator/cache/backend resource after unloading one model.
+- **Independent supervision** — eventually, `cerebrate-infer` and `cerebrate-generate` can each have their own restart policy, resource expectations, health checks, ports, and startup behavior.
+- **Independent evolution** — the graph worker keeps its NNAPI/TFLite compatibility stack; the generation worker follows LiteRT-LM releases on its own schedule. Neither inherits the other's build dependencies.
 
-Debian should not need to understand NNAPI, LiteRT kernels, tokenizer internals, KV-cache layout, or model-specific accelerator behavior.
+MLServer is the composition seam, not a dispatcher inside Android:
+
+```text
+MLServer
+│
+├── models/
+│   ├── cerebrate-infer/    (existing)
+│   │    └── adapter → cerebrate-infer:<port>       (Graph Execution)
+│   │
+│   └── gemma/              (future)
+│        └── adapter → cerebrate-generate:<port>    (Session Execution)
+│
+└── stable external serving interface
+```
+
+## Naming
+
+`cerebrate-infer` isn't wrong on its own, but once a second process exists, "infer" becomes ambiguous — generation is also inference. Internally:
+
+- `cerebrate-infer` — **existing** graph worker. Not renamed — it's stable and already threaded through docs/services, and there's little value in touching something that already works.
+- `cerebrate-generate` — **new** LiteRT-LM session worker.
+
+`graph` describes the runtime contract; `generate` says immediately what the heavier process is doing.
+
+## This does not mean "one process per model"
+
+The pattern is: **one small Android worker per materially different execution runtime/lifecycle; MLServer composes them into one inference appliance.** Multiple *models* do not imply multiple Android *processes* — multiple runtime/lifecycle classes might.
+
+```text
+Android host                          Debian
+├── cerebrate-infer      (graph)      └── MLServer
+├── cerebrate-generate   (session)         ├── mobilenet      → cerebrate-infer
+└── maybe something else                  ├── segmentation   → cerebrate-infer
+    (only if a genuinely distinct              ├── embeddings     → cerebrate-infer
+     runtime earns it)                         ├── gemma          → cerebrate-generate
+                                                └── future VLM     → cerebrate-generate
+```
+
+Keeping that distinction is what stops this from degenerating into a daemon per model.
 
 ---
 
@@ -244,7 +274,11 @@ The user-facing capability should therefore remain independent of the execution 
 
 # Android Execution Boundary
 
-Keep the Android host as a black-box execution plane.
+Keep the Android host as a black-box execution plane. As of the Process
+Architecture revision above, "the Android host" means two independent
+processes (`cerebrate-infer`, `cerebrate-generate`), each a black box on
+its own — Debian never needs to know there are two, only that MLServer's
+adapters point at different ports for different models.
 
 ## Graph request
 
@@ -298,7 +332,7 @@ session/input → streamed output
 
 # MLServer Integration
 
-MLServer should hide the internal runtime split from Overmind.
+MLServer should hide which Android process (and which runtime contract) backs each model from Overmind.
 
 Externally:
 
@@ -315,20 +349,20 @@ inference.home.arpa
         └── future VLM
 ```
 
-Internally:
+Internally, each MLServer model directory's adapter points at exactly one Android-host process — the split is which port an adapter dials, not an in-process dispatch:
 
 ```text
 model configuration
        │
-       ├── Graph Execution
-       │      ├── NNAPI/TFLite
-       │      └── LiteRT CompiledModel
+       ├── Graph Execution adapters   → cerebrate-infer:<port>
+       │      (NNAPI/TFLite today; LiteRT CompiledModel is a
+       │       possible future backend inside that same process)
        │
-       └── Session Execution
-              └── LiteRT-LM
+       └── Session Execution adapters → cerebrate-generate:<port>
+              (LiteRT-LM)
 ```
 
-Do not expose Android runtime names as part of the public service contract.
+Do not expose Android process or runtime names as part of the public service contract.
 
 For Session Execution, evaluate the cleanest way to propagate LiteRT-LM's asynchronous output chunks through the MLServer-facing service without buffering the complete response unnecessarily.
 
@@ -336,17 +370,29 @@ For Session Execution, evaluate the cleanest way to propagate LiteRT-LM's asynch
 
 # Next Implementation Pass
 
-## Phase 1 — Refactor the internal architecture
+## Phase 1 — Name and reserve the architecture, touch nothing that works
 
-Introduce the Graph Execution / Session Execution distinction without changing existing classification behavior.
+No dispatcher refactor of `cerebrate-infer` — that was the pre-revision
+plan and is now dropped. `cerebrate-infer` already **is** the Graph
+Execution worker under the new terminology; its behavior doesn't need
+to change to satisfy that.
 
-Move the existing NNAPI implementation conceptually beneath Graph Execution.
-
-The existing MobileNet service must continue to pass unchanged.
+- Document `cerebrate-infer` explicitly as the Graph Execution
+  (NNAPI/TFLite) worker in its own README, and record the
+  `cerebrate-generate` sibling-process architecture as the intended
+  shape for Session Execution.
+- Reserve the directory/naming/port convention for `cerebrate-generate`
+  now, even though nothing occupies it yet, so Phase 2 has an obvious
+  home instead of a naming decision made under pressure later.
+- Acceptance: existing MobileNet classification through
+  `inference.home.arpa` continues to pass, unchanged — this is
+  trivially true if no code changes, but is still the actual bar to
+  clear before calling Phase 1 done.
 
 ## Phase 2 — Establish LiteRT-LM natively on Android
 
-Build and run the native LiteRT-LM C++ stack on the Pixel host.
+Build and run the native LiteRT-LM C++ stack on the Pixel host, as its
+own `cerebrate-generate` process — not inside `cerebrate-infer`.
 
 Prefer an official/prepackaged LiteRT-LM-compatible model suitable for the Pixel rather than converting a model ourselves initially.
 
@@ -354,54 +400,66 @@ Start small.
 
 The purpose is to validate the runtime, not maximize model size.
 
-## Phase 3 — Implement `LiteRtLmBackend`
+(The feasibility spike recorded in the Progress Notes below already
+cleared the riskiest part of this phase — the native C API prebuilt
+links and runs without Bazel, and SmolLM2-135M-Instruct generates
+coherent output on both CPU and GPU backends. Phase 2 turns that
+throwaway harness into a real, persistent, TCP-serving worker, the same
+step `cerebrate-infer` itself went through after its own first working
+spike.)
 
-Add a Session Execution backend that:
+## Phase 3 — Turn the spike into `cerebrate-generate`
+
+Build the real `cerebrate-generate` worker — a persistent process,
+analogous to `cerebrate-infer`'s own design, that:
 
 - loads the model once;
 - creates an Engine;
-- accepts semantic text-generation requests;
+- accepts semantic text-generation requests over its own TCP port;
 - manages the LiteRT-LM session internally;
 - performs generation;
-- streams chunks back across the existing Android↔Debian transport;
-- reports runtime errors cleanly.
+- streams chunks back across the AVF boundary to Debian;
+- reports runtime errors cleanly;
+- can be restarted/killed independently of `cerebrate-infer` without
+  affecting it.
 
 Use LiteRT-LM's own session/conversation machinery rather than recreating tokenization, prompt templates, KV-cache logic, or autoregressive decoding.
 
-## Phase 4 — Extend the Debian adapter
+## Phase 4 — Add a second, sibling Debian adapter
 
-Teach the Debian serving layer to distinguish graph requests from session/generation requests.
-
-Keep the adapter thin.
-
-For generative inference it should primarily:
+Do **not** teach one adapter to distinguish graph vs. session requests.
+Add a second MLServer model directory/adapter, alongside the existing
+`cerebrate-infer` adapter, that dials `cerebrate-generate` instead. Each
+adapter stays thin and single-purpose, matching the existing
+`cerebrate_infer_runtime.py` pattern:
 
 ```text
 receive request
       ↓
-forward semantic generation request
+forward semantic generation request to cerebrate-generate
       ↓
 relay streamed chunks
 ```
 
-Do not move model-runtime internals into Debian.
+Do not move model-runtime internals into Debian, and do not merge this
+into the existing adapter's code path.
 
 ## Phase 5 — Expose one text-generation service
 
-Expose a small LiteRT-LM model through the same overall `inference.home.arpa` serving architecture used by the existing classifier.
+Expose a small LiteRT-LM model through the same overall `inference.home.arpa` serving architecture used by the existing classifier, as a second model alongside it, not a replacement.
 
 Verify end-to-end:
 
 ```text
 Overmind
    ↓
-MLServer
+MLServer (gemma model / cerebrate-generate adapter)
    ↓
 Debian adapter
    ↓
 AVF
    ↓
-cerebrate-infer
+cerebrate-generate
    ↓
 LiteRT-LM
    ↓
@@ -410,15 +468,33 @@ Pixel execution backend
 streamed generated text
 ```
 
+...alongside the still-unmodified, still-working:
+
+```text
+Overmind
+   ↓
+MLServer (mobilenet model / cerebrate-infer adapter)
+   ↓
+Debian adapter
+   ↓
+AVF
+   ↓
+cerebrate-infer
+   ↓
+NNAPI
+   ↓
+google-edgetpu
+```
+
 ---
 
 # Success Criteria
 
 This implementation pass is complete when:
 
-1. Existing MobileNet classification continues working through the Graph Execution compatibility backend.
-2. The internal architecture clearly represents Graph Execution and Session Execution as separate runtime contracts.
-3. An official/supported `.litertlm` model loads successfully in a native Android-host process.
+1. Existing MobileNet classification continues working through `cerebrate-infer`, unmodified.
+2. Graph Execution and Session Execution are represented as separate runtime contracts by construction — two independent Android-host processes (`cerebrate-infer`, `cerebrate-generate`), not an internal dispatcher.
+3. An official/supported `.litertlm` model loads successfully in `cerebrate-generate`, a native Android-host process independent of `cerebrate-infer`.
 4. Debian can submit a semantic prompt without handling tokenizer, tensor, or KV-cache internals.
 5. Android performs the full LiteRT-LM generation lifecycle.
 6. Output is returned incrementally rather than only after full completion.
@@ -431,11 +507,12 @@ This implementation pass is complete when:
 # Implementation Philosophy
 
 - Organize execution around **runtime contracts**, not task names.
+- One small Android worker per materially different execution runtime/lifecycle; multiple *models* do not imply multiple Android *processes*, but multiple runtime/lifecycle classes might. MLServer composes them into one inference appliance.
 - Treat `.tflite` and `.litertlm` as deployment artifacts for different execution semantics.
-- Preserve the proven NNAPI path as a compatibility backend where it is objectively better on Tensor G1.
+- Preserve the proven NNAPI path as a compatibility backend where it is objectively better on Tensor G1 — don't touch a stable worker to satisfy an architecture diagram.
 - Let LiteRT/LiteRT-LM own model-runtime complexity instead of recreating it.
 - Keep Debian as the control/service plane and Android as the execution plane.
-- Let MLServer hide backend heterogeneity from callers.
+- Let MLServer hide backend/process heterogeneity from callers — this is a composition seam MLServer already provides (one model directory per adapter), not something to build.
 - Establish functionality first; defer memory offloading, SSD strategies, KV-cache relocation, fleet routing, and performance optimization until real workloads justify them.
 
 The desired result is a Cerebrate node that no longer means “Pixel image classifier.”
