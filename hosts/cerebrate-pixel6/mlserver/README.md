@@ -159,10 +159,69 @@ exposed externally — that's Phase 4):
   — effectively unchanged from the Phase 1 example-echo-only baseline,
   confirming the adapter itself adds negligible memory overhead.
 
+## Phase 3 — real image classification (done, 2026-09-16)
+
+Two changes, one on each side of the AVF network boundary:
+
+**`cerebrate-infer.cc` wire format changed.** It previously ignored
+request content entirely and always ran inference on a fixed
+`i % 256` dummy pattern; a request was just any non-empty read to
+trigger one inference cycle. It now reads **exactly `input_size` raw
+bytes** (224×224×3 = 150528 for the currently-deployed MobileNet v1
+1.0 224 quantized model) per request — the real input tensor, RGB,
+uint8, no further encoding — and classifies that. Framing is implicit
+from the fixed, known-at-startup size; there's no length prefix or
+delimiter, and a client that sends a partial payload and closes is
+treated as a dropped connection, not an error response. This is a
+breaking protocol change from Stage 4D's throwaway `/tmp` load-test
+scripts (which only ever sent a bare trigger byte) — those scripts were
+never committed and aren't expected to keep working.
+
+**The MLServer adapter now does real preprocessing/postprocessing.**
+`cerebrate_infer_runtime.py` accepts a V2 `BYTES` input (any image
+format Pillow can decode, sent as base64 with
+`parameters.content_type = "base64"` — the standard MLServer/KServe V2
+convention for binary payloads), decodes it, converts to RGB, resizes
+to 224×224, and sends the raw HWC uint8 bytes to `cerebrate-infer`
+exactly as it now expects. On the way back, `top_class` is mapped
+through `imagenet_labels.txt` (the standard 1001-entry TensorFlow
+ImageNet label list, index 0 = `background` — fetched from
+`storage.googleapis.com/download.tensorflow.org/data/ImageNetLabels.txt`,
+matching this model's output ordering) into a human-readable `label`
+output, and `top_score` (a raw quantized `uint8` 0-255 confidence) is
+normalized to a `confidence` float via `/255.0`. The raw diagnostic
+fields (`request_id`, `top_class`, `inference_us`, `handle_us`) are
+still returned alongside, for continuity with Stage 4D's data. This is
+still tied to one specific model/input shape (constants at the top of
+the file) — not a general multi-model runtime.
+
+Verified with real, meaningful images, not just protocol plumbing:
+
+- The standard Grace Hopper TensorFlow reference JPEG classifies as
+  **`"military uniform"` at 88.6% confidence** — the well-documented
+  expected result for this exact model, confirming the full chain
+  (decode → resize → NNAPI/EdgeTPU → argmax → label lookup) is
+  correct, not just wired together.
+- A solid-color synthetic JPEG (no real object) classifies as
+  `"corkscrew"` at 2.7% confidence — low-confidence, content-sensitive
+  output on out-of-distribution input, as expected, confirming the
+  server is genuinely responding to pixel content and not returning a
+  fixed result.
+- The confidence math checks out exactly: `226/255 = 0.8862745...`
+  matches the returned float precisely.
+- 30/30 repeated requests against the same image returned the
+  identical correct label, ~46ms average wall time per request
+  (includes base64 decode, JPEG decode, resize, and the real
+  network+inference round-trip — Pillow's decode/resize is synchronous
+  and currently runs inline in `predict()`, not offloaded to a thread;
+  acceptable for this phase's single-client scope, worth revisiting if
+  concurrent requests ever matter).
+- MLServer RSS: ~122.6 MB after the batch, up only ~4MB from Phase 2's
+  118.8MB baseline — Pillow's own footprint, no growth signal across
+  the batch.
+
 ## Not yet done (later phases)
 
-- Real image classification via MobileNet, replacing the fixed dummy
-  tensor and trigger-only request shape (Phase 3).
 - Reachability through Overmind's existing access architecture (Phase 4).
 - Supplemental Pixel telemetry (TPU temp, thermal status, worker
   liveness) alongside MLServer's own metrics (Phase 5).

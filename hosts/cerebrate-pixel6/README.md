@@ -23,8 +23,15 @@ recovery. **Stage 5 Phase 2 done**: a thin custom runtime adapter wires
 MLServer's V2 interface to `cerebrate-infer` over the real production
 network path, verified end to end (correct classification output,
 monotonic request-id continuity with earlier native tests, negligible
-added memory). Phase 3 (real image input/output via MobileNet) not yet
-started.
+added memory). **Stage 5 Phase 3 done**: real image classification —
+`cerebrate-infer`'s wire protocol now carries a real 224×224×3 input
+tensor (no more fixed dummy pattern), and the MLServer adapter decodes,
+resizes, and label-maps real images. Verified against the standard
+Grace Hopper TensorFlow reference photo (correctly classifies
+`"military uniform"` at 88.6% confidence, the well-documented expected
+result for this model) and a content-sensitivity check (a flat-color
+synthetic image yields a low-confidence, different label). Phase 4
+(reachability through Overmind) not yet started.
 
 A factory-reset Pixel 6, converted into a dedicated always-on inference node
 for the home network. Second member of the "cerebrate" fleet/class (small

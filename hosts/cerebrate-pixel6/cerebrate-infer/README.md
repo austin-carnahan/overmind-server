@@ -7,8 +7,9 @@ and creates the NNAPI delegate (forcing `google-edgetpu`) **once**, then
 serves TCP requests one at a time: run inference, return
 `request_id`, `top_class`, `top_score`, `inference_us`.
 
-Deliberately narrow: no concurrency, no auth, no model registry, one fixed
-dummy input. `InferenceEngine` is a real seam (see `cerebrate-infer.cc`) —
+Deliberately narrow: no concurrency, no auth, no model registry. Real
+image input as of Stage 5 Phase 3 (see below) — no dummy input anymore.
+`InferenceEngine` is a real seam (see `cerebrate-infer.cc`) —
 `NnapiTfliteEngine` is implemented; a future `LiteRtEngine` is declared in
 the design notes but not implemented, since the LiteRT v2 spike found it
 ~13× slower on this specific (Tensor G1) hardware — see the design notes'
@@ -76,11 +77,34 @@ instead:
 adb shell 'LD_LIBRARY_PATH=/data/local/tmp /data/local/tmp/cerebrate-infer /data/local/tmp/mobilenet_v1_1.0_224_quant.tflite 8765'
 ```
 
-## Test from Debian
+## Wire protocol (changed in Stage 5 Phase 3)
 
-```bash
-echo | nc 10.70.217.78 8765
-# request_id=1 top_class=795 top_score=120 inference_us=1190
+Each request over the persistent connection is **exactly `input_size`
+raw bytes** — the real input tensor (currently: 224×224×3 = 150528
+bytes, RGB, uint8, no encoding) — not a bare trigger byte. Framing is
+implicit from that fixed, known-at-startup size; there's no length
+prefix or delimiter. A client that sends a partial payload and closes
+is treated as a dropped connection, not an error response — this
+remains a deliberately minimal protocol with no malformed-input
+handling. Response format is unchanged: one line,
+`request_id=... top_class=... top_score=... inference_us=... handle_us=...`.
+
+This breaks the old "any bytes triggers one inference on a fixed dummy
+pattern" behavior from Stage 4C/4D — those throwaway `/tmp` load-test
+scripts were never committed to this repo and aren't expected to keep
+working. See
+[hosts/cerebrate-pixel6/mlserver](../mlserver/README.md#phase-3--real-image-classification-done-2026-09-16)
+for the MLServer adapter that does real image decode/resize and speaks
+this protocol.
+
+## Test from Debian (raw bytes, not through MLServer)
+
+```python
+import socket
+s = socket.create_connection(("10.70.217.78", 8765))
+s.sendall(bytes(150528))  # a real 224x224x3 uint8 tensor in production
+print(s.recv(512))
+# b'request_id=1 top_class=... top_score=... inference_us=... handle_us=...\n'
 ```
 
 `10.70.217.78` is the guest's current AVF NAT gateway address — not
