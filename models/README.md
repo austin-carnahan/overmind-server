@@ -63,9 +63,36 @@ snapshot_download(repo_id='<repo>', revision='<pinned sha>')
 "
 ```
 
-Not yet built (later stages of Phase A): a script that reads `catalog.yaml`
-directly instead of a one-off snapshot_download call, and the ADB-push
-staging step (catalog v4 §7.4) that gets an artifact from this cache onto
-the Pixel itself. Today, `CACHED` (this cache) is populated for both
-models; `STAGED` (on-device) reflects whatever was manually pushed earlier
-in the project, not anything this cache step drove.
+Not yet built: a script that reads `catalog.yaml` directly instead of a
+one-off `snapshot_download` call for refreshing the cache itself. The
+ADB-push staging step below (Stage 3) is built.
+
+## Staging onto the Pixel: `../scripts/stage-model`
+
+Per catalog v4 §7.4: `scripts/stage-model <model-key>` (or `--all`) takes
+a catalog entry, locates its cached artifact above, `adb push`es it to a
+temp path on the device, verifies the remote checksum against the local
+one, and atomically `mv`s it into place at `/data/local/tmp/<filename>` --
+the flat layout `cerebrate-infer`/`cerebrate-generate` already expect
+today, not catalog v4's illustrative `/data/local/tmp/cerebrate/models/...`
+subdirectory (adopting that would also mean changing both workers' launch
+commands, out of scope for this stage). Idempotent: a model already
+staged with a matching checksum is skipped, not re-pushed.
+
+Run it from `/opt/overmind` on overmind-01 (needs `pyyaml`, same venv
+setup as the cache-refresh command above):
+
+```bash
+export PATH="$HOME/.local/bin:$PATH"
+cd /opt/overmind
+~/hf-cache-venv/bin/python3 scripts/stage-model --all
+```
+
+Both production models were confirmed already staged and byte-identical
+to the cache. The push/verify/promote path itself was exercised by
+deliberately corrupting the on-device MobileNet copy and rerunning the
+script, which detected the drift and repaired it.
+
+`CACHED → STAGED` today is still an explicit, manually-invoked operator
+action (per catalog v4 §7.4, this is intentional, not a gap) -- there is
+no automatic trigger from a catalog change to a device push.
