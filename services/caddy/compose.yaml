@@ -11,6 +11,15 @@ services:
     ports:
       - "80:80"
       # - "443:443"   # add only once HTTPS is actually pursued (see the DNS plan's Phase 4)
+    # Lets the inference.home.arpa site block reach a loopback-bound port
+    # on the Overmind host itself (the reverse SSH tunnel from
+    # cerebrate-pixel6 deliberately binds 127.0.0.1 only, not this
+    # container's bridge network) — Docker resolves this to the bridge
+    # network's own gateway IP, which unlike a container's 127.0.0.1 is
+    # reachable from inside the container. Only this one site block uses
+    # it; every other site here still reaches an actual sibling container.
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
     # No cap_drop here: Caddy runs as root inside its own image and needs
     # CAP_NET_BIND_SERVICE to bind port 80 — dropping ALL capabilities would
     # break that even for root. no-new-privileges is still safe to keep.

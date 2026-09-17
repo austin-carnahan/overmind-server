@@ -41,3 +41,16 @@ http://seerr.home.arpa {
 http://maintainerr.home.arpa {
 	reverse_proxy maintainerr:6246
 }
+
+# Service-oriented name, deliberately not tied to which physical node
+# actually serves inference today (cerebrate-pixel6, via a loopback-only
+# reverse SSH tunnel terminating on the Overmind host at 127.0.0.1:8500 —
+# see hosts/cerebrate-pixel6/mlserver/README.md, Stage 5 Phase 4). Unlike
+# every other site above, the target isn't another container on this
+# compose network — it's a host-bound port reachable only via Docker's
+# host-gateway alias (see this service's compose.yaml), since the tunnel
+# deliberately binds loopback-only on the host rather than being exposed
+# on this container network directly.
+http://inference.home.arpa {
+	reverse_proxy host.docker.internal:8500
+}
