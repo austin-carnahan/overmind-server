@@ -1,0 +1,52 @@
+#!/usr/bin/env python3
+"""Validates models/catalog.yaml against models/schema.json.
+
+Requires: pyyaml, jsonschema (not stdlib -- install into a venv, e.g.:
+  python3 -m venv /tmp/catalog-venv && /tmp/catalog-venv/bin/pip install pyyaml jsonschema
+  /tmp/catalog-venv/bin/python3 scripts/validate-model-catalog
+
+Exit 0: catalog is valid.
+Exit 1: catalog is invalid or a file is missing/malformed.
+"""
+import json
+import sys
+from pathlib import Path
+
+import yaml
+from jsonschema import Draft7Validator
+
+REPO_ROOT = Path(__file__).resolve().parent.parent
+SCHEMA_PATH = REPO_ROOT / "models" / "schema.json"
+CATALOG_PATH = REPO_ROOT / "models" / "catalog.yaml"
+
+
+def main() -> int:
+    try:
+        with open(SCHEMA_PATH) as f:
+            schema = json.load(f)
+    except (OSError, json.JSONDecodeError) as exc:
+        print(f"error: could not read {SCHEMA_PATH}: {exc}", file=sys.stderr)
+        return 1
+
+    try:
+        with open(CATALOG_PATH) as f:
+            catalog = yaml.safe_load(f)
+    except (OSError, yaml.YAMLError) as exc:
+        print(f"error: could not read {CATALOG_PATH}: {exc}", file=sys.stderr)
+        return 1
+
+    validator = Draft7Validator(schema)
+    errors = sorted(validator.iter_errors(catalog), key=lambda e: list(e.path))
+    if errors:
+        for err in errors:
+            path = ".".join(str(p) for p in err.path) or "(root)"
+            print(f"error: {path}: {err.message}", file=sys.stderr)
+        return 1
+
+    model_count = len(catalog.get("models", {}))
+    print(f"OK: {CATALOG_PATH.relative_to(REPO_ROOT)} is valid ({model_count} model(s))")
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())

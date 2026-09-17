@@ -24,7 +24,9 @@ settings.json
 /papers/
 /datasets/
 /media/
-/models/
+/models/*
+!/models/schema.json
+!/models/catalog.yaml
 /inbox/
 *.log
 *.pid

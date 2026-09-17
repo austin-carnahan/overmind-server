@@ -1,0 +1,114 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "Cerebrate Pixel 6 model catalog",
+  "description": "Stage 1 of the Operational Model Catalog (design-notes/cerebrate_pixel6_operational_model_catalog_v4.md, Phase A). Deliberately small: validates the concept against the two models already in production before extending to anything new.",
+  "type": "object",
+  "required": ["models"],
+  "additionalProperties": false,
+  "properties": {
+    "models": {
+      "type": "object",
+      "additionalProperties": { "$ref": "#/definitions/model" }
+    }
+  },
+  "definitions": {
+    "model": {
+      "type": "object",
+      "required": ["capabilities", "artifacts", "worker", "residency"],
+      "additionalProperties": false,
+      "properties": {
+        "capabilities": {
+          "type": "array",
+          "minItems": 1,
+          "items": { "type": "string" },
+          "description": "Public capability names, per catalog v4 Section 10 (e.g. classify-image, chat)."
+        },
+        "description": { "type": "string" },
+        "artifacts": {
+          "type": "object",
+          "minProperties": 1,
+          "additionalProperties": { "$ref": "#/definitions/artifact" },
+          "description": "Keyed by deployment artifact type, e.g. tflite, litertlm, onnx."
+        },
+        "worker": { "$ref": "#/definitions/worker" },
+        "execution_preferences": {
+          "type": "object",
+          "additionalProperties": {
+            "type": "array",
+            "items": { "type": "string" }
+          },
+          "description": "Keyed by device (e.g. pixel6), ordered most- to least-preferred backend identifiers."
+        },
+        "residency": {
+          "type": "string",
+          "enum": ["pinned", "on_demand", "manual"],
+          "description": "Per catalog v4 Section 9. Applied at the worker-process level, not in-process."
+        },
+        "requirements": { "$ref": "#/definitions/requirements" }
+      }
+    },
+    "artifact": {
+      "type": "object",
+      "required": ["source"],
+      "additionalProperties": false,
+      "properties": {
+        "source": { "$ref": "#/definitions/source" },
+        "validated": {
+          "type": "object",
+          "additionalProperties": {
+            "type": "string",
+            "enum": ["untested", "pending", "passed", "failed", "experimental"]
+          },
+          "description": "Keyed by device_backend, e.g. pixel6_nnapi. Measured status only -- never assumed."
+        }
+      }
+    },
+    "source": {
+      "type": "object",
+      "description": "Exactly one provenance shape: a pinned repo revision (e.g. Hugging Face), or a pinned direct-download URL with a checksum.",
+      "oneOf": [
+        {
+          "type": "object",
+          "required": ["repo", "revision"],
+          "additionalProperties": false,
+          "properties": {
+            "repo": { "type": "string" },
+            "revision": { "type": "string" }
+          }
+        },
+        {
+          "type": "object",
+          "required": ["url", "sha256"],
+          "additionalProperties": false,
+          "properties": {
+            "url": { "type": "string", "format": "uri" },
+            "sha256": { "type": "string", "pattern": "^[0-9a-f]{64}$" }
+          }
+        }
+      ]
+    },
+    "worker": {
+      "type": "object",
+      "required": ["binary", "port"],
+      "additionalProperties": false,
+      "properties": {
+        "binary": {
+          "type": "string",
+          "description": "Which Android worker process type serves this model, e.g. cerebrate-infer, cerebrate-generate."
+        },
+        "port": { "type": "integer", "minimum": 1, "maximum": 65535 }
+      }
+    },
+    "requirements": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "disk_mb": { "type": "number" },
+        "ram_mb": {
+          "type": ["number", "null"],
+          "description": "null where genuinely not yet measured -- do not fill in a guessed value."
+        }
+      }
+    }
+  }
+}

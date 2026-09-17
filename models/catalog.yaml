@@ -1,0 +1,103 @@
+# Cerebrate Pixel 6 model catalog -- Stage 1 (Phase A) of the Operational
+# Model Catalog, design-notes/cerebrate_pixel6_operational_model_catalog_v4.md.
+#
+# Deliberately small: entries for the two models already in production,
+# populated with real, verified data (not placeholders), to prove the
+# schema can represent what already exists before extending it to
+# anything new. Validate against schema.json before committing changes.
+#
+# Honest gap this stage surfaced, worth calling out rather than fixing
+# quietly: neither model actually has automated start/stop behavior
+# today. Both Android workers are plain `adb shell`-launched foreground
+# processes with no supervision, auto-restart-on-boot, or idle-based
+# stop -- they're running because a human explicitly started them and
+# they've stayed up, not because a PINNED or ON_DEMAND policy is being
+# enforced anywhere. `residency: manual` below reflects that current
+# reality, not an aspiration. Phase B (worker process lifecycle through
+# MLServer) is where PINNED/ON_DEMAND become real.
+
+models:
+  mobilenetv1:
+    description: >-
+      MobileNet v1 1.0 224 quantized image classifier. The original,
+      known-good regression/control workload for this whole project --
+      every backend spike in this repo's history (NNAPI, LiteRT v2
+      CompiledModel, the plain-C canary) was checked against this exact
+      model's class-795 result on the same deterministic i%256 input.
+    capabilities:
+      - classify-image
+    artifacts:
+      tflite:
+        source:
+          # Verified by content, not assumed: downloaded fresh and
+          # confirmed byte-for-byte size match (4276352 bytes) and file
+          # date (2018-08-02) against what's actually deployed on the
+          # Pixel. sha256 computed from that verification download.
+          url: https://storage.googleapis.com/download.tensorflow.org/models/mobilenet_v1_2018_08_02/mobilenet_v1_1.0_224_quant.tgz
+          sha256: ecc3a67c47c5a609ec35f6a58a7d97532834e43df4cb7d3f1204a8164b7d20dd
+        validated:
+          # NNAPI/google-edgetpu: passed repeatedly across Stage 4/5 and
+          # the Multi-Runtime work -- the most extensively verified
+          # result in this whole project.
+          pixel6_nnapi: passed
+          # LiteRT CompiledModel: CPU passed; GPU genuinely delegates
+          # but the readback comes back all-zero (see the
+          # litert-compiled-correctness spike). Recorded on this same
+          # artifact since it's the same model file used for that
+          # investigation.
+          pixel6_litert_compiled_cpu: passed
+          pixel6_litert_compiled_gpu: failed
+    worker:
+      binary: cerebrate-infer
+      port: 8765
+    execution_preferences:
+      pixel6:
+        - tflite_nnapi
+    residency: manual
+    requirements:
+      disk_mb: 4.08
+      # Never measured -- MLServer's own RSS was tracked extensively
+      # (Stage 5), but cerebrate-infer's own native process footprint
+      # was not. Real gap, not a placeholder to ignore.
+      ram_mb: null
+
+  smollm2-135m-instruct:
+    description: >-
+      SmolLM2-135M-Instruct via LiteRT-LM. The feasibility-spike and
+      streaming-implementation canary for cerebrate-generate -- small
+      enough that an initialization failure would clearly be a
+      runtime/integration problem, not a "model too large" problem.
+      Not one of catalog v4's Section 5 production candidates
+      (Qwen3-0.6B et al.) -- this is what's actually deployed today.
+    capabilities:
+      - chat
+      - generate
+    artifacts:
+      litertlm:
+        source:
+          repo: litert-community/SmolLM2-135M-Instruct
+          # Pinned just now via the Hugging Face API rather than left
+          # tracking `main` -- the original download used
+          # /resolve/main/, which is not actually a pinned revision
+          # despite catalog v4's own stated principle (Section 7.3)
+          # that production models should be. Fixed as part of this
+          # exercise, not left as a known violation.
+          revision: 8111e0a65fda719f0a6855e8e1a8ec8c3f9ccb22
+        validated:
+          # Both backends produced correct, coherent output in the
+          # feasibility spike; cpu is what's actually running in
+          # production today.
+          pixel6_litertlm_cpu: passed
+          pixel6_litertlm_gpu: passed
+    worker:
+      binary: cerebrate-generate
+      port: 8766
+    execution_preferences:
+      pixel6:
+        - litertlm_cpu
+        - litertlm_gpu
+    residency: manual
+    requirements:
+      disk_mb: 136.19
+      # Never measured -- same gap as mobilenetv1 above.
+      ram_mb: null
