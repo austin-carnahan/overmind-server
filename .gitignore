@@ -27,6 +27,7 @@ settings.json
 /models/*
 !/models/schema.json
 !/models/catalog.yaml
+!/models/README.md
 /inbox/
 *.log
 *.pid
