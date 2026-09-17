@@ -927,10 +927,14 @@ that runs, doesn't crash, and produces garbage.
 Per the explicit rule for this spike (if the plain-C path disagrees
 with the previous C++ spike, stop and investigate rather than
 integrate), stopped here rather than debugging further, and moved to
-reconstructing the earlier "known-good" spike to find out whether it
-actually disagreed.
+reconstructing the earlier C++ spike to find out whether it actually
+disagreed. Retiring the label "known-good" for that earlier spike as of
+this investigation — it was never actually correctness-tested, so
+"known-good" was an unearned description. More accurate:
+**known-performing, correctness-unverified**, pending the reconstruction
+below.
 
-## `LiteRtCompiledBackend` spike, part 2: reconstructing the "known-good" C++ spike — it wasn't actually known-good (2026-09-17)
+## `LiteRtCompiledBackend` spike, part 2: reconstructing the earlier C++ spike — same bug, not a "C vs. C++" story (2026-09-17)
 
 Recovered the full historical recipe intact, rather than reconstructing
 from memory — everything was still on disk in `/tmp` from the original
@@ -986,32 +990,66 @@ link Google's prebuilt pieces" (the idealized reading of option B) —
 it requires a real, if pinned and reproducible, from-source build of
 Abseil. Call it B, with an asterisk: reproducible entirely from pinned
 release artifacts (Maven AAR tag, GitHub release tag, Abseil git tag),
-zero LiteRT source involved, but not zero source compilation overall.
+zero LiteRT source involved, but not zero source compilation overall:
+
+```text
+Official-ish C++ integration used in this spike
+├── prebuilt libLiteRt.so
+├── prebuilt libLiteRtClGlAccelerator.so
+├── released LiteRT C++ SDK/wrapper
+└── abseil-cpp
+    └── fetched from GitHub and compiled for Android arm64
+```
 
 ### The actual finding: GPU was never verified correct, on either path
 
 The original `litert_bench` (`main.cc`) only ever measured `Run()`
 timing — it checked that `Run()` reported success, never read back and
-verified the output. Patched it to add exactly that (argmax the output,
-same as every other backend in this project), rebuilt incrementally
-from the existing configured build tree (fast — only relinking, since
-Abseil and the LiteRT wrapper library were already built), and re-ran
-on the real device:
+verified the output. First pass: patched it to argmax the output
+(matching every other backend's correctness check in this project).
+Second pass, after the finding below looked too important to leave at
+"top class is wrong": strengthened it into a real diagnostic —
+requiring the known reference class (795) explicitly, printing a
+checksum of the full 1001-element output vector, and comparing CPU's
+and GPU's complete output vectors element-wise with a tolerance (±5 on
+the uint8 quantized scale, generous enough to absorb the kind of
+legitimate cross-backend rounding difference already seen elsewhere in
+this project — NNAPI and CPU/XNNPACK agree on class but disagree on the
+exact quantized score, 120 vs. 102 — while still catching a
+degenerate all-zero result). Rebuilt incrementally from the existing
+configured build tree (fast — only relinking, since Abseil and the
+LiteRT wrapper library were already built) and re-ran on the real
+device:
 
 ```text
-[CPU] iters=30 mean_us=33473.2 ... top_class=795 top_score=102
+[CPU] iters=30 mean_us=33441.6 ... top_class=795 top_score=102 checksum=242 reference_check=PASS
 WARNING: [compiled_model.cc:1357] Failed to get buffer requirements for tensor `input`.
 WARNING: [compiled_model.cc:1357] Failed to get buffer requirements for tensor `MobilenetV1/Predictions/Reshape_1`.
-[GPU] iters=30 mean_us=7764.7 ... top_class=0 top_score=0
+[GPU] iters=30 mean_us=9663.2 ... top_class=0 top_score=0 checksum=0 reference_check=FAIL
+[COMPARE] cpu_vs_gpu: exact_matches=978/1001 within_tolerance(+-5)=994/1001 max_abs_diff=102 gpu_output_all_zero=true
 ```
 
-**Identical failure, identical warning, on the C++ path** — the exact
-same wrong `top_class=0` the plain-C canary produced. This means the
-GPU correctness bug is not a plain-C-canary mistake; it's an upstream
-issue with LiteRT `2.2.0`'s `CompiledModel` + OpenCL delegate + this
-quantized MobileNet model on this hardware, present in both
-integration paths, and never caught before because nothing checked the
-actual output value until now.
+**`gpu_output_all_zero=true`, checksum 0.** This isn't a subtle
+cross-backend numerical difference (the kind the ±5 tolerance was built
+to absorb) — the GPU output buffer comes back **completely empty**. The
+978/1001 "exact matches" are trivial: most of a 1001-class softmax
+output is near-zero for the non-winning classes, so a fully-zeroed GPU
+buffer coincidentally agrees with CPU on most positions while being
+categorically wrong on the one that matters.
+
+**Identical failure, identical warning, on the C++ path** — confirming
+this is not a "C vs. C++" story. The most likely explanation, matching
+the `Failed to get buffer requirements` warning exactly: the GPU
+delegate genuinely executes (`Replacing 31 out of 31 node(s)`, real
+OpenCL initialization) and writes its result into GPU-side memory, but
+the buffer-requirements query that both the plain-C and C++ paths rely
+on to construct the *readback* buffer silently falls back to something
+that doesn't correctly capture GPU output, so the host-visible buffer
+we read from was never populated. The earlier LiteRT GPU spike was a
+false positive for *useful* inference: the GPU was genuinely executing,
+but the tensor-buffer/readback path back out was never valid. The
+problem was never "C vs. C++" — both integration paths inherit the same
+underlying readback gap.
 
 This corrects the original backend-decision entry in the main Pixel 6
 design notes (`2026-09-16-pixel6-inference-node.md`), which had logged
@@ -1019,7 +1057,30 @@ this same warning as a mere possible-performance caveat ("a possible
 non-zero-copy fallback path") rather than what it actually signals — a
 correctness failure. The bottom-line conclusion there (NNAPI wins on
 this hardware) isn't weakened by this; if anything it's more decisive:
-GPU isn't just ~13x slower, it's currently producing wrong answers.
+GPU isn't just ~13x slower, it's currently producing no usable output
+at all.
+
+### Evidence, side by side
+
+```text
+TFLite + NNAPI (cerebrate-infer, production)
+✓ correct (class 795)
+✓ TPU delegated (google-edgetpu)
+✓ fast (~777us baseline)
+
+LiteRT C++ CompiledModel
+✓ CPU executes, correct (class 795)
+✓ GPU fully delegates (31/31 nodes, real OpenCL init)
+✓ GPU fast-looking (~9.7ms)
+✗ GPU output: all zeros, checksum 0, reference_check=FAIL
+⚠ same buffer-requirements warning as the plain-C path
+
+LiteRT plain-C CompiledModel
+✓ CPU executes, correct (class 795)
+✓ GPU fully delegates (31/31 nodes, real OpenCL init)
+✗ GPU output: all zeros (same failure as C++)
+⚠ same buffer-requirements warning as the C++ path
+```
 
 ### Assessing against the stated success criterion
 
