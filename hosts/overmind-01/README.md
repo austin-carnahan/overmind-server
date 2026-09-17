@@ -59,6 +59,49 @@ reliably crashes the USB controller without it under real write load.
   [hosts/cerebrate-pixel6](../cerebrate-pixel6/README.md) and the
   [Pixel 6 inference node design notes](../../design-notes/2026-09-16-pixel6-inference-node.md)
   for the full credential shape and verification.
+- `austin` also holds an independent `adb tcpip` session to
+  `cerebrate-pixel6` (`192.168.68.60:5555`), separate from any Mac/USB
+  tether — used to remotely relaunch the guest's Terminal app after a
+  force-stop, with no physical touch to the phone. That session can drop
+  (observed: Overmind's `adb` server lost it entirely, `adb devices`
+  came back empty, while the phone itself stayed on Wi-Fi and the guest's
+  `pixel-tunnel.service` kept running throughout — two independent
+  connections, only one of which had failed). `pixel-adb-reconnect.timer`
+  (`/etc/systemd/system/pixel-adb-reconnect.timer`, not committed as a
+  live file, installed manually — see block below) runs `adb connect
+  192.168.68.60:5555` every 30s as `austin`; the call is a ~20ms no-op
+  when already connected, so this is cheap self-healing, not polling
+  overhead. Deliberately narrow: it only reconnects an existing `adb
+  tcpip` pairing, and does nothing if that pairing itself expires (which
+  needs physical/Developer-settings re-pairing, same as before).
+
+  ```ini
+  # /etc/systemd/system/pixel-adb-reconnect.service
+  [Unit]
+  Description=Reconnect adb to cerebrate-pixel6 (self-heal for dropped adb tcpip sessions)
+  After=network-online.target
+  Wants=network-online.target
+
+  [Service]
+  Type=oneshot
+  User=austin
+  ExecStart=/usr/bin/adb connect 192.168.68.60:5555
+  ```
+
+  ```ini
+  # /etc/systemd/system/pixel-adb-reconnect.timer
+  [Unit]
+  Description=Periodically reconnect adb to cerebrate-pixel6
+
+  [Timer]
+  OnBootSec=20s
+  OnUnitActiveSec=30s
+  AccuracySec=5s
+
+  [Install]
+  WantedBy=timers.target
+  ```
+
 - SSD mounted (ext4, `noatime`, `nofail`) at `/mnt/disks/ssd1` — numbered
   rather than matching the filesystem's own `overmind-ssd` label, since a
   number scales to a second/third disk more simply than a label match would.
