@@ -1,3 +1,4 @@
+bash: warning: setlocale: LC_ALL: cannot change locale (en_US.UTF-8): No such file or directory
 # cerebrate-pixel6
 
 **Status:** PARTIAL — see [status legend](../../design-notes/README.md#status-legend);
@@ -30,8 +31,22 @@ resizes, and label-maps real images. Verified against the standard
 Grace Hopper TensorFlow reference photo (correctly classifies
 `"military uniform"` at 88.6% confidence, the well-documented expected
 result for this model) and a content-sensitivity check (a flat-color
-synthetic image yields a low-confidence, different label). Phase 4
-(reachability through Overmind) not yet started.
+synthetic image yields a low-confidence, different label). **Stage 5
+Phase 4 done**: `inference.home.arpa` reaches MLServer through Overmind
+(Caddy → a small Docker-bridge `socat` relay → a loopback-only reverse
+SSH tunnel, Debian-initiated, via a new narrowly-scoped
+`pixel-mlserver-tunnel` credential mirroring the existing
+`pixel-tunnel` pattern) — MLServer itself never listens beyond
+loopback. Verified end to end including automatic recovery after a real
+VM restart. That restart test also surfaced and fixed a genuine
+pre-existing reliability bug in `cerebrate-infer` (a dead peer could
+wedge the whole worker after a VM restart — see
+[cerebrate-infer's README](cerebrate-infer/README.md)). One residual,
+investigated-and-accepted looseness: `cerebrate-infer`'s own port stays
+directly LAN-reachable (two narrower fixes were tested and ruled out
+empirically); treated as consistent with this project's LAN/Tailscale
+trust boundary, not a gap in it. Phase 5 (telemetry + reproducibility
+close-out) not yet started.
 
 A factory-reset Pixel 6, converted into a dedicated always-on inference node
 for the home network. Second member of the "cerebrate" fleet/class (small

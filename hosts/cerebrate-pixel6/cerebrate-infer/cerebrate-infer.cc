@@ -9,6 +9,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include <sys/socket.h>
+#include <sys/time.h>
 #include <time.h>
 #include <unistd.h>
 
@@ -98,6 +99,19 @@ int main(int argc, char** argv) {
   while (1) {
     int client = accept(srv, NULL, NULL);
     if (client < 0) continue;
+
+    // A client's underlying network path can vanish without a clean
+    // FIN/RST (observed in practice: an AVF guest VM force-stopped or
+    // restarted while a connection was open leaves the host-side socket
+    // stuck ESTABLISHED forever, since the virtual interface disappears
+    // without any TCP-level teardown notice). Without a receive timeout,
+    // a blocking read() on that dead connection never returns — and
+    // since this server is single-threaded and serial (no accept() until
+    // the current client is fully done), one wedged connection
+    // permanently blocks every future client too. A timeout bounds the
+    // damage to one stale request instead of the whole worker.
+    struct timeval recv_timeout = {30, 0};
+    setsockopt(client, SOL_SOCKET, SO_RCVTIMEO, &recv_timeout, sizeof(recv_timeout));
 
     while (1) {
       // Read exactly one full input tensor's worth of bytes before running

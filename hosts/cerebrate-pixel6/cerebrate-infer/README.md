@@ -89,6 +89,70 @@ remains a deliberately minimal protocol with no malformed-input
 handling. Response format is unchanged: one line,
 `request_id=... top_class=... top_score=... inference_us=... handle_us=...`.
 
+## Real bug found and fixed: a dead peer can wedge the whole worker (Stage 5 Phase 4)
+
+Discovered while testing Phase 4's VM-restart recovery path — the first
+time this project restarted the guest VM *while an active connection to
+`cerebrate-infer` was open*. When the AVF guest is force-stopped or
+restarted, its virtual network interface disappears without a clean
+FIN/RST — so from the host side, that connection stays **ESTABLISHED
+forever** at the TCP level, even though the peer is permanently gone.
+Since `cerebrate-infer` is single-threaded and strictly serial (it only
+calls `accept()` again after the current client's inner loop exits), a
+blocking `read()` on that dead connection never returns and the whole
+worker is wedged — every future client, including a fresh one from the
+newly-booted guest, queues in the listen backlog forever. Confirmed via
+`/proc/<pid>/net/tcp` on the Android host: one `ESTABLISHED` socket to
+the guest's old (pre-restart) address, plus several older `CLOSE_WAIT`
+entries — almost certainly residue from the same underlying issue during
+Stage 4D's earlier, unexplained spontaneous VM deaths, never diagnosed
+as a root cause at the time.
+
+Fixed with `SO_RCVTIMEO` (30s) on each accepted client socket: a stalled
+read now times out, that one connection is dropped, and the worker loops
+back to `accept()` — bounding the damage to one stale request instead of
+wedging permanently. Verified empirically: triggered a real VM
+force-stop/restart with an active MLServer connection open, and the full
+external path (`inference.home.arpa` → Caddy → tunnel → MLServer →
+adapter → this worker) recovered automatically, no manual intervention,
+in ~16 seconds — a real classification (`"military uniform"`, correct
+confidence) succeeded again without anyone touching either service.
+
+## Why this still binds `0.0.0.0` (LAN-reachable by design, investigated and accepted)
+
+`cerebrate-infer`'s port is directly reachable from any LAN device
+(`192.168.68.60:8765`), not just from Debian over the AVF gateway. Two
+narrower alternatives were investigated and empirically ruled out before
+accepting this:
+
+1. **`SO_BINDTODEVICE` on the host-side AVF interface** — would work only
+   if that interface's *name* (not its IP) were stable across VM
+   restarts. Tested directly: force-stopped and relaunched the VM, and
+   the interface name changed from `avf_tap_2051` to `avf_tap_2052`
+   (named after the VM's CID, which is documented to change every boot),
+   while the IP address happened to stay the same. The opposite of what
+   this fix needs — there is no stable device name to bind to.
+2. **`AF_VSOCK`** (AVF/crosvm's native host↔guest transport, no IP
+   networking at all) — the Debian guest has `/dev/vsock` and Python
+   `AF_VSOCK` support, but the host-side device node is
+   `crw------- root root`. Confirmed empirically as the unprivileged
+   `shell` user (the same user ADB always launches processes as, with no
+   root available on this device): `cat /dev/vsock` → `Permission
+   denied`. Blocked at the basic file-permission level, before any
+   AVF/SELinux ownership layer even applies.
+
+With both ruled out, and OS-level firewalling unavailable without
+rooting a device this project has deliberately kept stock (see Stage 1),
+the `0.0.0.0` bind stays. This is treated as an accepted architectural
+looseness, not a security gap in this project's actual threat model:
+Stage 5 Phase 4 already established that LAN/Tailscale reachability
+*is* the intended trust boundary (no auth was added at the MLServer
+layer for the same reason). A LAN device reaching this port directly
+bypasses the intended "always go through Overmind" architecture — which
+matters for future multi-node routing — but does not cross into an
+untrusted network the rest of this project's design doesn't already
+assume is trusted.
+
 This breaks the old "any bytes triggers one inference on a fixed dummy
 pattern" behavior from Stage 4C/4D — those throwaway `/tmp` load-test
 scripts were never committed to this repo and aren't expected to keep

@@ -220,8 +220,188 @@ Verified with real, meaningful images, not just protocol plumbing:
   118.8MB baseline — Pillow's own footprint, no growth signal across
   the batch.
 
+## Phase 4 — reachable through Overmind, MLServer never LAN-facing (done, 2026-09-16)
+
+```text
+authorized client
+      │  LAN / Tailscale (inference.home.arpa)
+      ▼
+   Overmind (Caddy)
+      │  reverse_proxy host.docker.internal:8500
+      ▼
+socat relay (172.17.0.1:8500, Docker-bridge-only, NOT LAN-reachable)
+      │  forwards to 127.0.0.1:8500
+      ▼
+sshd (pixel-mlserver-tunnel account) — 127.0.0.1:8500 on the Overmind host
+      │  persistent reverse SSH tunnel, Debian-initiated
+      ▼
+MLServer :8080 — bound 127.0.0.1 only inside the Debian guest
+      │
+      ▼
+cerebrate-infer → NNAPI → google-edgetpu → Tensor G1 TPU
+```
+
+MLServer itself never listens anywhere but loopback
+(`MLSERVER_HOST=127.0.0.1`, verified via `ss -ltnp` showing `127.0.0.1`
+on all three of its ports, not `0.0.0.0`). Reachability comes entirely
+from Debian dialing *out*: a new, narrowly-scoped `pixel-mlserver-tunnel`
+system account on Overmind — its own dedicated ed25519 key generated on
+the guest (never leaves it), `authorized_keys`
+`restrict,port-forwarding,permitlisten="127.0.0.1:8500",from="<pixel LAN IP>"`,
+plus a matching `sshd_config` `Match User` block — mirrors the existing
+`pixel-tunnel` (SSH-management) credential pattern from Stage 3 exactly,
+per this repo's "every process gets its own scoped credential" rule
+(`security-model.md`). Maintained by
+`pixel-mlserver-tunnel.service` (systemd, `Restart=always`, `droid`
+user) on the guest, keeping the tunnel binding at Overmind's `127.0.0.1`
+only, same as `pixel-tunnel`'s:
+
+```ini
+[Unit]
+Description=Reverse SSH tunnel to Overmind for MLServer (pixel-mlserver-tunnel)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=droid
+ExecStart=/usr/bin/ssh -N -T \
+  -o BatchMode=yes \
+  -o ExitOnForwardFailure=yes \
+  -o ServerAliveInterval=30 \
+  -o ServerAliveCountMax=3 \
+  -o IdentitiesOnly=yes \
+  -o StrictHostKeyChecking=yes \
+  -o UserKnownHostsFile=/home/droid/.ssh/known_hosts.overmind \
+  -i /home/droid/.ssh/pixel-mlserver-tunnel \
+  -R 127.0.0.1:8500:127.0.0.1:8080 \
+  pixel-mlserver-tunnel@overmind.home.arpa
+Restart=always
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target
+```
+
+On Overmind: the `pixel-mlserver-tunnel` account (system, `nologin`, no
+password) with `authorized_keys` restricted to
+`restrict,port-forwarding,permitlisten="127.0.0.1:8500",from="<pixel LAN
+IP>"`, and a matching `sshd_config` block:
+
+```
+Match User pixel-mlserver-tunnel
+    AllowTcpForwarding remote
+    PermitListen 127.0.0.1:8500
+    GatewayPorts no
+
+    PermitTTY no
+    X11Forwarding no
+    AllowAgentForwarding no
+    AllowStreamLocalForwarding no
+    PermitTunnel no
+    PermitUserRC no
+
+    PasswordAuthentication no
+    KbdInteractiveAuthentication no
+```
+
+And the relay unit, also on Overmind:
+
+```ini
+[Unit]
+Description=Relay Docker-bridge-reachable :8500 to the loopback-only pixel-mlserver-tunnel port
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+ExecStart=/usr/bin/socat TCP4-LISTEN:8500,bind=172.17.0.1,fork,reuseaddr TCP4:127.0.0.1:8500
+Restart=always
+RestartSec=5
+NoNewPrivileges=true
+PrivateTmp=true
+
+[Install]
+WantedBy=multi-user.target
+```
+
+**The one piece not in the original design: a relay hop.** Caddy runs in
+its own Docker bridge network; a container can never reach a host socket
+bound specifically to `127.0.0.1` (confirmed empirically — routing to
+the Docker-bridge host IP worked, but got a real `Connection refused`,
+since the kernel matches listening sockets by exact destination IP, and
+a packet addressed to the bridge IP never matches a `127.0.0.1`-only
+bind). Rather than loosen the tunnel's own bind (which would change its
+security property), added a tiny single-purpose `socat` relay
+(`pixel-mlserver-relay.service` on Overmind) listening only on
+`172.17.0.1` — the docker0 bridge's host-side address, reachable from
+containers via Docker's `host-gateway` `extra_hosts` alias, but **not**
+from the LAN (it's a virtual bridge interface, not a physical one) — so
+this doesn't expand exposure beyond what Caddy itself already needs.
+
+Caddy's `inference.home.arpa` site block
+(`services/caddy/Caddyfile`) reverse-proxies to
+`host.docker.internal:8500`, resolved via `extra_hosts:
+host.docker.internal:host-gateway` added to just the `caddy` service in
+`services/caddy/compose.yaml` — every other site in that Caddyfile still
+reaches a sibling container directly. DNS: `inference.home.arpa` added
+to `hosts/dns-rewrites.yaml` as a **service**-tier entry pointed at
+`overmind-01.home.arpa`, not at `cerebrate-pixel6` directly — deliberately
+keeping which physical node serves inference out of the client-facing
+contract, so a future multi-node inference fleet wouldn't require
+clients to change URLs.
+
+### A real bug found via this phase's own restart test
+
+Testing "does the tunnel/proxy recover automatically after a restart"
+surfaced a genuine, previously-undiagnosed reliability bug in
+`cerebrate-infer` itself — not in anything built this phase. See
+[cerebrate-infer's README](../cerebrate-infer/README.md#real-bug-found-and-fixed-a-dead-peer-can-wedge-the-whole-worker-stage-5-phase-4)
+for the full writeup: a VM restart while a connection was open left the
+worker permanently wedged (no accept-timeout, single-threaded serial
+design), fixed with a 30s `SO_RCVTIMEO`, and verified by triggering a
+real VM restart and watching the full external path recover
+automatically in ~16 seconds with no manual intervention.
+
+### LAN exposure investigated, not fully closed (documented, accepted)
+
+`cerebrate-infer`'s own port (8765, on the Android host) is still
+directly LAN-reachable, bypassing this whole Phase 4 path. Two narrower
+fixes (`SO_BINDTODEVICE` on the AVF interface; `AF_VSOCK`) were tested
+and empirically ruled out — see cerebrate-infer's README for the full
+investigation. Accepted as an architectural looseness rather than fixed,
+consistent with this project's own established threat model (LAN/Tailscale
+reachability is the trust boundary; no MLServer-level auth was added for
+the same reason).
+
+### Verified (2026-09-16)
+
+- `curl http://inference.home.arpa/v2/health/ready` → `200`, from a
+  genuine external client (a Mac on the home LAN, resolving through the
+  same AdGuard/Tailscale split-DNS mechanism already proven to work
+  off-LAN for every other `home.arpa` service in this project).
+- `GET /v2/models/cerebrate-infer` → real model metadata, through the
+  full external path.
+- A real Grace Hopper image submitted through `inference.home.arpa`
+  returns `"military uniform"` at the same `0.8862745098039215`
+  confidence as the local-only Phase 3 test — bit-for-bit identical
+  result, proving the tunnel/relay/proxy chain doesn't alter the
+  response.
+- Confirmed each layer individually before trusting the composed chain:
+  relay (`172.17.0.1:8500`) → 200; inside the Caddy container via
+  `host.docker.internal:8500` → reachable; Caddy's own Host-header
+  routing (`curl -H "Host: inference.home.arpa" localhost:80`) → 200;
+  the real DNS name → 200.
+- `ss -ltn` confirms `172.17.0.1:8500` (relay) and `127.0.0.1:8500`
+  (tunnel) are both up, and separately confirms the relay port is
+  **not** reachable from the LAN (`nc -z <overmind-lan-ip> 8500` fails).
+- Full VM force-stop/relaunch recovery test (the same recovery procedure
+  documented since Stage 3): `pixel-mlserver-tunnel.service` and
+  `cerebrate-mlserver.service` both came back automatically; after the
+  `SO_RCVTIMEO` fix, the full external path served a correct real-image
+  classification again within ~16 seconds, unattended.
+
 ## Not yet done (later phases)
 
-- Reachability through Overmind's existing access architecture (Phase 4).
 - Supplemental Pixel telemetry (TPU temp, thermal status, worker
   liveness) alongside MLServer's own metrics (Phase 5).
