@@ -1,4 +1,3 @@
-bash: warning: setlocale: LC_ALL: cannot change locale (en_US.UTF-8): No such file or directory
 # cerebrate-pixel6
 
 **Status:** PARTIAL — see [status legend](../../design-notes/README.md#status-legend);
@@ -45,8 +44,16 @@ wedge the whole worker after a VM restart — see
 investigated-and-accepted looseness: `cerebrate-infer`'s own port stays
 directly LAN-reachable (two narrower fixes were tested and ruled out
 empirically); treated as consistent with this project's LAN/Tailscale
-trust boundary, not a gap in it. Phase 5 (telemetry + reproducibility
-close-out) not yet started.
+trust boundary, not a gap in it. **Stage 5 Phase 5 done (light
+checkpoint, not exhaustive)**: MLServer's built-in metrics already cover
+request success/failure/latency; supplemental Pixel telemetry documented
+as existing `adb` commands rather than new tooling; full acceptance
+checklist against the original Stage 5 plan recorded in
+[mlserver/README.md](mlserver/README.md#phase-5--telemetry--reproducibility-checkpoint-2026-09-16).
+**Stage 5 is complete as a checkpoint** — real working state, not
+exhaustively soak-tested through the new tunnel path, with known
+carried-forward limitations (LAN-reachable `cerebrate-infer` port,
+single-model scope) documented rather than hidden.
 
 A factory-reset Pixel 6, converted into a dedicated always-on inference node
 for the home network. Second member of the "cerebrate" fleet/class (small

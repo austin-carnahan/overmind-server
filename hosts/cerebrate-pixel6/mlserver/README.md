@@ -401,7 +401,84 @@ the same reason).
   `SO_RCVTIMEO` fix, the full external path served a correct real-image
   classification again within ~16 seconds, unattended.
 
-## Not yet done (later phases)
+## Phase 5 — telemetry + reproducibility checkpoint (2026-09-16)
 
-- Supplemental Pixel telemetry (TPU temp, thermal status, worker
-  liveness) alongside MLServer's own metrics (Phase 5).
+Deliberately light — this closes out Stage 5 as a checkpoint against the
+plan's own success criteria, not a new round of testing. No new code.
+
+### MLServer's built-in metrics already cover most of it
+
+`curl http://127.0.0.1:8082/metrics` (Prometheus format, on the guest —
+not exposed through the Phase 4 tunnel, which only forwards :8080)
+already provides, for free, exactly what the plan asked for: per-model
+`model_infer_request_success_total` / `_failure_total`, request-duration
+histograms (`model_infer_request_duration_*`), and REST-layer
+`rest_server_requests_total` by path/status code. Nothing custom needed
+here — this was true since Phase 1, just not called out explicitly
+until now.
+
+### Supplemental Pixel telemetry: existing commands, not new code
+
+Per the plan's own instruction ("keep this supplementation small, do
+not create a parallel monitoring framework"), this is the same
+`adb`-based recipe used throughout Stages 3-4 — documented here as the
+canonical one-liner set, not wrapped in new tooling:
+
+```bash
+ADB="adb -s 192.168.68.60:5555"   # Overmind's independent wireless pairing
+
+# TPU temperature + Android thermal status
+$ADB shell dumpsys thermalservice | grep -A100 "Current temperatures from HAL" | grep "mName=TPU"
+$ADB shell dumpsys thermalservice | grep -o "Thermal Status: [0-9]*"
+
+# cerebrate-infer liveness (Android host, independent of the Debian guest/VM)
+$ADB shell pidof cerebrate-infer
+
+# Debian-side service liveness (from the guest itself)
+sudo systemctl is-active cerebrate-mlserver.service pixel-mlserver-tunnel.service
+```
+
+Baseline snapshot at this checkpoint: TPU 28.0°C, thermal status `0`
+(nominal), worker PID `24847` (the one deployed with the Phase 4
+`SO_RCVTIMEO` fix), both guest-side services `active`.
+
+### Stage 5 acceptance checklist (against the original plan's criteria)
+
+**Functional** — from Overmind/any authorized client, via
+`inference.home.arpa`: health/readiness ✓, model metadata ✓, submit a
+real image ✓, receive correct labels/scores ✓, verified full-chain
+execution (MLServer → adapter → `cerebrate-infer` → NNAPI → EdgeTPU →
+Tensor G1) ✓.
+
+**Operational** — runs under normal systemd supervision ✓, starts
+reproducibly ✓, recovers after a Debian service/VM restart ✓ (verified
+with a real restart, ~16s recovery), produces logs via `journalctl`/the
+MLServer stdout log ✓, health+metrics sufficient to diagnose normal
+failures ✓, no USB-connected workstation required for normal operation
+✓ (everything reachable via Overmind's independent wireless ADB pairing
+and the reverse tunnels).
+
+**Reproducibility** — dependencies pinned (`requirements.txt`) ✓,
+MLServer config documented (env vars, not a gitignored `settings.json`)
+✓, custom runtime committed (`cerebrate_infer_runtime.py`) ✓,
+systemd/sshd unit definitions committed verbatim (Phase 4 section
+above) ✓, model placement documented ✓, network assumptions documented
+(AVF gateway instability, Docker-bridge relay necessity) ✓, test
+commands documented throughout each phase section above ✓, known
+lifecycle limitations documented (LAN-reachable `cerebrate-infer` port,
+investigated and accepted; the earlier wedge bug, found and fixed) ✓.
+
+**Scope discipline** — no multi-node scheduler, model registry, or
+workflow engine was built; `cerebrate-infer` remains the sole
+hardware-facing boundary; the MLServer adapter stayed a thin
+protocol/data-shape translator throughout all four phases.
+
+### What this checkpoint is not
+
+Not exhaustively soak-tested through the new Phase 4 path (Stage 4D's
+hours-long saturation/soak testing was done against the pre-tunnel
+local path only). Not a claim that the LAN-exposure or
+one-model-only-MobileNet limitations are resolved — both are explicitly
+carried forward, not hidden. This is a checkpoint reflecting real,
+verified, working state today, not a declaration that Stage 5 can never
+be revisited.
