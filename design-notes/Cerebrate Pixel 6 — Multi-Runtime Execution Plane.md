@@ -601,3 +601,34 @@ evaporated cleanly. The five-phase plan above is justified to proceed.
 Nothing from this spike was integrated into `cerebrate-infer` or
 committed to the repo; it was intentionally disposable, per the gate
 design.
+
+## Phase 1 done: named, reserved, nothing touched (2026-09-17)
+
+Zero code changes, as designed — `cerebrate-infer` already satisfied
+"Graph Execution" under the new terminology before this phase started.
+
+- `cerebrate-infer`'s own README now documents it explicitly as the
+  Graph Execution worker and records `cerebrate-generate` as the
+  planned Session Execution sibling process.
+- Reserved, in documentation only (no directories/files created yet):
+  port `8766` on the Android host for `cerebrate-generate`, and
+  `hosts/cerebrate-pixel6/cerebrate-generate/` as its future source
+  location. Real content arrives in Phase 2.
+- Acceptance check re-verified: MobileNet classification through
+  `inference.home.arpa` still returns `"military uniform"` at 88.6%
+  confidence — identical to every prior test, since nothing changed.
+
+Phase 2 (native LiteRT-LM stack on Android, as its own persistent
+`cerebrate-generate` process) is next.
+
+## Original design-doc quote, superseded by the process-architecture revision
+
+(Retained for history — no longer the current design.) The initial
+draft of this plan proposed one Android process with an internal
+`GraphExecution`/`SessionExecution` dispatcher, on the reasoning that
+"MLServer should hide the internal runtime split from Overmind." That
+was revised the same day, before any implementation started, once the
+operating-characteristics mismatch between the two contracts (see
+"Process Architecture" above) was worked through — the dispatcher was
+never built and this document's main body now reflects the two-process
+design.

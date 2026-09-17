@@ -63,6 +63,19 @@ isn't a final characterization of wired behavior. See the [Ethernet
 migration section](../../design-notes/2026-09-16-pixel6-inference-node.md#ethernet-migration-attempt-deferred-wi-fi-stays-canonical-2026-09-17)
 for the full findings and the narrow test list for a future pass.
 
+**Multi-Runtime Execution Plane, Phase 1 done (2026-09-17)**:
+`cerebrate-infer` is now explicitly documented as the **Graph
+Execution** worker; a stateful **Session Execution** sibling process,
+`cerebrate-generate` (LiteRT-LM), is planned as an independent
+Android-host process — not a mode of this one — per the
+[Multi-Runtime Execution Plane](../../design-notes/Cerebrate%20Pixel%206%20%E2%80%94%20Multi-Runtime%20Execution%20Plane.md).
+Port `8766` and the `cerebrate-generate/` directory are reserved for
+it; neither exists yet, since nothing should be created until Phase 2
+gives it real content. No code changed — existing MobileNet
+classification through `inference.home.arpa` reverified working and
+unmodified (`"military uniform"`, 88.6% confidence, matching every
+prior test).
+
 A factory-reset Pixel 6, converted into a dedicated always-on inference node
 for the home network. Second member of the "cerebrate" fleet/class (small
 auxiliary compute nodes) — see the naming-convention section of the

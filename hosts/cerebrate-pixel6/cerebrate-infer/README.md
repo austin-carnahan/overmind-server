@@ -10,10 +10,26 @@ serves TCP requests one at a time: run inference, return
 Deliberately narrow: no concurrency, no auth, no model registry. Real
 image input as of Stage 5 Phase 3 (see below) — no dummy input anymore.
 `InferenceEngine` is a real seam (see `cerebrate-infer.cc`) —
-`NnapiTfliteEngine` is implemented; a future `LiteRtEngine` is declared in
-the design notes but not implemented, since the LiteRT v2 spike found it
-~13× slower on this specific (Tensor G1) hardware — see the design notes'
-"Backend decision" section before assuming this should move to LiteRT.
+`NnapiTfliteEngine` is implemented; a future `LiteRtEngine` (LiteRT
+`CompiledModel`, still within this same process — it's a graph-execution
+backend, same runtime contract) is declared but not implemented, since
+the LiteRT v2 spike found it ~13× slower on this specific (Tensor G1)
+hardware — see the design notes' "Backend decision" section before
+assuming this should move to LiteRT.
+
+**This process is the Graph Execution worker**, per the
+[Multi-Runtime Execution Plane](../../../design-notes/Cerebrate%20Pixel%206%20%E2%80%94%20Multi-Runtime%20Execution%20Plane.md).
+Stateful generative workloads (LLM text generation, etc.) are a
+deliberately separate sibling process, `cerebrate-generate`
+(LiteRT-LM), not a mode of this one — the two have materially
+different lifecycles (millisecond stateless calls here vs.
+seconds/minutes-long stateful sessions there) and are kept as
+independent Android-host processes on purpose, composed together only
+at the MLServer layer. `cerebrate-generate` is reserved for **port
+8766** (this worker uses 8765) and
+`hosts/cerebrate-pixel6/cerebrate-generate/` once built — not created
+yet, since nothing should exist here until Phase 2 gives it real
+content.
 
 ## Build (no Bazel — AAR extraction only)
 
