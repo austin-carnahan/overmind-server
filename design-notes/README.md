@@ -39,6 +39,12 @@ not restate what the label already means.
   (second "cerebrate" fleet member); Stage 1 (ADB baseline +
   appliance-readiness) done, Stages 2-4 pending. See
   [hosts/cerebrate-pixel6](../hosts/cerebrate-pixel6/README.md).
+- [Cerebrate Pixel 6 — Multi-Runtime Execution Plane](Cerebrate%20Pixel%206%20%E2%80%94%20Multi-Runtime%20Execution%20Plane.md) —
+  next-phase plan evolving `cerebrate-infer` from a single-purpose
+  classifier into a general Android execution plane (bounded Graph
+  Execution via NNAPI/TFLite, stateful Session Execution via LiteRT-LM).
+  Feasibility spike done: native runtime, model, and backend gates all
+  passed. Five-phase implementation not yet started.
 - [Seerr & Maintainerr setup brief](overmind_seerr_maintainerr_setup_brief.md) —
   adopted architecture for the request/discovery and retention/cleanup
   layers on top of Jellyfin/Radarr/Sonarr; both tools verified real before
