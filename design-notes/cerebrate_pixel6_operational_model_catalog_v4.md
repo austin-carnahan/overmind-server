@@ -666,6 +666,81 @@ Bring up models incrementally rather than in parallel, now that Phase B has give
 6. Keep **MobileNetV1** as the known-good classifier and regression/control workload; add an ONNX export as the cross-runtime characterization model.
 7. For each: record load time, resident memory, latency, thermal behavior, correctness, artifact format, and selected backend in the catalog.
 
+### Progress checkpoint (2026-09-17): Phases A–C complete
+
+Phases A, B, and C are done — each verified against the real device and
+real production models, not simulated (see `models/README.md`,
+`hosts/cerebrate-pixel6/cerebrate-supervisor/README.md`, and
+`hosts/cerebrate-pixel6/spikes/onnxruntime-characterization/README.md`
+for the full evidence). This is a real milestone, not a routine
+progress note: the Pixel 6's execution architecture, process lifecycle,
+and default graph-runtime policy are now empirically grounded, not just
+designed.
+
+```text
+                         Overmind
+                            |
+                  inference.home.arpa
+                            |
+                         MLServer
+                            |
+                 capability / model catalog
+                            |
+            +---------------+---------------+
+            |                               |
+        Graph execution                Session execution
+            |                               |
+      ONNX Runtime                      LiteRT-LM
+   preferred first attempt             proven path
+            |                               |
+   +--------+--------+               cerebrate-generate
+   |        |        |
+ NNAPI   XNNPACK    CPU
+   |        |
+   |        +-- crashes inside ORT 1.30.0 itself (measured, Phase C)
+   |
+google-edgetpu (Tensor G1 TPU)
+   -- measured correct, real delegation evidence (Phase C)
+
+Compatibility path (already in production):
+TFLite -> NNAPI -> google-edgetpu
+
+Future path (not chased further):
+LiteRT CompiledModel
+   CPU: correct
+   GPU: readback defect (LiteRT 2.2.0)
+
+Android process boundary:
+Debian / MLServer --AVF TCP--> cerebrate-supervisor --+-- cerebrate-infer
+                                                       +-- cerebrate-generate
+```
+
+The following decisions are stable enough to stop revisiting unless new
+evidence forces a change:
+
+1. ONNX Runtime is the first graph backend attempted for new models (Section 6.3).
+2. TFLite+NNAPI remains the existing, proven, already-in-production Pixel-specific path (Section 3.2) — not retired.
+3. LiteRT-LM owns session/generative inference for now (Section 3.1, `cerebrate-generate`).
+4. LiteRT `CompiledModel` remains experimental/future (Section 3.3) — the GPU readback defect isn't fixed, and isn't being chased.
+5. MLServer remains the runtime-neutral serving seam (Section 10).
+6. `catalog.yaml` remains the lightweight source of truth; MLflow stays deferred, not adopted (Section 7.2).
+7. Android workers stay intentionally dumb; orchestration lives above them (`cerebrate-supervisor`, MLServer).
+8. `cerebrate-supervisor` stays narrow and frozen — Phase B Stage 3's failure/recovery characterization gave enough evidence to stop iterating on it, not a reason to keep expanding it. It is contained technical debt, not eliminated technical debt.
+9. Backends are promoted only after correctness **and** actual hardware-path evidence (real delegation logs, real accelerator engagement) — never merely successful delegation or a passing `Run()` call.
+
+The catalog's own three-way distinction — **measured capability** ≠
+**deployed backend** ≠ **future preference policy** — is what kept
+Phase C's result honest: ORT+NNAPI's real, measured capability was
+recorded and promoted as *policy* for future graph models, without
+implying MobileNet's already-working production path silently moved to
+an ORT worker that doesn't exist.
+
+**Milestone: the Cerebrate execution foundation is complete enough to
+begin building applications on top of it.** Phase D (Docling) is the
+first substantial consumer of this infrastructure and the first
+concrete operational piece of Substrate — not more Pixel plumbing. That
+is the shift from *constructing* Cerebrate to *using* it.
+
 ## 12. Non-goals
 
 This phase does **not** include:
