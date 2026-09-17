@@ -4,7 +4,9 @@
   "parameters": {
     "version": "v0.1.0",
     "extra": {
-      "cerebrate_generate_port": 8766
+      "cerebrate_generate_port": 8766,
+      "cerebrate_generate_model_path": "/data/local/tmp/SmolLM2_135M_Instruct.litertlm",
+      "cerebrate_generate_backend": "cpu"
     }
   }
 }

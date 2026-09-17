@@ -531,3 +531,72 @@ one-model-only-MobileNet limitations are resolved — both are explicitly
 carried forward, not hidden. This is a checkpoint reflecting real,
 verified, working state today, not a declaration that Stage 5 can never
 be revisited.
+
+## Phase B Stage 2 — `load()`/`unload()` drive real process lifecycle (2026-09-17)
+
+Per the [Operational Model Catalog v4](../../../design-notes/cerebrate_pixel6_operational_model_catalog_v4.md)
+and [cerebrate-supervisor](../cerebrate-supervisor/README.md) (Phase B
+Stage 1): both adapters' `load()` now calls the supervisor's `START` and
+waits for real readiness before returning `ready=True`; `unload()` calls
+`STOP` and waits for the process to actually exit. `model-settings.json`
+gained `cerebrate_infer_model_path` / `cerebrate_generate_model_path`
+(+`cerebrate_generate_backend`) so each adapter knows what to tell the
+supervisor to start. A model with no path configured falls back to the
+pre-Stage-2 behavior (assume externally started), logged so that fallback
+is visible rather than silent.
+
+Exercised against MLServer's real repository API
+(`POST /v2/repository/models/{name}/load` and `/unload`), not just unit
+logic, against both existing models:
+
+- `unload` genuinely stops the Android process (confirmed via
+  `cerebrate-supervisor`'s own `STATUS` and `pidof` going empty), and
+  `load` genuinely starts a fresh one (confirmed via a new PID each time)
+  and serves correct real inference/generation immediately after.
+- Idempotent reload — calling `load` on an already-loaded model, several
+  times in a row — leaves the worker running rather than killing it.
+
+### A real bug found via this stage's own idempotency test
+
+The first implementation used a class-attribute refcount to make the
+idempotent-reload case safe (MLServer's own `registry.py._reload_model`
+does a "rolling reload" on an already-loaded model: it creates a *new*
+`MLModel` instance, calls its `load()`, and only then calls the *old*
+instance's `unload()` for cleanup — both instances share one Android
+process, so an unconditional `STOP` in `unload()` would kill a worker the
+new instance just started). That refcount didn't survive contact with
+reality: MLServer calls `importlib.reload()` on a model's implementation
+module on **every** `load()`/`unload()` call once `model-settings.json`
+has a `_source` path (a deliberate hot-reload-custom-code feature) —
+which resets class/module-level Python state between calls. A second
+`load()` call against an already-loaded model still silently killed it.
+
+Fixed by moving the refcount to a small file
+(`/tmp/cerebrate-infer.refcount` / `/tmp/cerebrate-generate.refcount`,
+`flock`-guarded), tagged with the owning MLServer process's PID rather
+than a bare count — `/tmp` survives a `systemctl restart
+cerebrate-mlserver`, but MLServer doesn't call `unload()` on a killed
+process's models on the way out, so a bare counter would climb by one on
+every restart and never come back down. A PID mismatch means the file is
+stale from a previous MLServer process and resets to zero before applying
+that call's delta. Re-verified after the fix: three consecutive `load`
+calls against an already-loaded model leave the refcount at `1` and the
+same worker running throughout.
+
+### A separate, pre-existing bug found along the way (not fixed here, out of Stage 2's scope)
+
+Restarting `cerebrate-generate` fresh (confirmed via a new PID) and
+sending it a single short prompt as its very first request returned
+`RuntimeError: cerebrate-generate error: Max number of tokens reached.`
+— immediately, not after any real conversation history. Every earlier
+successful generation test anywhere in this project happened to reuse an
+already-running, previously-warmed process; this is the first time
+anything actually exercised a **freshly started** `cerebrate-generate`
+process's first request. The error string comes from LiteRT-LM's own
+library, not from `cerebrate-generate.cc` (which has no token-limit
+configuration of its own) — this is a real, pre-existing issue in the
+session/generation path, unrelated to process lifecycle (which is
+confirmed correct: fresh PID, correct refcount, no crash). Left
+unaddressed here since fixing generation behavior is out of scope for a
+lifecycle-management stage; worth its own investigation before Qwen3 or
+any other model rides on this same path (Phase E).

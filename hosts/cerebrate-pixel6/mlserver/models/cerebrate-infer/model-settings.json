@@ -4,7 +4,8 @@
   "parameters": {
     "version": "v0.1.0",
     "extra": {
-      "cerebrate_infer_port": 8765
+      "cerebrate_infer_port": 8765,
+      "cerebrate_infer_model_path": "/data/local/tmp/mobilenet_v1_1.0_224_quant.tflite"
     }
   }
 }
