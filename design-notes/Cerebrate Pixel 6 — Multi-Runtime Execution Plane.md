@@ -1109,6 +1109,34 @@ debugging session. If `LiteRtCompiledBackend` is ever actually built,
 re-check GPU correctness against whatever LiteRT release is current at
 that time before assuming this specific bug still applies.
 
+### Revisit trigger
+
+Rerun the existing correctness harness (the strengthened `litert_bench`
+above, or an equivalent) before considering `LiteRtCompiledBackend`
+again, when either:
+
+- a newer LiteRT release materially changes Android GPU tensor-buffer
+  interoperability, or
+- a graph model is encountered that can't use the NNAPI/TPU backend
+  (e.g. an op NNAPI doesn't support, or future hardware where NNAPI
+  isn't the right compatibility path).
+
+The harness makes that retest cheap and binary: does GPU output still
+come back all-zero, or not? No new investigation needed to answer it —
+just rerun and read the `checksum`/`gpu_output_all_zero` line.
+
+### Closing framing
+
+This investigation is closed as a **successful negative result**. The
+outcome isn't "failed to implement a backend" — it's "prevented a fast
+but silently incorrect backend from entering the architecture." The
+GPU path's ~9.7ms looked like a compelling win over NNAPI's much
+slower CPU/XNNPACK alternative right up until the output was actually
+checked; shipping it unverified would have meant a graph-execution
+backend that runs, looks fast, and quietly returns garbage to every
+caller. Catching that before integration, rather than after, is the
+point of running these spikes at all.
+
 ## Original design-doc quote, superseded by the process-architecture revision
 
 (Retained for history — no longer the current design.) The initial
