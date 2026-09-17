@@ -792,10 +792,25 @@ three accelerator paths:
 | LiteRT v2 → CPU (XNNPACK) | 33,528 µs | ~43× slower |
 | LiteRT v2 → NPU | did not load | `NPU accelerator could not be loaded and registered: kLiteRtStatusErrorInvalidArgument` — confirms live, on this exact device, that Tensor NPU support isn't available through the modern stack yet (matches Google's documented Tensor-G5-only NPU support, but observed directly rather than only read) |
 
-**Caveat**: the GPU run also logged `Failed to get buffer requirements for
-tensor 'input'`, suggesting a possible non-zero-copy fallback path — true
-best-case GPU performance might be somewhat better than measured. Not
-enough to plausibly close a 13× gap.
+**Correction (2026-09-17), important**: the `Failed to get buffer
+requirements for tensor 'input'` warning noted here was originally
+(wrongly) read as just a possible performance caveat. Re-investigated
+while spiking `LiteRtCompiledBackend`: this benchmark never actually
+checked the output was *correct* — it only measured `Run()` timing.
+Adding a correctness check and re-running (same binary, same model,
+rebuilt from the original recovered build tree) showed the GPU path
+returns a **wrong classification** (`top_class=0`, garbage) despite the
+delegate genuinely engaging (`Replacing 31 out of 31 node(s) with
+delegate (LITERT_CL)`, real OpenCL initialization, no crash). CPU is
+correct (`top_class=795`, matching every other backend). So "LiteRT v2
+→ GPU worked" was never actually true — it didn't crash and the timing
+looked plausible, which is a different claim than "produced the right
+answer." Full reconstruction, root-cause discussion, and the
+build/packaging findings that came with it are in the
+[Multi-Runtime Execution Plane](Cerebrate%20Pixel%206%20%E2%80%94%20Multi-Runtime%20Execution%20Plane.md)
+design notes' Progress Notes. The bottom-line conclusion below (NNAPI
+wins on this hardware) is unaffected — if anything, this makes it more
+decisive, not less: GPU isn't just slower, it's currently wrong.
 
 **Conclusion**: Pixel 6 backend = legacy TFLite + NNAPI →
 `google-edgetpu`. The architecture stays backend-neutral regardless (see

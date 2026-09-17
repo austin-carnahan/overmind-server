@@ -190,7 +190,14 @@ Its natural deployment artifact is `.tflite`.
 Do not assume that its NPU path works on Tensor G1 (or any future
 device) simply because the API supports NPU execution in general.
 Backend availability must remain empirical, per the same discipline
-that ruled it out for MobileNet on this hardware.
+that ruled it out for MobileNet on this hardware. **The same applies to
+GPU, now**: a reconstruction spike (Progress Notes, 2026-09-17) found
+LiteRT `2.2.0`'s `CompiledModel` GPU path genuinely delegates but
+returns an incorrect classification for this exact model on this
+hardware — on both the plain-C and C++ integration paths. CPU is
+verified correct. Don't assume GPU works here without re-checking
+against whatever LiteRT release is current when this is picked up
+again.
 
 A clean, self-contained future spike: implement a minimal
 `LiteRtCompiledBackend` behind Graph Execution — inside `cerebrate-infer`,
@@ -888,6 +895,158 @@ is complete.
   asked.
 - gRPC streaming (broader than REST's server-only streaming) not
   explored — unnecessary for the current prompt-in/tokens-out shape.
+
+## `LiteRtCompiledBackend` spike, part 1: a plain-C canary surfaces a real GPU correctness bug (2026-09-17)
+
+Before touching `cerebrate-infer`, spiked the plain LiteRT C API
+(`litert_compiled_model.h`, `litert_environment.h`, `litert_model.h`) —
+not the C++ SDK — against the same MobileNet model, using the same
+`v2.2.0` artifacts as the earlier backend-decision spike
+(`libLiteRt.so`, `libLiteRtClGlAccelerator.so` from the Maven AAR; the
+plain C headers were already present in the previously-extracted
+`litert_cc_sdk` tree). Built with one `clang++` invocation — no CMake,
+no Bazel, no Abseil — after manually filling in the one small
+CMake-generated header (`build_config.h`, a 12-line file with two
+feature-toggle `#define`s) that would otherwise require a real CMake
+configure step.
+
+**CPU**: passed cleanly. `top_class=795`, matching every other backend
+in this project exactly. Real delegation confirmed via logs
+(`Created TensorFlow Lite XNNPACK delegate for CPU`, `Replacing 29 out
+of 31 node(s)`).
+
+**GPU**: the OpenCL delegate genuinely engaged (`Replacing 31 out of 31
+node(s) with delegate (LITERT_CL)`, real `Initializing OpenCL-based
+API from graph`) — not a silent no-op. But the result was **wrong**:
+`top_class=0`, alongside `WARNING: [compiled_model.cc:1357] Failed to
+get buffer requirements for tensor 'input'` (and for the output
+tensor). This is exactly the "verify actual placement, don't just
+trust creation succeeded" failure mode to guard against — a backend
+that runs, doesn't crash, and produces garbage.
+
+Per the explicit rule for this spike (if the plain-C path disagrees
+with the previous C++ spike, stop and investigate rather than
+integrate), stopped here rather than debugging further, and moved to
+reconstructing the earlier "known-good" spike to find out whether it
+actually disagreed.
+
+## `LiteRtCompiledBackend` spike, part 2: reconstructing the "known-good" C++ spike — it wasn't actually known-good (2026-09-17)
+
+Recovered the full historical recipe intact, rather than reconstructing
+from memory — everything was still on disk in `/tmp` from the original
+session: `litert-2.2.0.aar` (Maven), `litert_cc_sdk.zip` (a GitHub
+release asset), the extracted `litert_sdk/litert_cc_sdk/` tree, and the
+original `litert_bench` source + fully-configured CMake build
+directory.
+
+### Provenance and version alignment, verified not assumed
+
+The headers (`litert_cc_sdk.zip`, filesystem date 2026-08-11) and the
+`.so` files (inside `litert-2.2.0.aar`, filesystem date 2026-08-06) had
+a 5-day gap between them — exactly the kind of mismatch risk worth
+checking rather than waving off. Resolved conclusively via GitHub's own
+release API: `google-ai-edge/LiteRT`'s `v2.2.0` tag's `litert_cc_sdk.zip`
+release asset is **283035 bytes — an exact byte-for-byte match** to the
+already-downloaded file. Both artifacts are genuinely from the same
+`2.2.0` release; the date gap was just Google's own Maven and GitHub
+publishing pipelines running a few days apart, not a version drift.
+
+### The packaging model, clarified
+
+```text
+C++ API / SDK layer         ← compiled locally, CMake, C++20
+        ↓
+prebuilt libLiteRt.so       ← Google-built, from the Maven AAR
+        ↓
+prebuilt accelerator plugins ← libLiteRtClGlAccelerator.so, also from the AAR
+        ↓
+Android CPU / GPU / (NPU where supported)
+```
+
+The presence of CMake and real wrapper source code does **not** mean
+LiteRT's own runtime or GPU implementation are being compiled from
+source — those two `.so` files are genuinely prebuilt by Google and
+never touched by the local build. But one honest correction to the
+"Google's C++ SDK, already compiled" framing: **Abseil is not prebuilt
+by Google for this purpose.** `litert_cc_sdk`'s own `abseil-cpp.cmake`
+declares `OverridableFetchContent_Declare(abseil-cpp, GIT_REPOSITORY
+https://github.com/abseil/abseil-cpp, GIT_TAG 20260526.0)` — CMake
+clones abseil from source (a pinned tag, not `HEAD`) and compiles dozens
+of static libraries (`libabsl_*.a`) for Android arm64 as part of this
+build. That's a real from-source build of a substantial third-party
+C++ library, not just linking a thin wrapper — meaningfully heavier
+than either native worker's actual production build (`cerebrate-infer`,
+`cerebrate-generate`), both one `clang++` call against a prebuilt `.so`
+with zero third-party source compilation.
+
+So the honest classification: this path is **not** "full LiteRT source
+build" (option A) — the runtime and GPU accelerator genuinely are
+Google-prebuilt and never rebuilt locally. But it's also **not** "just
+link Google's prebuilt pieces" (the idealized reading of option B) —
+it requires a real, if pinned and reproducible, from-source build of
+Abseil. Call it B, with an asterisk: reproducible entirely from pinned
+release artifacts (Maven AAR tag, GitHub release tag, Abseil git tag),
+zero LiteRT source involved, but not zero source compilation overall.
+
+### The actual finding: GPU was never verified correct, on either path
+
+The original `litert_bench` (`main.cc`) only ever measured `Run()`
+timing — it checked that `Run()` reported success, never read back and
+verified the output. Patched it to add exactly that (argmax the output,
+same as every other backend in this project), rebuilt incrementally
+from the existing configured build tree (fast — only relinking, since
+Abseil and the LiteRT wrapper library were already built), and re-ran
+on the real device:
+
+```text
+[CPU] iters=30 mean_us=33473.2 ... top_class=795 top_score=102
+WARNING: [compiled_model.cc:1357] Failed to get buffer requirements for tensor `input`.
+WARNING: [compiled_model.cc:1357] Failed to get buffer requirements for tensor `MobilenetV1/Predictions/Reshape_1`.
+[GPU] iters=30 mean_us=7764.7 ... top_class=0 top_score=0
+```
+
+**Identical failure, identical warning, on the C++ path** — the exact
+same wrong `top_class=0` the plain-C canary produced. This means the
+GPU correctness bug is not a plain-C-canary mistake; it's an upstream
+issue with LiteRT `2.2.0`'s `CompiledModel` + OpenCL delegate + this
+quantized MobileNet model on this hardware, present in both
+integration paths, and never caught before because nothing checked the
+actual output value until now.
+
+This corrects the original backend-decision entry in the main Pixel 6
+design notes (`2026-09-16-pixel6-inference-node.md`), which had logged
+this same warning as a mere possible-performance caveat ("a possible
+non-zero-copy fallback path") rather than what it actually signals — a
+correctness failure. The bottom-line conclusion there (NNAPI wins on
+this hardware) isn't weakened by this; if anything it's more decisive:
+GPU isn't just ~13x slower, it's currently producing wrong answers.
+
+### Assessing against the stated success criterion
+
+> The LiteRT C++ `CompiledModel` GPU path is reproducibly buildable
+> from specific Google-released artifacts, produces correct inference
+> on the Pixel 6, and does not require building the full LiteRT stack
+> from source.
+
+Half right, and the honest half matters more: **reproducibly buildable
+from pinned release artifacts without a full LiteRT source build —
+true, verified.** **Produces correct inference on GPU — false**, on
+both the plain-C and C++ paths, for this model on this hardware and
+LiteRT version. CPU is correct on both paths. Documenting this as
+found, not forcing it into the hoped-for shape.
+
+### Where this leaves `LiteRtCompiledBackend`
+
+Not implemented, and CPU-only would be the honest scope if it ever is:
+a `LiteRtCompiledBackend` behind Graph Execution could reasonably
+target CPU (verified correct, though ~43x slower than NNAPI on this
+model) while treating GPU as unavailable until the upstream buffer
+requirements/correctness issue is understood or a newer LiteRT release
+fixes it. Not chased further here, per the explicit scope of this
+reconstruction pass — this was a reproducibility spike, not a
+debugging session. If `LiteRtCompiledBackend` is ever actually built,
+re-check GPU correctness against whatever LiteRT release is current at
+that time before assuming this specific bug still applies.
 
 ## Original design-doc quote, superseded by the process-architecture revision
 
