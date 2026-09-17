@@ -1041,3 +1041,107 @@ Overmind's independent wireless ADB pairing → systemd services and the
 reverse SSH tunnel recover automatically (already demonstrated) →
 control plane rejoins. Control-plane restartability, not perfect Debian
 guest reliability, is the property this architecture actually needs.
+
+## Ethernet migration attempt: deferred, Wi-Fi stays canonical (2026-09-17)
+
+A physical move to a USB-C Ethernet dongle (Realtek RTL8156, `0BDA:8156`
+— a mainstream, well-supported chipset; the `r8152` kernel driver is
+present and loaded) was attempted, motivated by wanting a "boring,"
+single-NIC appliance configuration. It surfaced enough real fragility
+that it's being deferred rather than adopted, without rejecting it
+outright — the results obtained don't yet characterize wired behavior
+cleanly, because they were confounded by the device booting into
+Airplane Mode throughout this investigation.
+
+### What was found
+
+- **Wi-Fi and Ethernet cannot be active simultaneously** on this device
+  — confirmed directly (had to disable one to use the other).
+- **Toggling Wi-Fi off does not trigger Ethernet discovery.** A full
+  reboot was required before the wired interface came up at all, even
+  though the USB device was correctly enumerated at the USB level
+  (`dumpsys usb` showed it connected; `r8152` was loaded) with no
+  network interface ever created for it until after a reboot.
+- **The device boots into Airplane Mode.** Not yet established whether
+  this is new, or has been true throughout this project — but it means
+  every result gathered so far involved manually clearing Airplane Mode
+  after each reboot before Ethernet could be evaluated, confounding
+  "does Ethernet come up on its own" with "does it come up once Airplane
+  Mode is manually cleared."
+  Aircraft Mode's connection to the reboot-required-for-discovery
+  behavior above is suspected but not confirmed.
+- **A dropped Ethernet link did not self-recover.** After Ethernet
+  briefly went unreachable (address stopped responding to ping
+  entirely, not just ADB), only a physical unplug/replug of the dongle
+  restored it — a software reconnect attempt was not sufficient.
+- **Legacy `adb tcpip 5555` does work over the wired connection**,
+  independent of the newer Wi-Fi-specific "Wireless debugging"
+  pairing/discovery feature (confirmed against Google's current ADB
+  Wi-Fi 2.0 docs, which explicitly scope that newer feature to a shared
+  wireless network) — verified directly: `adb tcpip 5555` issued over a
+  brief USB connection, then `adb connect <wired-ip>:5555` from Overmind
+  succeeded, followed by a real `vm list` shell command. This means
+  remote-recovery capability is **not** inherently lost by moving to
+  Ethernet — but `adb tcpip` mode does not survive a reboot, so it needs
+  re-arming via a brief physical USB touch after every reboot, a real
+  (if smaller) ongoing physical-intervention cost.
+- **A real bug, not an Ethernet problem**: during this investigation,
+  the `pixel-mlserver-tunnel` reverse SSH tunnel got stuck with its
+  server-side (Overmind) listener bound but unusable after the
+  underlying network path was disrupted — the same *class* of "zombie
+  connection after an abrupt network change" bug already found and
+  fixed in `cerebrate-infer` (see the Stage 5 Phase 4 section in
+  `hosts/cerebrate-pixel6/mlserver/README.md`), just hitting plain
+  OpenSSH's port-forwarding instead of custom code this time. Recovery
+  required `sudo systemctl restart ssh` on Overmind, and once, a stale
+  process still holding the port after that (`sudo fuser -k
+  8500/tcp`, which also killed the legitimate `socat` relay
+  incidentally — it self-healed via its own `Restart=always`). This is
+  independent of Wi-Fi vs. Ethernet and worth re-testing/hardening on
+  its own.
+
+### Decision
+
+**Wi-Fi remains the canonical transport.** It is the only configuration
+with *demonstrated* unattended recovery across this whole project — no
+reboot-to-discover requirement, no physical-replug-to-recover behavior,
+and Overmind's independent wireless ADB pairing has repeatedly proven
+itself (including from off the home LAN over Tailscale) without any
+physical touch. Ethernet is not rejected — the fragility found so far
+was gathered under confounded conditions (Airplane-Mode-on-boot in the
+loop throughout) and shouldn't be treated as a final characterization of
+wired behavior. Continued Ethernet lifecycle debugging is explicitly
+deferred to a future pass, not abandoned.
+
+`cerebrate-infer`'s adapter still auto-discovers the AVF gateway address
+at startup (see Stage 5 Phase 4) rather than hardcoding it — that fix is
+NIC-agnostic and stays regardless of which physical interface is
+canonical. The `pixel-tunnel` and `pixel-mlserver-tunnel` accounts'
+`authorized_keys` were widened to allow `from=` either the Wi-Fi
+(`192.168.68.60`) or the reserved Ethernet (`192.168.68.61`) address, so
+both remain usable without further changes whenever Ethernet work
+resumes.
+
+### Future pass: a deliberately narrow test list
+
+1. Disable Airplane Mode permanently, then reboot — does Ethernet come
+   up automatically from a cold boot, with the Airplane Mode confound
+   removed?
+2. Test physical link loss/recovery without touching any Android
+   settings — does it self-recover, or still require a physical
+   replug?
+3. Test adapter power loss/recovery specifically (separate from a full
+   cable unplug, since the dongle provides USB-PD passthrough).
+4. Test repeated reboot cycles — is Ethernet's behavior consistent, or
+   does it vary run to run?
+5. Test whether Wi-Fi can stay enabled as a management fallback while
+   Android prefers Ethernet for normal traffic (rather than the two
+   being strictly either/or, which hasn't been tested — only "one
+   fully off" has).
+6. Revisit persistent ADB recovery: either get paired wireless ADB
+   working as a fallback management path alongside wired traffic, or
+   find a cleaner way to restore TCP ADB mode after a reboot than a
+   manual USB touch each time.
+7. Re-test the reverse-tunnel stale-listener behavior independently of
+   Ethernet, since it may be a general OpenSSH/tunnel-lifecycle bug in
+   this project's own setup rather than anything Ethernet-specific.

@@ -53,7 +53,15 @@ checklist against the original Stage 5 plan recorded in
 **Stage 5 is complete as a checkpoint** — real working state, not
 exhaustively soak-tested through the new tunnel path, with known
 carried-forward limitations (LAN-reachable `cerebrate-infer` port,
-single-model scope) documented rather than hidden.
+single-model scope) documented rather than hidden. **Network transport:
+Wi-Fi remains canonical (2026-09-17)** — a physical move to a USB-C
+Ethernet dongle was attempted and deferred, not adopted: real fragility
+was found (reboot required to discover the interface at all, physical
+replug required to recover a dropped link), but the results were
+confounded by the device booting into Airplane Mode throughout, so this
+isn't a final characterization of wired behavior. See the [Ethernet
+migration section](../../design-notes/2026-09-16-pixel6-inference-node.md#ethernet-migration-attempt-deferred-wi-fi-stays-canonical-2026-09-17)
+for the full findings and the narrow test list for a future pass.
 
 A factory-reset Pixel 6, converted into a dedicated always-on inference node
 for the home network. Second member of the "cerebrate" fleet/class (small
