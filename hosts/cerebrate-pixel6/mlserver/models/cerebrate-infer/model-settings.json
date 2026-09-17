@@ -4,7 +4,6 @@
   "parameters": {
     "version": "v0.1.0",
     "extra": {
-      "cerebrate_infer_host": "10.70.217.78",
       "cerebrate_infer_port": 8765
     }
   }

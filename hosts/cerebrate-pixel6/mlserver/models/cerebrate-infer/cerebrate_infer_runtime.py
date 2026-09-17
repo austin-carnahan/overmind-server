@@ -16,6 +16,7 @@ that one model/input shape for now -- not a general multi-model runtime.
 import asyncio
 import io
 import os
+import subprocess
 
 from PIL import Image
 
@@ -55,6 +56,25 @@ def _load_labels() -> list:
         return [line.rstrip("\n") for line in f]
 
 
+def _discover_avf_gateway() -> str:
+    """The AVF gateway address is dynamically assigned per VM boot and not
+    guaranteed stable (observed firsthand: it changed across restarts
+    during this project). Read it from the guest's own default route at
+    load() time instead of hardcoding it, so a VM restart doesn't require
+    a manual config update to keep cerebrate-infer reachable."""
+    try:
+        out = subprocess.check_output(
+            ["ip", "route", "show", "default"], text=True, timeout=2
+        )
+        for line in out.splitlines():
+            parts = line.split()
+            if "via" in parts:
+                return parts[parts.index("via") + 1]
+    except (subprocess.SubprocessError, OSError, ValueError):
+        pass
+    return DEFAULT_HOST
+
+
 def _decode_image_bytes(payload: InferenceRequest) -> bytes:
     if not payload.inputs:
         raise ValueError("no inputs provided")
@@ -81,7 +101,7 @@ class CerebrateInferRuntime(MLModel):
         extra = {}
         if self.settings.parameters is not None:
             extra = self.settings.parameters.extra or {}
-        self._host = extra.get("cerebrate_infer_host", DEFAULT_HOST)
+        self._host = extra.get("cerebrate_infer_host") or _discover_avf_gateway()
         self._port = int(extra.get("cerebrate_infer_port", DEFAULT_PORT))
         self._lock = asyncio.Lock()
         self._reader = None
