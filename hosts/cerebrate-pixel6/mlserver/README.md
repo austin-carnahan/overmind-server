@@ -583,20 +583,22 @@ that call's delta. Re-verified after the fix: three consecutive `load`
 calls against an already-loaded model leave the refcount at `1` and the
 same worker running throughout.
 
-### A separate, pre-existing bug found along the way (not fixed here, out of Stage 2's scope)
+### A separate, pre-existing bug found along the way (fixed, 2026-09-17)
 
 Restarting `cerebrate-generate` fresh (confirmed via a new PID) and
 sending it a single short prompt as its very first request returned
 `RuntimeError: cerebrate-generate error: Max number of tokens reached.`
 — immediately, not after any real conversation history. Every earlier
 successful generation test anywhere in this project happened to reuse an
-already-running, previously-warmed process; this is the first time
+already-running, previously-warmed process; this was the first time
 anything actually exercised a **freshly started** `cerebrate-generate`
-process's first request. The error string comes from LiteRT-LM's own
-library, not from `cerebrate-generate.cc` (which has no token-limit
-configuration of its own) — this is a real, pre-existing issue in the
-session/generation path, unrelated to process lifecycle (which is
-confirmed correct: fresh PID, correct refcount, no crash). Left
-unaddressed here since fixing generation behavior is out of scope for a
-lifecycle-management stage; worth its own investigation before Qwen3 or
-any other model rides on this same path (Phase E).
+process's first request. Root cause and fix (three iterations, only the
+third one actually correct) are documented in
+[cerebrate-generate/README.md](../cerebrate-generate/README.md#real-bug-found-and-fixed-generation-never-terminated-on-a-genuinely-fresh-process-2026-09-17):
+the default sampler was pure greedy decoding, which got this small model
+stuck in a deterministic repetition loop that never reached its own EOS
+token — unrelated to process lifecycle (which was already confirmed
+correct: fresh PID, correct refcount, no crash) or to `max_num_tokens`
+sizing (the first two hypotheses tried, both real gaps but not the
+actual cause). Fixed by configuring an explicit top-p/top-k/temperature
+sampler instead of trusting the C API's undocumented default.

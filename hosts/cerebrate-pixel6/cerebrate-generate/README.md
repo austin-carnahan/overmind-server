@@ -144,10 +144,58 @@ Full pipeline verification (adapter, MLServer 1.7.1, Caddy,
 [MLServer adapter's README](../mlserver/models/cerebrate-generate/README.md)
 and the design notes' Progress Notes.
 
+## Real bug found and fixed: generation never terminated on a genuinely fresh process (2026-09-17)
+
+Found via Phase B Stage 2's own lifecycle testing (the first time
+anything in this project restarted `cerebrate-generate` fresh and sent
+it a request, rather than reusing an already-running, previously-warmed
+process): a trivial prompt like "Reply with just the word OK." returned
+`Max number of tokens reached` from the very first request. Chased
+through three distinct, real fixes rather than stopping at the first
+plausible one:
+
+1. **First hypothesis (wrong, but not baseless): the engine's default
+   `max_num_tokens` context budget is too small.** Set it explicitly to
+   8192 — SmolLM2-135M-Instruct's own real `max_position_embeddings`,
+   verified against its published `config.json`, not guessed. The
+   failure still happened, just later (~243s of real decode time
+   instead of near-instantly) — confirming the ceiling itself wasn't
+   the actual problem, generation was running all the way to whatever
+   ceiling existed.
+2. **Second hypothesis (also real, also insufficient alone): the
+   default session doesn't apply the chat/instruct template.** Made
+   `apply_prompt_template` explicit (`true`) instead of trusting
+   `litert_lm_engine_create_session(engine, NULL)`'s undocumented
+   default. No behavior change — ruled out.
+3. **Actual root cause, found by capturing the raw generated text
+   directly off the wire (bypassing MLServer, which discards partial
+   output on an error frame)**: the default sampler is pure greedy
+   (argmax) decoding, and this small model gets stuck in a
+   deterministic repetition loop — confirmed literally, the model
+   repeated "I'm glad you found the information helpful." verbatim for
+   over 8,000 tokens straight, never reaching its own EOS token (the
+   engine does report exactly one configured stop token — it's real,
+   the model just never samples it under pure greedy decoding here).
+   Fixed by configuring an actual sampler: `kLiteRtLmSamplerTypeTopP`,
+   `top_k=40`, `top_p=0.9`, `temperature=0.7` — conventional values, not
+   tuned. `top_p` mode still validates `top_k > 0` internally (confirmed
+   via `INVALID_ARGUMENT: k must be positive` when left unset).
+
+Re-verified after the real fix: two different fresh-process requests
+both completed in single-digit seconds (not 200+) with a natural `DONE`,
+no error, across a genuinely new PID each time. Response *quality* is a
+separate, known limitation of a 135M-parameter model (e.g. answered
+"What is 2+2?" incorrectly) — not something this fix claims to solve.
+
+This C API (v0.1.0) exposes `RepetitionPenaltyConfig`/`NoRepeatNgramConfig`
+constructors and field setters, but no function anywhere that attaches
+either one to a session, sampler, or engine — unfinished bindings as of
+this release, not a path available here. If a future LiteRT-LM C API
+release wires those in, an explicit repetition penalty would likely be a
+more principled fix than tuning `top_p`/`temperature` further.
+
 ## Not yet done
 
-- No `max_tokens`/`temperature`/sampling parameters exposed yet — the
-  worker uses LiteRT-LM's defaults.
 - No error-path testing (worker down, malformed prompt, oversized
   frame) — only the success path has been verified so far.
 - No watchdog timeout on the condvar wait if the callback thread never
