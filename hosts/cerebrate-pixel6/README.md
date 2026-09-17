@@ -74,7 +74,14 @@ it; neither exists yet, since nothing should be created until Phase 2
 gives it real content. No code changed — existing MobileNet
 classification through `inference.home.arpa` reverified working and
 unmodified (`"military uniform"`, 88.6% confidence, matching every
-prior test).
+prior test). **Phase 2/3 done**:
+[`cerebrate-generate`](cerebrate-generate/README.md), a real persistent
+LiteRT-LM worker (engine loaded once, port `8766`), built against
+LiteRT-LM's v0.16.0 C API prebuilt (no Bazel) and verified from the
+real Debian guest over the production AVF path — correct, coherent
+generated text (`"The capital of France is Paris."`), multiple requests
+per connection and across fresh connections, stable process throughout.
+Not yet wired to MLServer — that's the next phase.
 
 A factory-reset Pixel 6, converted into a dedicated always-on inference node
 for the home network. Second member of the "cerebrate" fleet/class (small

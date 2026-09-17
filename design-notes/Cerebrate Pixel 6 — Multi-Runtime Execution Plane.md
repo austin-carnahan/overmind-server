@@ -621,6 +621,55 @@ Zero code changes, as designed — `cerebrate-infer` already satisfied
 Phase 2 (native LiteRT-LM stack on Android, as its own persistent
 `cerebrate-generate` process) is next.
 
+## Phase 2/3 done: `cerebrate-generate` is real, not a spike (2026-09-17)
+
+Reported as one combined pass rather than two separate announcements —
+the feasibility spike (above) already did what Phase 2 originally set
+out to validate (does the native stack even work on this hardware), so
+the actual new work this pass was entirely Phase 3's: turning that
+throwaway harness into a real, persistent, TCP-serving worker.
+
+Built [`cerebrate-generate`](../hosts/cerebrate-pixel6/cerebrate-generate/README.md),
+modeled directly on `cerebrate-infer.cc`'s own structure: loads the
+`.litertlm` model and creates the LiteRT-LM `Engine` **once** at
+startup (not per-request, unlike the spike, which created one engine
+and exited), then serves an `accept()`/serial-request loop — one
+`Session` created and destroyed per request, `generate_content` run
+synchronously, `SO_RCVTIMEO` applied to every accepted client socket
+from the start this time (the lesson from `cerebrate-infer`'s Stage 5
+Phase 4 wedged-worker bug, applied proactively rather than discovered
+the hard way again).
+
+Wire protocol is a 4-byte big-endian length prefix + UTF-8 text, in
+both directions — a length prefix rather than `cerebrate-infer`'s
+fixed-byte-count framing, since prompt/response text is variable-length
+and may contain arbitrary bytes (including newlines) that would break
+line-delimited framing. Explicitly a native-worker validation protocol,
+not the final Debian-facing wire format (that's a later phase).
+
+Build note: LiteRT-LM ships an actual **versioned C API shared-library
+release asset** (`litert_lm_c_api-0.1.0.zip` on the v0.16.0 GitHub
+release) — no AAR-unzip trick needed this time, unlike the legacy
+TFLite C API. Compiled with one plain `clang++` invocation, no Bazel,
+same as the spike.
+
+Verified from the real Debian guest, over the real production AVF
+path (not a loopback/ADB shortcut): two requests over one reused
+connection (`"Reply with the word hello."` → coherent greeting; `"What
+is the capital of France?"` → **"The capital of France is Paris."**,
+correct, not just coherent), plus a third request on a fresh new
+connection to confirm the outer `accept()` loop also works across
+multiple connections. `request_id` incremented correctly throughout;
+worker PID never changed (no crash, no restart needed); server-side
+logged timing matched client-observed elapsed time closely.
+
+Not yet done, deliberately deferred: GPU backend re-validation against
+the persistent worker specifically (already proven functional for this
+model in the spike — re-testing wouldn't teach anything new about the
+worker's own design); streaming (`generate_content_stream`); process
+supervision/health checks; the actual MLServer adapter. Those are
+Phase 4/5's job.
+
 ## Original design-doc quote, superseded by the process-architecture revision
 
 (Retained for history — no longer the current design.) The initial
