@@ -81,7 +81,16 @@ LiteRT-LM's v0.16.0 C API prebuilt (no Bazel) and verified from the
 real Debian guest over the production AVF path — correct, coherent
 generated text (`"The capital of France is Paris."`), multiple requests
 per connection and across fresh connections, stable process throughout.
-Not yet wired to MLServer — that's the next phase.
+**Phase 4/5 done**: a standalone
+[`cerebrate-generate` MLServer adapter](mlserver/models/cerebrate-generate/README.md)
+now exposes it as a second model, `cerebrate-generate`, alongside the
+unmodified classifier — verified correct both locally and through the
+full external `inference.home.arpa` path, both models coexisting under
+one MLServer instance without interfering with each other. One open
+item from the plan's own Success Criteria remains: incremental/
+streaming output is not yet implemented (`cerebrate-generate` only
+does synchronous generation today) — deliberately deferred, not
+forgotten.
 
 A factory-reset Pixel 6, converted into a dedicated always-on inference node
 for the home network. Second member of the "cerebrate" fleet/class (small

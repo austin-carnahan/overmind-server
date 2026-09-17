@@ -670,6 +670,48 @@ worker's own design); streaming (`generate_content_stream`); process
 supervision/health checks; the actual MLServer adapter. Those are
 Phase 4/5's job.
 
+## Phase 4/5 done, with one honest gap: no streaming yet (2026-09-17)
+
+Reported together, not as two separate passes — building Phase 4's
+adapter and testing it immediately satisfied Phase 5's own stated bar
+("expose through the same overall `inference.home.arpa` serving
+architecture... verify end-to-end"), so there was no separate step left
+to report.
+
+Added a standalone
+[`cerebrate-generate` MLServer adapter](../hosts/cerebrate-pixel6/mlserver/models/cerebrate-generate/README.md)
+— a second MLServer model directory, dialing `cerebrate-generate`'s
+length-prefixed TCP protocol, with zero shared code with the existing
+`cerebrate-infer` adapter (the AVF-gateway auto-discovery helper is
+duplicated on purpose, not extracted into a shared module — these two
+adapters are meant to stay fully independent, per the whole point of
+the process-architecture revision above).
+
+Verified: correct generation both locally inside the guest and through
+the full external path
+(`inference.home.arpa` → Caddy → relay → tunnel → MLServer → this
+adapter → AVF → `cerebrate-generate` → LiteRT-LM), and — critically —
+the existing classifier queried immediately alongside it in the same
+session, confirming both models genuinely coexist under one MLServer
+instance without interfering with each other.
+
+**Checking this pass against all nine of this document's own Success
+Criteria, honestly:**
+
+1. Existing MobileNet classification unmodified — ✅
+2. Graph/Session as two independent processes by construction — ✅
+3. Official `.litertlm` model loads in `cerebrate-generate`, independent of `cerebrate-infer` — ✅
+4. Debian submits a semantic prompt with no tokenizer/tensor/KV-cache handling — ✅
+5. Android performs the full LiteRT-LM generation lifecycle — ✅
+6. **Output returned incrementally rather than only after full completion — ❌ not yet done.** `cerebrate-generate` only implements synchronous `generate_content`; `generate_content_stream` is exported but unused. This is deliberately deferred, not forgotten — it's genuinely the one remaining piece of the original plan.
+7. Text-generation service accessible through the same MLServer/Overmind architecture as graph inference — ✅
+8. Actual Pixel 6 execution backend measured, not assumed (done in the spike: NPU unavailable, CPU/XNNPACK and GPU both confirmed via logs) — ✅
+9. Existing NNAPI classification performance/behavior not sacrificed — ✅ (`cerebrate-infer` untouched throughout)
+
+So: 8 of 9 criteria met. The plan isn't being declared fully complete —
+streaming is the honest, explicitly-tracked remainder, not a detail
+being quietly dropped.
+
 ## Original design-doc quote, superseded by the process-architecture revision
 
 (Retained for history — no longer the current design.) The initial
