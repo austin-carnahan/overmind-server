@@ -109,21 +109,58 @@ A workload being prompted, multimodal, or producing structured output does **not
 
 ## Android backends
 
-Conceptually:
+**Graph Execution is a contract, not a synonym for NNAPI.** Its
+intended normal/forward-looking backend is `LiteRtCompiledBackend`
+(LiteRT `CompiledModel`, `.tflite` artifacts, whatever CPU/GPU/NPU the
+device actually supports). `NnapiTfliteBackend` exists specifically
+because empirical testing on *this* hardware (Tensor G1) showed the
+modern LiteRT NPU route doesn't currently expose the TPU effectively,
+while the legacy NNAPI route delegates to it and performs exceptionally
+well. That's a Pixel-6-specific compatibility path, not the
+architecture's default — keeping that distinction explicit is what
+stops a Pixel 6 workaround from silently becoming "the" design.
+
+Implementation status, as of the streaming pass (2026-09-17):
 
 ```text
 GraphExecution
 │
-├── NnapiTfliteBackend
-│     └── current Pixel 6 compatibility backend
+├── NnapiTfliteBackend        ← IMPLEMENTED, production (cerebrate-infer)
+│     └── Pixel 6 (Tensor G1) empirical compatibility path
 │
-└── LiteRtCompiledBackend
-      └── modern LiteRT direction
+└── LiteRtCompiledBackend     ← NOT implemented — spiked only (see
+      └── modern/default direction   "Backend decision" in the main
+                                       Pixel 6 design notes), never
+                                       integrated into cerebrate-infer
 ```
 
-### `NnapiTfliteBackend`
+So today's multi-runtime architecture has **two operational runtime
+paths** (`NnapiTfliteBackend` for Graph Execution, `LiteRtLmBackend` for
+Session Execution) and **one planned-but-unbuilt graph backend**
+(`LiteRtCompiledBackend`) — not three operational paths. The earlier
+LiteRT v2 spike (CPU/GPU worked, NPU didn't, MobileNet was markedly
+slower than the NNAPI path on this hardware) was an exploratory
+benchmark that settled which backend `cerebrate-infer` should use — it
+was never wired into a running backend of its own.
 
-Retain the existing implementation that has already demonstrated:
+The choice between graph backends is meant to be **model- and
+hardware-dependent, not globally fixed**: MobileNet goes to NNAPI on
+this Pixel because that's what's been measured; a different `.tflite`
+model might do better through modern LiteRT GPU execution; a future
+Tensor chip with real LiteRT NPU support might make the compatibility
+backend unnecessary entirely for that hardware. The evolutionary story:
+
+```text
+Pixel 6 today                       Future Pixel / other accelerator
+Graph → NnapiTfliteBackend          Graph → LiteRtCompiledBackend
+         (compatibility path)                (normal path)
+Session → LiteRtLmBackend           Session → LiteRtLmBackend
+
+NnapiTfliteBackend retained only where empirical performance/support
+justifies it on that specific hardware — not carried forward by default.
+```
+
+### `NnapiTfliteBackend` — implemented, production
 
 ```text
 .tflite
@@ -137,17 +174,31 @@ google-edgetpu
 Tensor G1 TPU
 ```
 
-This remains the preferred Pixel 6 path for compatible workloads where it demonstrably outperforms the newer alternatives.
+The preferred path for compatible workloads on *this* hardware, where
+it demonstrably outperforms the newer alternative. Do not remove or
+replace it merely for API uniformity.
 
-Do not remove or replace it merely for API uniformity.
+### `LiteRtCompiledBackend` — not implemented, a real future spike
 
-### `LiteRtCompiledBackend`
-
-Treat LiteRT `CompiledModel` as the modern graph-execution backend to evaluate for future models and hardware.
+Treat LiteRT `CompiledModel` as the modern graph-execution backend to
+evaluate for future models and hardware — this is the normal/default
+direction for Graph Execution generally, even though this specific
+device doesn't use it today.
 
 Its natural deployment artifact is `.tflite`.
 
-Do not assume that its NPU path works on Tensor G1 simply because the API supports NPU execution in general. Backend availability must remain empirical.
+Do not assume that its NPU path works on Tensor G1 (or any future
+device) simply because the API supports NPU execution in general.
+Backend availability must remain empirical, per the same discipline
+that ruled it out for MobileNet on this hardware.
+
+A clean, self-contained future spike: implement a minimal
+`LiteRtCompiledBackend` behind Graph Execution — inside `cerebrate-infer`,
+since both backends share the same runtime contract and process, unlike
+the Graph/Session split — without disturbing the proven NNAPI backend,
+then let individual `.tflite` models choose whichever backend actually
+performs/supports best for them. Not started; recorded here so it isn't
+lost, not committed to as near-term work.
 
 ---
 
