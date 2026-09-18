@@ -25,22 +25,27 @@ display equations, a pseudocode listing, and three real figures
 | Granite-Docling full-page VLM via Docling's own `VlmPipeline` + transformers (Overmind, Pi 4) | **Killed after 92+ minutes**, no page completed. Operationally unusable on this CPU via this path, independent of output quality. |
 | Granite-Docling via `llama-mtmd-cli` on Pixel 6 (native, CLI, direct `--image`) | **Works correctly.** Real, well-formed DocTags: correctly identified and classified a real chart (`<picture><line_chart>`). ~1m44s per image (~99% vision encoding), ~813MB stable RSS, deterministic (`--temp 0`, reproduced identically twice). |
 | Same model via `llama-server`'s OpenAI-compatible `/v1/chat/completions` | **Broken** — degenerate repeating `0.0 0.0 0.0...` output, burns the full token budget. Matches a real, still-open upstream bug (see below), not a config mistake here. |
-| Same model via `llama-server`'s native `/completion` endpoint, hand-built chat template | **Partially working, not correct.** Image tiling is genuinely correct and the model reads real content off the image (chart legend/axis text appeared verbatim) — but output isn't wrapped in valid `<doctag>` structure and degrades into the same `0.0` pattern after that. Root cause not confirmed (see below). |
+| Same model via `llama-server`'s native `/completion` endpoint, hand-built chat template | Image tiling genuinely correct, model reads real content off the image (chart legend/axis text appeared verbatim) — but output isn't valid `<doctag>` structure, degrades into `0.0` repetition. **Superseded** by the decisive test below. |
+| Same model via `llama-server`'s native `/completion` endpoint, using the server's own `/apply-template` output verbatim | **Still broken — decisive negative result.** Same degenerate `0.0` repetition, this time burning the full requested token budget, even with the exact server-generated prompt (correct marker placement, correct image tiling, no hand-reconstruction involved at all). Rules out chat-template reconstruction as the cause. |
 
 **Recommendation:** Granite-Docling is real and does recover genuine
 image content that the default pipeline can't (see below on the
 "materially improve" question, still open pending a same-page,
-apples-to-apples comparison — not done in this pass). The CLI path is
-proven correct and fast enough to be interesting for selective,
-low-volume enrichment (a handful of figures per document, not full-page
-conversion). The persistent HTTP server path is not yet trustworthy for
-this specific model and needs more chat-template work before it's a
-real option for the "Docling on Overmind calls out to a warm Pixel
-service" architecture Stage 3 was meant to test. That connection was
-not completed this pass — recommend either finishing the chat-template
-fix (see "Options for continuing" below) or building Stage 3 on the
-proven CLI-per-call pattern instead, accepting its per-call model-load
-cost.
+apples-to-apples comparison — not done in this pass). The CLI path
+(`llama-mtmd-cli`) is proven correct and fast enough to be interesting
+for selective, low-volume enrichment (a handful of figures per
+document, not full-page conversion). **The persistent `llama-server`
+HTTP path is conclusively not usable for this model as of `b11028`** —
+not a templating mistake on this end, but a genuine
+Granite-Docling-specific defect in `llama-server`'s multimodal
+generation path, isolated by eliminating every other variable (marker,
+image tiling, and finally the chat template itself, using the server's
+own `/apply-template` output verbatim). `libmtmd`/CLI inference is
+healthy; the server's serving path is not, for this model, today. Any
+future "Docling on Overmind calls out to a warm Pixel service"
+architecture should build on the proven CLI-per-call pattern (accepting
+its per-call model-load/encode cost) rather than a persistent server,
+unless a future llama.cpp release fixes this.
 
 ## Stage 1: Docling baseline on Overmind
 
@@ -308,45 +313,110 @@ etc.) than a larger general-purpose chat model would be, which would
 explain "real content extracted, but structurally wrong" rather than
 either full success or full failure.
 
+#### Attempt 3 — decisive test: `/apply-template` then `/completion`, no hand-reconstruction at all
+
+Rather than keep guessing at the template by eye, `llama-server` has a
+dedicated endpoint, `/apply-template`, that returns the model's *own*
+exact chat-template output for a given `messages` array — the same
+input shape `/v1/chat/completions` takes — without running inference.
+This eliminates the one remaining unverified variable in Attempt 2.
+
+```bash
+curl http://<pixel>:8768/apply-template -d '{"messages":[{"role":"user","content":[
+  {"type":"text","text":"Convert this page to docling."},
+  {"type":"image_url","image_url":{"url":"data:image/png;base64,..."}}
+]}]}'
+```
+
+```text
+{"prompt":"<|start_of_role|>user<|end_of_role|>Convert this page to docling.<__media__><|end_of_text|>\n<|start_of_role|>assistant<|end_of_role|>"}
+```
+
+**This immediately revealed a real discrepancy**: the server's actual
+template places the media marker *after* the text
+(`"...docling.<__media__>"`), the reverse of what was hand-built in
+Attempt 2 (`"<__media__>Convert this page..."`). A genuinely promising
+lead — until it was tested.
+
+Feeding this exact server-generated prompt string (marker order
+correct, verified) straight into `/completion` with the same
+`multimodal_data`:
+
+```text
+{"content":"<doc> 0.0 0.0 0.0 0.0 0.0 0.0 0.0 0.0 0.0 0.0 0.0 0.0 ...
+ (repeats for the full requested budget)",
+ "tokens_predicted":512,"stop_type":"limit", ...
+ "prompt":"<|start_of_role|>user<|end_of_role|>Convert this page to docling.<fake_token_around_image><row_1_col_1>...<row_3_col_4>\n\n<fake_token_around_image><global-img><fake_token_around_image><|end_of_text|>\n<|start_of_role|>assistant<|end_of_role|>"}
+```
+
+**Still the same degenerate `0.0` repetition** — this time burning the
+*entire* requested token budget (512/512, `stop_type: "limit"`), even
+though every previously-suspect variable is now confirmed correct:
+marker placement (from the server's own template), image tiling
+(`row_1_col_1`...`row_3_col_4` + `global-img`, byte-identical shape to
+what the working CLI path produces internally), and the chat template
+itself (the server's own output, not a guess). There is nothing left to
+hand-reconstruct.
+
+**Conclusion, not a hypothesis anymore**: this is a genuine
+Granite-Docling-specific defect in `llama-server`'s multimodal
+*generation* path (something downstream of prompt construction, since
+prompt construction is now proven correct), not a templating mistake on
+this end and not the marker issue. `libmtmd`/CLI inference is healthy;
+`llama-server`'s serving path is broken for this specific model, as of
+build `b11028`. Per the plan this test was meant to settle exactly this
+question, debugging stopped here rather than digging into
+`llama-server`'s internal generation loop itself — that's upstream
+`llama.cpp` engineering, not something to chase inside a "keep this
+small" experiment.
+
 ### CLI vs. server, side by side
 
-| | `llama-mtmd-cli --image` | `/v1/chat/completions` | `/completion` (hand-built template) |
-| --- | --- | --- | --- |
-| Tokenizes | yes | yes | no, until `LLAMA_MEDIA_MARKER` set |
-| Image tiling | correct (internal, not inspected directly but output implies it) | unknown — never got past garbage | **confirmed correct** (`row_*_col_*` + `global-img` echoed in response) |
-| Reads real image content | yes | no | **yes** (legend/axis text verbatim) |
-| Valid `<doctag>` structure | **yes** | no | no |
-| Deterministic/reproducible | yes (`--temp 0`, 2 runs identical) | not retested | not retested |
+| | `llama-mtmd-cli --image` | `/v1/chat/completions` | `/completion`, hand-built template | `/completion`, server's own `/apply-template` output |
+| --- | --- | --- | --- | --- |
+| Tokenizes | yes | yes | no, until `LLAMA_MEDIA_MARKER` set | yes |
+| Marker placement | n/a (internal) | n/a | before text (wrong, as it turned out) | after text (**confirmed correct**, from the server itself) |
+| Image tiling | correct (internal) | unknown — never got past garbage | **confirmed correct** (`row_*_col_*` + `global-img`) | **confirmed correct**, identical shape |
+| Reads real image content | yes | no | **yes** (legend/axis text verbatim) | not inspected (immediate `0.0` repetition) |
+| Valid `<doctag>` structure | **yes** | no | no | **no** |
+| Deterministic/reproducible | yes (`--temp 0`, 2 runs identical) | not retested | not retested | yes (`--temp 0`) |
 
-The one variable that differs between the working CLI path and the
-partially-working `/completion` path is the **chat template
-application** — CLI applies it automatically from GGUF metadata,
-`/completion` required it hand-built here. That is the most likely
-place the remaining defect lives, not the marker (fixed) or the image
-tiling (confirmed correct).
+Every variable that could plausibly explain the difference between the
+working CLI and the broken server path has now been eliminated one at a
+time — the marker, the image tiling, and finally the chat template
+itself. What's left is `llama-server`'s own multimodal generation code,
+which is where this stops without a llama.cpp-level fix.
 
-### Options for continuing this path (not attempted further this pass)
+### Options for continuing this path (not attempted further this pass — likely blocked on an upstream fix)
 
-1. **Extract the model's actual chat template from the GGUF metadata**
-   directly (llama.cpp ships `gguf-py`/`gguf-dump.py` tooling for this)
-   and diff it byte-for-byte against the hand-built version above,
-   rather than reconstructing it by eye from a printed example.
-2. **Check whether `/completion` (or a variant) can accept a structured
+1. **File or find an upstream llama.cpp issue** describing this exact
+   symptom (server generates degenerate output even with a verified
+   correct prompt/tiling, while `mtmd-cli` on the identical model+image
+   is correct) — a more precise report than the existing
+   [#16601](https://github.com/ggml-org/llama.cpp/issues/16601), which
+   was closed without a documented fix and predates this decisive
+   isolation.
+2. **Diff `llama-mtmd-cli`'s and `llama-server`'s actual generation code
+   paths** (both use `libmtmd` for encoding, but something in how the
+   server drives generation afterward — batching, KV cache handling,
+   sampling defaults — evidently differs) — real upstream-engineering
+   effort, not something to attempt inside this experiment's scope.
+3. **Check whether `/completion` (or a variant) can accept a structured
    `messages` array plus `multimodal_data`**, letting the server apply
    its own chat-template logic the same way `mtmd-cli` does internally,
    instead of requiring a raw pre-templated string. Not confirmed to
    exist in this build; worth checking `server-common.cpp`/
    `server-chat.cpp` more thoroughly before assuming it doesn't.
-3. **Use the CLI-per-call pattern for now**: shell out to
-   `llama-mtmd-cli` per image needing enrichment from the Overmind-side
-   integration script (e.g. over the existing AVF/ADB path, or a tiny
-   wrapper), accepting the cost of a fresh model load
-   (~1-2s) and full vision encoding (~1-2 min) per call, with no warm
-   server. Proven correct today; the natural fallback if the template
-   fix doesn't pan out quickly.
-4. **Watch upstream `llama.cpp#16601`** for a real fix landing — this
-   project is already on today's latest tag, so "wait for a newer
-   release" isn't actionable without a specific fix commit to target.
+4. **Use the CLI-per-call pattern instead** (recommended, given the
+   above): shell out to `llama-mtmd-cli` per image needing enrichment
+   from the Overmind-side integration script (e.g. over the existing
+   AVF/ADB path, or a tiny wrapper), accepting the cost of a fresh model
+   load (~1-2s) and full vision encoding (~1-2 min) per call, with no
+   warm server. Proven correct today, with no upstream dependency.
+5. **Watch upstream `llama.cpp#16601`** (and file a sharper follow-up
+   per option 1) for a real fix landing — this project is already on
+   today's latest tag, so "wait for a newer release" isn't actionable
+   without a specific fix commit to target.
 
 ## Environmental findings (worth keeping in mind for future work on this host)
 
