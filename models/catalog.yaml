@@ -105,6 +105,19 @@ models:
           # production today.
           pixel6_litertlm_cpu: passed
           pixel6_litertlm_gpu: passed
+        # Text-only, so the plain C API (engine.h) is sufficient -- this
+        # is the good case, recorded so it's the visible contrast to
+        # granite-docling-258M's below. Confirmed real via the LiteRT-LM
+        # source (session_utils_test.cc): the plain C API's
+        # SessionAdvanced path only rejects *non-text* content that
+        # isn't already a TensorBuffer; text input has no such gap.
+        api_requirements:
+          modality: text
+          litertlm_surface:
+            - c_session
+        cerebrate_support:
+          native_c_session: true
+          validated: true
     worker:
       binary: cerebrate-generate
       port: 8766

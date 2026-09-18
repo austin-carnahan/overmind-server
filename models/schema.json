@@ -60,6 +60,41 @@
             "enum": ["untested", "pending", "passed", "failed", "experimental"]
           },
           "description": "Keyed by device_backend, e.g. pixel6_nnapi. Measured status only -- never assumed."
+        },
+        "api_requirements": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["modality", "litertlm_surface"],
+          "description": "Only meaningful for litertlm artifacts. Found necessary after granite-docling-258M (litert-community): its multimodal .litertlm cannot be driven through the plain C API's SessionAdvanced path at all (verified against the real LiteRT-LM source, not assumed) -- only through the full C++ SDK's InputImage(TensorBuffer) construction, or the Kotlin/Swift app layers. Recording this per-artifact so that gap isn't rediscovered per model.",
+          "properties": {
+            "modality": {
+              "type": "string",
+              "enum": ["text", "vision", "audio", "multimodal"]
+            },
+            "litertlm_surface": {
+              "type": "array",
+              "minItems": 1,
+              "items": {
+                "type": "string",
+                "enum": ["c_session", "cpp_session_advanced", "kotlin_conversation", "swift_conversation"]
+              },
+              "description": "Which integration surface(s) this artifact's modality actually requires. c_session (engine.h's plain C API) is confirmed multimodal-incapable -- it can only construct InputImage from raw encoded bytes, which SessionAdvanced's PreprocessContents rejects for anything but text. cpp_session_advanced is the verified-real, heavier full-C++-SDK path (InputImage(TensorBuffer), CMake+Abseil-cpp build, same shape as the LiteRT CompiledModel spike's C++ SDK path) that Cerebrate's existing native-worker architecture could still reach without an Android app. kotlin_conversation/swift_conversation are the model card's only currently-documented working paths, both requiring an actual app, not a native binary."
+            }
+          }
+        },
+        "cerebrate_support": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "native_c_session": {
+              "type": "boolean",
+              "description": "Whether this artifact's required litertlm_surface is reachable from the existing plain-C-API native worker pattern (cerebrate-generate) without further build/architecture changes."
+            },
+            "validated": {
+              "type": "boolean",
+              "description": "Whether native_c_session was actually exercised end-to-end on-device, not assumed from reading the API surface alone."
+            }
+          }
         }
       }
     },

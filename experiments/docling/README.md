@@ -472,6 +472,25 @@ Darwinn compilation, for either graph. Closed: the ~99s vision-encoding
 cost stays a CPU cost on this Pixel 6 via this export and ORT version;
 no further NNAPI/TPU work planned on this specific graph.
 
+## Follow-up: does LiteRT-LM's own `.litertlm` conversion compare to the `llama.cpp` path? Blocked, not answered
+
+Separate spike
+[`hosts/cerebrate-pixel6/spikes/granite-docling-litertlm/`](../../hosts/cerebrate-pixel6/spikes/granite-docling-litertlm/README.md)
+tried `litert-community/granite-docling-258M` as a same-runtime
+alternative to the CLI path (Cerebrate already depends on LiteRT-LM for
+`cerebrate-generate`). **Never reached a quality comparison**: the
+plain C API's `SessionAdvanced` path (used by `generate_content` and
+`run_prefill`/`run_decode` alike) cannot accept image input at all —
+verified against the real LiteRT-LM source across three consecutive
+releases, not one error message taken at face value. A genuinely
+working C++ path exists (`InputImage(TensorBuffer)`, LiteRT-LM's full
+C++ SDK — a heavier build than the plain-C spikes elsewhere in this
+project), but wasn't built out for this spike; the proven `llama.cpp`
+path already meets the current need. `models/schema.json` gained
+`api_requirements`/`cerebrate_support` fields as a direct result, so a
+future multimodal `.litertlm` gets its required integration surface
+checked before staging or benchmarking, instead of rediscovering this.
+
 ## Environmental findings (worth keeping in mind for future work on this host)
 
 - **`overmind-01` has zero swap configured.** No OOM was hit in this
