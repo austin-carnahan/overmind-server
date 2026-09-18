@@ -418,6 +418,60 @@ which is where this stops without a llama.cpp-level fix.
    today's latest tag, so "wait for a newer release" isn't actionable
    without a specific fix commit to target.
 
+## Follow-up: ONNX vision encoder correctness (off-device, HF reference)
+
+Before any on-device NNAPI work, verified that
+`onnx-community/granite-docling-258M-ONNX`'s `vision_encoder.onnx`
+(the official, pre-split export) actually matches the real HF
+`transformers` model's output, on the exact same image and processor
+settings — [`compare_vision_encoder.py`](compare_vision_encoder.py):
+
+```bash
+python3 compare_vision_encoder.py test-chart.png <hf_checkpoint_dir> <onnx_vision_encoder_path>
+```
+
+```text
+HF image_hidden_states shape: (13, 64, 576)
+ONNX image_features shape:    (13, 64, 576)
+
+max_abs_error:  1.625e-03
+mean_abs_error: 6.194e-05
+mean_rel_error: 4.744e-05
+cosine_sim:     1.00000000
+verdict: PASS
+```
+
+The 13-tile shape independently confirms the same image tiling seen in
+the `llama-mtmd-cli` DocTags output above (12 sub-tiles + 1 global
+image). One real snag along the way: HF's local cache stores files as
+symlinks into a shared, independently-hashed blob store, which ONNX
+Runtime's external-data loader rejects (`External data path escapes
+model directory`) since the `.onnx` and `.onnx_data` blobs resolve to
+different real directories — fixed by copying both (dereferenced) into
+one plain directory before loading.
+[`dump_vision_encoder_tensors.py`](dump_vision_encoder_tensors.py)
+saves the exact input/reference tensors from this same run as raw
+binary files, used by the on-device spike below.
+
+## Follow-up: does ORT/NNAPI accelerate the vision-encoding bottleneck? No — closed decisively
+
+The CLI path's ~104s per image is ~99% vision encoding. Separate spike
+[`hosts/cerebrate-pixel6/spikes/granite-docling-vision-encoder/`](../../hosts/cerebrate-pixel6/spikes/granite-docling-vision-encoder/README.md)
+isolated the real ONNX vision encoder
+(`onnx-community/granite-docling-258M-ONNX`) and tested it against ORT's
+NNAPI execution provider, using the same correctness-tensor discipline
+as the MobileNet ORT characterization. **Result: correctness passes
+cleanly (bit-identical output, `cosine_sim=1.0`), but NNAPI never
+partitions a single node from this graph** — confirmed both as-exported
+(dynamic `batch_size`/`num_images` dimensions) and after fixing those
+shapes to static values via `onnxruntime.tools.make_dynamic_shape_fixed`
+(a real, plausible cause per ONNX Runtime's own mobile docs, eliminated
+directly rather than assumed). `logcat` shows NNAPI discovers
+`google-edgetpu` but never logs a `GetCapability` partitioning pass or a
+Darwinn compilation, for either graph. Closed: the ~99s vision-encoding
+cost stays a CPU cost on this Pixel 6 via this export and ORT version;
+no further NNAPI/TPU work planned on this specific graph.
+
 ## Environmental findings (worth keeping in mind for future work on this host)
 
 - **`overmind-01` has zero swap configured.** No OOM was hit in this
