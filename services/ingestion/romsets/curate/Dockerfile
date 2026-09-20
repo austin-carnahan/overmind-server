@@ -16,6 +16,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     p7zip-full \
     wget \
     sudo \
+    adduser \
     git \
     ca-certificates \
     python3 \
