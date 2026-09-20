@@ -1,0 +1,12 @@
+{
+  "name": "cerebrate-gguf",
+  "implementation": "cerebrate_gguf_runtime.CerebrateGgufRuntime",
+  "parameters": {
+    "version": "v0.1.0",
+    "extra": {
+      "cerebrate_gguf_port": 8768,
+      "cerebrate_gguf_model_path": "/data/local/tmp/granite-docling-258M-bf16.gguf",
+      "cerebrate_gguf_mmproj_path": "/data/local/tmp/mmproj-model-f16.gguf"
+    }
+  }
+}

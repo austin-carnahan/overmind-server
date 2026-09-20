@@ -1,0 +1,150 @@
+# Fire TV Stick 4K Max provisioning manifest.
+# Per the implementation plan's Phase 3 goals: application name, upstream
+# project, package name, version, download artifact, architecture,
+# checksum (when upstream publishes one), installation source, update
+# mechanism. Verified against each project's real current release
+# (2026-09-19) -- not copied from the plan's own citations unchecked; two
+# real corrections were found doing so (see notes below).
+
+apps:
+  - name: Projectivy Launcher
+    upstream: https://github.com/spocky/miproja1
+    # The implementation plan cited fraee/Projectivy-Launcher, which is a
+    # fork/mirror with zero GitHub releases -- confirmed via the GitHub
+    # API, not assumed. The real upstream's README claims an Amazon
+    # Appstore listing (amazon.com/gp/product/B0FVKHYHFL) -- confirmed
+    # NOT actually installable/visible on this real device (2026-09-19),
+    # same pattern as Tailscale below. Second data point for "documented
+    # Appstore availability != actually present on this unit" -- default
+    # to sideload unless proven present on-device, not from citations.
+    package: com.spocky.projengmenu
+    version: "4.71"
+    artifact: ProjectivyLauncher-4.71-c95-xda-release.apk
+    architecture: confirmed multi-ABI (arm64-v8a, armeabi-v7a, x86, x86_64) via unzip lib/ inspection
+    checksum: none published upstream
+    install_source: sideload  # corrected back after real on-device check failed
+    update_mechanism: manual
+    status: INSTALLED (2026-09-20) -- launched, Home-button redirect confirmed working via Home on Fire
+
+  - name: Home on Fire
+    upstream: https://github.com/toolicious/home-on-fire
+    package: io.github.toolicious.homeonfire
+    version: v1.5.1
+    artifact: home-on-fire.apk
+    architecture: no lib/ directory at all -- pure Java/Kotlin, architecture-agnostic
+    checksum: none published upstream
+    install_source: sideload
+    update_mechanism: manual
+    status: INSTALLED (2026-09-20) -- WRITE_SECURE_SETTINGS granted, HijackService accessibility service confirmed enabled via `adb shell settings get secure enabled_accessibility_services`, Projectivy set as target, launch-on-boot/wake enabled. Known open item, not blocking -- long-press escape-to-Amazon-Home not confirmed working (may actually be double-press); deferred to Phase 11 polish, not urgent.
+
+  - name: SmartTube
+    upstream: https://github.com/yuliskov/SmartTube
+    package: org.smarttube.stable
+    version: "32.47s"
+    artifact: SmartTube_stable_32.47_armeabi-v7a.apk
+    # Real per-ABI split releases exist (arm64-v8a / armeabi-v7a /
+    # universal / x86) -- use the armeabi-v7a build specifically, per
+    # this device's confirmed 32-bit-only ABI list, rather than
+    # "universal" (larger, unnecessary here).
+    architecture: confirmed armeabi-v7a via unzip lib/ inspection (matches filename)
+    checksum: none published upstream
+    install_source: sideload
+    update_mechanism: manual
+    status: INSTALLED (2026-09-20), launched cleanly into BrowseActivity. Account pairing/SponsorBlock/quality config left to the user.
+
+  - name: R-Shop
+    upstream: https://github.com/AverageConsumer/R-Shop
+    package: com.retro.rshop
+    version: v1.7.0
+    artifact: R-Shop-v1.7.0.apk
+    architecture: confirmed multi-ABI Flutter fat APK (arm64-v8a, armeabi-v7a, x86_64) via unzip lib/ inspection
+    checksum: none published upstream
+    install_source: sideload
+    update_mechanism: manual
+    status: |-
+      INSTALLED (2026-09-20). Two real, separate bugs found and worked
+      around -- see hosts/fire-tv-stick/README.md's "R-Shop bugs and
+      workarounds" section for the full writeup. Summary:
+      (1) No LEANBACK_LAUNCHER category in its manifest -- invisible on Fire
+      TV's home row. Worked around with a trampoline launcher app (same
+      pattern as retroarch-launcher-app/, but unlike that one this trampoline
+      passes no special launch arguments -- it exists purely for tile
+      visibility, not because R-Shop's own icon doesn't work. Both are
+      equally functional; keep one or both.
+      (2) Onboarding's "Welcome" screen has no working confirm binding at
+      all (not even the keys R-Shop itself defines elsewhere) -- every
+      onboarding path is unreachable via remote or touch. Confirmed R-Shop
+      is run-as-debuggable (unlike RetroArch), so this was bypassed
+      permanently and non-destructively by writing
+      shared_prefs/FlutterSharedPreferences.xml's onboarding_completed
+      flag and a hand-built app_flutter/config.json (schema reverse
+      engineered from R-Shop's own source, matching what "Local games only"
+      would have produced) directly into the app's private storage -- no
+      SAF picker, no root, no rebuild.
+      Once past onboarding, confirm/menu bind to real gamepad buttons
+      (gameButtonA/gameButtonStart) which this remote cannot send (same
+      root-cause family as the RetroArch DPAD_CENTER regression) --
+      deliberately NOT patched, since Stage 8's Bluetooth controller sends
+      these natively. Revisit only if a real controller still doesn't work.
+
+  - name: Seerr TV
+    upstream: https://github.com/Vermino/seerr-tv
+    package: com.seerr.tv
+    version: v1.5
+    artifact: seerr-tv-v1.5.apk
+    architecture: no lib/ directory at all -- pure Java/Kotlin, architecture-agnostic
+    checksum: none published upstream
+    install_source: sideload
+    update_mechanism: manual
+    status: INSTALLED (2026-09-20), launched into SetupActivity. Server address http://seerr.home.arpa (real IP fallback 192.168.68.55:5055 given in case of the same DNS issue Jellyfin hit) -- outcome not confirmed back, assumed fine per user's "done and set up."
+
+  - name: Tailscale
+    upstream: https://github.com/tailscale/tailscale
+    # Real finding (2026-09-19): does not appear in this device's Amazon
+    # Appstore listing at all, despite Tailscale's own docs not excluding
+    # this model (only Fire TV Stick 4K Select is called out as
+    # unsupported). Not an ABI problem either. No official direct-download
+    # APK exists (GitHub releases carry no Android artifact) -- installed
+    # instead from the IzzyOnDroid/F-Droid archive mirror
+    # (f-droid.org/archive/, a real, reputable mirror, not APKMirror's
+    # anti-bot-gated download flow), which hosts a plain fat APK with all
+    # four ABIs. Sideloaded opportunistically alongside Projectivy/Home on
+    # Fire rather than waiting for Phase 9 -- cheap to install now even
+    # though full travel-mode validation is still a later stage.
+    package: com.tailscale.ipn
+    version: "1.102.1-t8ebe8f7c3-g616a069d9"
+    artifact: com.tailscale.ipn_110200010.apk
+    source_url: https://f-droid.org/archive/com.tailscale.ipn_110200010.apk
+    architecture: confirmed multi-ABI (arm64-v8a, armeabi-v7a, x86, x86_64) via unzip lib/ inspection
+    checksum: none published upstream
+    install_source: sideload (F-Droid/IzzyOnDroid archive mirror -- no official direct download or Appstore listing on this device)
+    update_mechanism: manual
+    status: INSTALLED (2026-09-20), launched successfully. Login/network-mode validation deferred to Stage 9 (travel).
+
+  - name: Jellyfin
+    upstream: https://jellyfin.org/clients/
+    package: not tracked here -- Appstore-managed
+    version: Appstore-current
+    artifact: n/a
+    architecture: n/a
+    checksum: n/a
+    install_source: amazon_appstore
+    update_mechanism: appstore
+    note: installed and signed in (2026-09-19), pointed at http://192.168.68.55:8096 (jellyfin.home.arpa works over http:// from other clients; not yet confirmed the Fire TV itself resolves it -- using the direct IP for now)
+
+  - name: RetroArch (Fixed)
+    upstream: n/a -- home-built, source in ../retroarch-launcher-app/
+    # Not a real emulator, a one-Activity trampoline that launches
+    # RetroArch (32-bit, above) with -e CONFIGFILE pointing at
+    # config/retro_fix2.cfg on device, working around a real RetroArch
+    # 1.22.2 regression (DPAD_CENTER handling -- see the "RetroArch
+    # OK-button fix" section in ../README.md). Exists because a plain
+    # tap on RetroArch's own icon has no way to pass that argument.
+    package: com.homeserver.retroarchlaunch
+    version: "1.0"
+    artifact: n/a -- built locally, not downloaded (see retroarch-launcher-app/README.md)
+    architecture: n/a -- pure Java, no native libs, single trampoline Activity
+    checksum: n/a
+    install_source: home-built (javac/d8/aapt2, no Gradle -- see retroarch-launcher-app/README.md)
+    update_mechanism: manual rebuild if the fixed config's path or contents ever change
+    status: INSTALLED (2026-09-20), confirmed working end-to-end -- this is the tile to launch RetroArch from going forward, not the plain "RetroArch (32-bit)" tile.

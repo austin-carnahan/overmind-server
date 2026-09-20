@@ -62,3 +62,5 @@ __pycache__/
 *.state
 *.gguf
 *.safetensors
+*.apk
+*.keystore

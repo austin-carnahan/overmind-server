@@ -54,3 +54,7 @@ http://maintainerr.home.arpa {
 http://inference.home.arpa {
 	reverse_proxy host.docker.internal:8500
 }
+
+http://doclet.home.arpa {
+	reverse_proxy doclet:5001
+}

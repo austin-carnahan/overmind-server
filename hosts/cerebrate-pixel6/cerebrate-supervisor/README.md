@@ -258,3 +258,26 @@ adb shell chmod +x /data/local/tmp/cerebrate-supervisor
 # libc++_shared.so is already staged at /data/local/tmp/ from cerebrate-infer's deploy
 adb shell 'cd /data/local/tmp && LD_LIBRARY_PATH=/data/local/tmp nohup setsid ./cerebrate-supervisor > supervisor.log 2>&1 < /dev/null &'
 ```
+
+Swapping the binary on a live device with production workers running
+requires draining first: `STOP` every running worker via the *old*
+supervisor (their config is not persisted anywhere else, so record
+`LIST`'s output first), `kill` the old supervisor process, deploy the new
+binary, relaunch, then `START` each worker again with the same config —
+otherwise the new supervisor's pre-flight orphan-port check will
+correctly, but inconveniently, refuse to manage a port a still-running
+old worker never released. Done this way for the Stage 2 deploy below
+with zero disruption to `infer`/`generate`.
+
+## Doclet Service V3 Stage 2: `gguf` worker + `mmproj` field
+
+See [`cerebrate-gguf`](../cerebrate-gguf/README.md) for the full
+worker-side writeup (acceptance test, failure/recovery characterization).
+On the supervisor side: one new `WorkerSlot` (`gguf`, port 8768) and one
+new optional wire-protocol key (`mmproj`), needed because
+`cerebrate-gguf` takes two GGUF paths (model + multimodal projector)
+where every existing worker needed at most one model plus a fixed
+two-value `backend` enum. Reuses every existing mechanism unchanged: flat-
+file validation, idempotent START/STOP, config-conflict detection (now
+comparing `mmproj` too when the slot needs it), crash detection, and the
+pre-flight orphan-port check.

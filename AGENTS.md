@@ -12,7 +12,7 @@ Read [README.md](README.md) and [the design index](design-notes/README.md) first
 
 1. **Never expose SSH, SMB, Transmission RPC, Radarr/Sonarr/Bazarr, Pi-hole admin, or Jellyfin admin directly to the public Internet.** Use Tailscale or another explicitly approved private overlay.
 2. **Never commit secrets.** Passwords, PIA credentials, API keys, Tailscale auth material, subtitle-provider keys, and private hostnames belong in ignored local secret files or secret stores.
-3. **Never run destructive Igir operations (`move`/`clean`) against the romset library without a tested dry-run first.** There is one romset tier, not a separate immutable master — DAT-checksum validation at ingestion is the only safety net, so a bad destructive run has no fallback copy to recover from.
+3. **Never run destructive Igir operations (`move`/`clean`) without a tested dry-run first.** There are two romset tiers: `/mnt/library/romsets-archive/<system>` (DAT-verified, broadly curated by language/region/1G1R, kept indefinitely — not exposed to any client) and `/mnt/library/romsets/<system>` (further curated to a small browsable set — the only tier exposed to SMB/R-Shop/clients). The archive tier lets the library tier be regenerated without repeating acquisition, but the archive itself has no further backup — re-acquisition, not a preserved-original copy, is the fallback if a destructive run damages it. Treat both tiers with the same dry-run discipline.
 4. **Never point Kodi/EmulationStation at raw torrent or quarantine directories.** Only promoted canonical libraries are user-facing.
 5. **Incoming content is untrusted.** Scan and validate before promotion.
 6. Prefer idempotent scripts, explicit paths, and observable health checks.

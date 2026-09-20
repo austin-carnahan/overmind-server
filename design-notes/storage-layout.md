@@ -21,11 +21,17 @@ universal loading dock, drained by Overmind into the appropriate destination.
   movies/
   tv/
   music/                          # when needed
-  romsets/                        # one tier: DAT-validated, curated output.
-                                   # No separate immutable master archive —
-                                   # aggressive ingestion-time cleanup keeps
-                                   # only what's actually wanted; validation
-                                   # at ingestion is the only safety net.
+  romsets/                        # Client-facing tier: further curated down
+                                   # to a small browsable/playable set from
+                                   # romsets-archive/. The only tier exposed
+                                   # to SMB/R-Shop/clients.
+  romsets-archive/                # DAT-verified, broadly-curated (1G1R,
+                                   # language/region filtered) archive tier,
+                                   # kept indefinitely so acquisition and
+                                   # first-pass Igir validation don't need
+                                   # repeating. Not exposed to any client.
+                                   # Re-acquisition, not a further backup, is
+                                   # the fallback if this is damaged.
   saves/                          # per-user namespace, not per-device
     <user>/                       # e.g. saves/austin/ — see fire-tv.md
 /var/spool/overmind/               # Inbox, outside both destinations
@@ -148,7 +154,7 @@ only where validated; there is no universal inbox daemon.
 | `documents` | Substrate papers, notes, datasets, or a project |
 | `documents/agent-notes` | Reviewed entries under Substrate notes/agents |
 | `media/movies`, `media/tv` | Reviewed Library movies/TV, or project-specific media |
-| `media/romsets` | Reviewed Library romsets (one validated tier, see above) |
+| `media/romsets` | Reviewed romsets, promoted into either Library tier (see above) |
 | `media/music` | Reviewed Library music, when needed |
 
 Process only completed inputs. Verify the destination before removing an intake

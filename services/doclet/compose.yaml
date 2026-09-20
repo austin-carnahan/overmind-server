@@ -1,0 +1,89 @@
+# Doclet Service V3 (design-notes/Doclet Service — Implementation Design
+# V3.md). Two services: `doclet` (Docling Serve, the public document API)
+# and `doclet-vlm-adapter` (the internal-only OpenAI-compatible shim in
+# front of MLServer's real inference.home.arpa endpoint -- see that
+# service's own README for why it isn't a new public hostname).
+#
+# mem_limit on `doclet` addresses a real, measured finding: a genuine
+# conversion job OOM-killed the bare-process version of this same
+# workload on this host, confirmed via kernel log (anon-rss ~2.3GB,
+# shmem-rss ~200MB peak). Verified working end to end (2026-09-18) with
+# an SSD-backed 4GB swapfile added to overmind-01 and mem_limit: 3g: a
+# real conversion job completed successfully (correct DocTags output),
+# container-level containment held (OOMKilled=false, RestartCount=0)
+# even though the standard pipeline *alone*, before any enrichment call,
+# peaked at ~2.96GB -- uncomfortably close to that 3g limit. Raised to
+# 4g for real margin above that observed peak rather than leave it this
+# close; swap (confirmed actually engaging under pressure -- 379MB
+# swapped out during this same test, exactly the "push cold idle-service
+# pages out to make room" effect intended) remains the second line of
+# defense regardless of where this limit sits. Docker/cgroups killing
+# this one container within its own budget, instead of the kernel
+# picking an arbitrary victim across the whole host, is the actual goal
+# here -- not a specific number.
+#
+# LD_PRELOAD="" is required on this specific hardware, not optional
+# hardening: the upstream image sets LD_PRELOAD=/usr/local/lib/libmimalloc.so
+# globally (Containerfile), and that library -- built via a plain
+# `cmake && make` on whatever arm64 CI runner GitHub Actions uses (almost
+# certainly a newer server-class core with LSE/ARMv8.2 support) -- SIGILLs
+# immediately on the Raspberry Pi 4's older Cortex-A72 (ARMv8.0-A, no LSE
+# atomics). Confirmed directly: even `/bin/true` crashed with exit 132
+# until this override was added, and succeeded immediately once it was.
+# Not a docling-serve bug and not fixable by trying a different release
+# tag -- every version shares the same base image family
+# (quay.io/sclorg/python-312-c9s) and the same mimalloc build step.
+services:
+  doclet:
+    image: ghcr.io/docling-project/docling-serve-cpu:v1.34.0@sha256:0525640504db7ed8a53e0e443882727888f6a3746948b1b7a8820efe95567bd3
+    container_name: doclet
+    mem_limit: 4g
+    mem_reservation: 1g
+    environment:
+      LD_PRELOAD: ""
+      DOCLING_SERVE_ENABLE_REMOTE_SERVICES: "true"
+      # Required for code_formula_custom_config (Stage 4 formula-routing
+      # work) -- without it, a custom engine config is refused server-side
+      # ("Custom code/formula configuration is not allowed"), confirmed
+      # directly. picture_description_api didn't need this because it's
+      # the older, ungated field; picture_description_custom_config would
+      # need the equivalent DOCLING_SERVE_ALLOW_CUSTOM_PICTURE_DESCRIPTION_CONFIG
+      # if it's ever adopted instead.
+      DOCLING_SERVE_ALLOW_CUSTOM_CODE_FORMULA_CONFIG: "true"
+      # Gradio demonstrator UI tried 2026-09-18, disabled again: it only
+      # exposes plain do_picture_description/do_formula_enrichment
+      # checkboxes, no field for a custom engine URL/config -- checking
+      # those boxes as-is would fall back to Docling's default preset
+      # (a local transformers VLM on this Pi 4's CPU), not our Cerebrate
+      # pipeline. Not useful for this project's actual enrichment path,
+      # not worth the idle RAM (~825MB measured) to keep running.
+      DOCLING_SERVE_ENABLE_UI: "false"
+      DOCLING_SERVE_SCRATCH_PATH: /scratch
+      HF_HOME: /hf-cache
+    volumes:
+      - /var/lib/overmind/doclet/scratch:/scratch
+      - /mnt/models/huggingface:/hf-cache
+    ports:
+      - "127.0.0.1:5001:5001"
+    restart: unless-stopped
+
+  # Stdlib-only (see vlm-adapter/doclet_vlm_adapter.py) -- no image build
+  # needed, just mount the one script into a stock python image.
+  doclet-vlm-adapter:
+    image: python:3.12-slim
+    container_name: doclet-vlm-adapter
+    mem_limit: 256m
+    environment:
+      MLSERVER_INFER_URL: http://inference.home.arpa/v2/models/cerebrate-gguf/infer
+      # Raised from 240 (Stage 3) to 630 after a real production run
+      # (Stage 4, 2026-09-18) found real formula-enrichment calls
+      # exceeding 240s. Must stay above cerebrate_gguf_runtime.py's
+      # REQUEST_TIMEOUT_S (600) with margin -- see that file and
+      # doclet_vlm_adapter.py's own comment for the full timeout-layering
+      # rationale and the self-healing reconnect fix from the same run.
+      DOCLET_VLM_ADAPTER_TIMEOUT_S: "630"
+      PORT: "9100"
+    volumes:
+      - ./vlm-adapter/doclet_vlm_adapter.py:/app/doclet_vlm_adapter.py:ro
+    command: ["python3", "/app/doclet_vlm_adapter.py"]
+    restart: unless-stopped

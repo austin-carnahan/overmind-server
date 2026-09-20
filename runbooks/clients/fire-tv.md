@@ -3,6 +3,9 @@
 **Status:** DEFERRED — see [status legend](../../design-notes/README.md#status-legend);
 architecture decided, nothing built or tested yet. Supersedes an earlier
 "live network read, no local copy" decision — see "Why this changed" below.
+Two romset tiers now (revised 2026-09-20, see AGENTS.md rule 3) — the
+diagram and "Validation/promotion" bullet below reflect that; the rest of
+this doc is unchanged by that revision.
 See [the full design brief](../../design-notes/overmind_rom_emulator_design_brief.md)
 for the complete plan this summarizes.
 
@@ -13,13 +16,18 @@ ROM sources
     ↓
 ROMarr (acquisition, scoring, Prowlarr-backed) → staging
     ↓
-Igir (DAT audit / 1G1R / normalization)
+Igir, first pass (DAT audit / 1G1R / language-region filter)
     ↓
-OVERMIND CANONICAL ROM LIBRARY (/mnt/library/romsets, one tier)
+ARCHIVE TIER (/mnt/library/romsets-archive, kept indefinitely, not exposed)
+    ↓
+Igir, second pass (strict curation, ~100 titles — still an open problem,
+see romsets/igir.md "Curation strategies")
+    ↓
+LIBRARY TIER (/mnt/library/romsets, client-facing)
     ↓
 read-only SMB, LAN + Tailscale
     ↓
-R-Shop on Fire TV — browse full catalog, install/remove selected games
+R-Shop on Fire TV — browse curated catalog, install/remove selected games
     ↓
 local USB cache on the Fire TV
     ↓
@@ -34,10 +42,17 @@ Syncthing-Fork — save backup/sync back to Overmind
   real and active (166K-game production library, Prowlarr-integrated) before
   adopting it. Writes to staging, not the canonical library directly; Igir
   remains the actual gate.
-- **Validation/promotion**: Igir, as already decided — DAT-checksum verify,
-  1G1R, aggressive cleanup of non-ROM cruft. One tier, no separate master
-  archive (AGENTS.md rule 3) — same as before, unchanged by this revision.
-- **Distribution**: canonical library exposed **read-only** over SMB (see
+- **Validation/promotion**: Igir, in two passes (AGENTS.md rule 3). First
+  pass — DAT-checksum verify, 1G1R, language/region filter, aggressive
+  cleanup of non-ROM cruft — promotes into the **archive tier**
+  (`/mnt/library/romsets-archive`), kept indefinitely so acquisition and
+  first-pass validation never need repeating, but not exposed to any client.
+  Second pass applies much stricter curation (target ~100 titles per system,
+  via ScreenScraper + IGDB ratings and a Bayesian blend — see
+  [romset curation pipeline](../../design-notes/romset-curation-pipeline.md))
+  to promote into the **library tier** (`/mnt/library/romsets`), the only
+  tier ever exposed to clients.
+- **Distribution**: library tier exposed **read-only** over SMB (see
   [file-sharing](../../services/file-sharing/README.md)), reachable via LAN
   at home or Tailscale remotely.
 - **Client**: [R-Shop](https://github.com/AverageConsumer/R-Shop) — verified

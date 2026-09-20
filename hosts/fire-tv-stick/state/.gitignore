@@ -1,0 +1,5 @@
+# Runtime/local provisioning state (captured device properties, install
+# logs, etc.) -- not committed, matches this repo's convention for
+# per-run/per-device local state elsewhere.
+*
+!.gitignore

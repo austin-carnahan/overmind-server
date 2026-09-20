@@ -45,6 +45,13 @@ not restate what the label already means.
   Execution via NNAPI/TFLite, stateful Session Execution via LiteRT-LM).
   Feasibility spike done: native runtime, model, and backend gates all
   passed. Five-phase implementation not yet started.
+- [Romset curation pipeline](romset-curation-pipeline.md) — archive tier →
+  library tier curation design: ScreenScraper hash identification across the
+  full archive, ranked candidates enriched with a second IGDB rating, and a
+  Bayesian combined score selecting the top ~100 per platform. PROPOSED
+  (design agreed, nothing implemented). Answers the open "Curation
+  strategies" question in
+  [runbooks/romsets/igir.md](../runbooks/romsets/igir.md#curation-strategies-archive--library).
 - [Seerr & Maintainerr setup brief](overmind_seerr_maintainerr_setup_brief.md) —
   adopted architecture for the request/discovery and retention/cleanup
   layers on top of Jellyfin/Radarr/Sonarr; both tools verified real before

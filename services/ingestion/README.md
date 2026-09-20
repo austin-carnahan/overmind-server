@@ -31,9 +31,11 @@ Available helpers:
 A successful helper is not a full safety guarantee. Checks for types, sidecars,
 archives, domain integrity, and manual review remain necessary. Do not enable
 library-manager automatic imports until they cannot bypass the validation gate.
-Validate romsets against DAT checksums before promotion — the only tier, no
-separate archive to fall back on — and ensure permitted writers cannot mutate
-promoted content through a shared hardlink unexpectedly.
+Validate romsets against DAT checksums before promotion into the archive
+tier (re-acquisition, not a preserved-original copy, is the fallback if it's
+damaged — see AGENTS.md rule 3 and [romset workflow](romsets/README.md)) and
+ensure permitted writers cannot mutate promoted content through a shared
+hardlink unexpectedly.
 
 Before adding a worker, document an actual unmet need, supported integration,
 service user/permissions, mounts, private state, health, recovery, and rollback.

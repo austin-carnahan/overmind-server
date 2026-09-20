@@ -1,0 +1,10 @@
+{
+  "genesis": {
+    "Some Game": {
+      "igdb_id": 1234,
+      "force_include": false,
+      "force_exclude": false,
+      "note": "Resolved alternate North American title"
+    }
+  }
+}

@@ -1,0 +1,160 @@
+#!/usr/bin/env python3
+"""Submits a real document to the production Doclet endpoint
+(doclet.home.arpa) with Cerebrate picture/formula enrichment enabled, and
+saves Docling Serve's own native zip result (unmodified) into a
+destination folder.
+
+Usage:
+    scripts/../services/doclet/submit-job <source.pdf> <dest-folder>
+
+Deliberately a thin, direct wrapper around the real API -- no
+post-processing or reshaping of what Docling Serve returns (see
+experiments/doclet-service/production-run-2026-09-18-v2 for what that
+folder structure looks like: <name>.md, <name>.json, artifacts/*.png).
+
+Timeout values here (660s for both picture and formula enrichment)
+match the timeout-layering scheme documented in
+hosts/cerebrate-pixel6/mlserver/models/cerebrate-gguf/cerebrate_gguf_runtime.py's
+module docstring: this is the outermost layer, wrapping
+doclet-vlm-adapter's 630s with margin, which wraps cerebrate-gguf's own
+600s. Do not lower this without lowering the two inner layers first, or
+this can give up while the inner layers are still legitimately working.
+"""
+import argparse
+import base64
+import json
+import sys
+import time
+import urllib.request
+import zipfile
+from pathlib import Path
+
+DOCLING_SERVE = "http://doclet.home.arpa"
+ADAPTER_URL = "http://doclet-vlm-adapter:9100/v1/chat/completions"
+JOB_TIMEOUT_S = 660
+POLL_INTERVAL_S = 15
+
+
+def post(path: str, payload: dict) -> dict:
+    req = urllib.request.Request(
+        DOCLING_SERVE + path,
+        data=json.dumps(payload).encode(),
+        headers={"Content-Type": "application/json"},
+        method="POST",
+    )
+    with urllib.request.urlopen(req, timeout=30) as resp:
+        return json.loads(resp.read())
+
+
+def get_json(path: str) -> dict:
+    with urllib.request.urlopen(DOCLING_SERVE + path, timeout=30) as resp:
+        return json.loads(resp.read())
+
+
+def get_bytes(path: str) -> bytes:
+    with urllib.request.urlopen(DOCLING_SERVE + path, timeout=60) as resp:
+        return resp.read()
+
+
+def build_payload(pdf_bytes: bytes, filename: str) -> dict:
+    b64 = base64.b64encode(pdf_bytes).decode()
+    return {
+        "options": {
+            "to_formats": ["md", "json"],
+            "image_export_mode": "referenced",
+            "generate_picture_images": True,
+            "images_scale": 2.0,
+            "do_picture_description": True,
+            "picture_description_api": {
+                "url": ADAPTER_URL,
+                "params": {"model": "cerebrate-gguf", "max_completion_tokens": 800},
+                "timeout": JOB_TIMEOUT_S,
+                "prompt": "Convert this page to docling.",
+            },
+            "do_formula_enrichment": True,
+            "do_code_enrichment": False,
+            "code_formula_custom_config": {
+                "engine_options": {
+                    "engine_type": "api",
+                    "url": ADAPTER_URL,
+                    "params": {"model": "cerebrate-gguf", "max_completion_tokens": 400},
+                    "timeout": JOB_TIMEOUT_S,
+                },
+                "model_spec": {
+                    "name": "CodeFormulaV2",
+                    "default_repo_id": "docling-project/CodeFormulaV2",
+                    "revision": "main",
+                    "prompt": "",
+                    "response_format": "plaintext",
+                    "supported_engines": None,
+                    "engine_overrides": {},
+                    "api_overrides": {},
+                    "trust_remote_code": False,
+                    "stop_strings": ["</doctag>", "<end_of_utterance>"],
+                    "temperature": 0.0,
+                    "max_new_tokens": 4096,
+                    "extra_generation_config": {},
+                },
+                "scale": 2.0,
+                "max_size": None,
+                "extract_code": False,
+                "extract_formulas": True,
+            },
+            "abort_on_error": False,
+        },
+        "sources": [{"kind": "file", "base64_string": b64, "filename": filename}],
+        "target": {"kind": "zip"},
+    }
+
+
+def main() -> int:
+    parser = argparse.ArgumentParser(description=__doc__.split("\n\n")[0])
+    parser.add_argument("source", type=Path, help="PDF (or other Docling-supported document) to convert")
+    parser.add_argument("dest", type=Path, help="Folder to extract Docling Serve's zip result into")
+    args = parser.parse_args()
+
+    if not args.source.is_file():
+        print(f"error: {args.source} is not a file", file=sys.stderr)
+        return 1
+
+    pdf_bytes = args.source.read_bytes()
+    payload = build_payload(pdf_bytes, args.source.name)
+
+    print(f"submitting {args.source} to {DOCLING_SERVE} ...")
+    t0 = time.time()
+    resp = post("/v1/convert/source/async", payload)
+    task_id = resp["task_id"]
+    print(f"task_id: {task_id}")
+
+    i = 0
+    while True:
+        status = get_json(f"/v1/status/poll/{task_id}")
+        s = status.get("task_status")
+        print(f"poll {i}: status={s} elapsed={time.time() - t0:.0f}s")
+        if s in ("success", "failure"):
+            if s == "failure":
+                print("FAILURE:", json.dumps(status)[:3000], file=sys.stderr)
+                return 1
+            break
+        i += 1
+        time.sleep(POLL_INTERVAL_S)
+
+    print(f"total elapsed: {time.time() - t0:.0f}s")
+
+    zip_bytes = get_bytes(f"/v1/result/{task_id}")
+    args.dest.mkdir(parents=True, exist_ok=True)
+    zip_path = args.dest / "doclet_result.zip"
+    zip_path.write_bytes(zip_bytes)
+    print(f"saved raw zip: {zip_path} ({len(zip_bytes)} bytes)")
+
+    with zipfile.ZipFile(zip_path) as zf:
+        zf.extractall(args.dest)
+        print("extracted:")
+        for name in zf.namelist():
+            print(f"  {args.dest / name}")
+
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())

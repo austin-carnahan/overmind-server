@@ -61,6 +61,8 @@ rewrites:
     # pointed at cerebrate-pixel6 directly — Overmind is the gateway, and
     # which physical node actually serves inference is meant to be able to
     # change later without clients changing URLs (Stage 5 Phase 4)
+  - name: doclet.home.arpa
+    target: overmind-01.home.arpa
 
   # --- Devices we don't control — direct, node-style entry. No "node"
   # abstraction for hardware we don't manage; an IP is fine here. ---

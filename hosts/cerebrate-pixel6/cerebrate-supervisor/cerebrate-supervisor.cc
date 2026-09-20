@@ -24,6 +24,16 @@
 //   STATUS\nworker: generate\n\n
 //   LIST\n\n
 //
+// Doclet Service V3 Stage 2 added one worker ("gguf", cerebrate-gguf)
+// and one wire field ("mmproj") -- a deliberate, bounded exception to
+// this being otherwise frozen since Phase B, not a reopening of the
+// protocol. cerebrate-gguf needs two GGUF paths (model + multimodal
+// projector) where every existing worker needed at most one model plus
+// a fixed enum (backend), so the wire protocol gained an optional
+// "mmproj" key rather than overloading "model" or "backend":
+//
+//   START\nworker: gguf\nmodel: /data/local/tmp/foo.gguf\nmmproj: /data/local/tmp/foo-mmproj.gguf\n\n
+//
 // Deliberately NOT built: arbitrary command execution, arbitrary binary
 // paths, arbitrary ports, orphan-worker adoption after a supervisor
 // restart, or automatic respawn-on-crash (see cerebrate-supervisor's
@@ -54,18 +64,21 @@ struct WorkerSlot {
   const char* binary_path;  // fixed, not client-supplied
   int fixed_port;           // fixed, not client-supplied
   int needs_backend;        // cerebrate-generate takes cpu|gpu; cerebrate-infer doesn't
+  int needs_mmproj;         // cerebrate-gguf takes a second GGUF (multimodal projector)
 
   // Runtime state
   WorkerState state;
   pid_t pid;
   char model[256];
   char backend[8];
+  char mmproj[256];
   int last_exit_code;
 };
 
 static WorkerSlot g_slots[] = {
-  {"infer", STAGING_DIR "/cerebrate-infer", 8765, 0, STOPPED, 0, "", "", 0},
-  {"generate", STAGING_DIR "/cerebrate-generate", 8766, 1, STOPPED, 0, "", "", 0},
+  {"infer", STAGING_DIR "/cerebrate-infer", 8765, 0, 0, STOPPED, 0, "", "", "", 0},
+  {"generate", STAGING_DIR "/cerebrate-generate", 8766, 1, 0, STOPPED, 0, "", "", "", 0},
+  {"gguf", STAGING_DIR "/cerebrate-gguf", 8768, 0, 1, STOPPED, 0, "", "", "", 0},
 };
 static const int kNumSlots = sizeof(g_slots) / sizeof(g_slots[0]);
 
@@ -152,7 +165,7 @@ static void wait_for_ready(WorkerSlot* s, char* out, size_t out_len) {
 }
 
 static void start_worker(const char* worker, const char* model, const char* backend,
-                          char* out, size_t out_len) {
+                          const char* mmproj, char* out, size_t out_len) {
   WorkerSlot* s = find_slot(worker);
   if (!s) {
     snprintf(out, out_len, "ERROR: unknown worker %s\n", worker);
@@ -170,16 +183,31 @@ static void start_worker(const char* worker, const char* model, const char* back
     snprintf(out, out_len, "ERROR: worker %s requires backend cpu or gpu\n", worker);
     return;
   }
+  if (s->needs_mmproj) {
+    if (mmproj == NULL || mmproj[0] == '\0') {
+      snprintf(out, out_len, "ERROR: worker %s requires an mmproj field\n", worker);
+      return;
+    }
+    if (!model_path_is_approved(mmproj)) {
+      snprintf(out, out_len, "ERROR: mmproj path not approved: %s\n", mmproj);
+      return;
+    }
+  }
   struct stat st;
   if (stat(model, &st) != 0) {
     snprintf(out, out_len, "ERROR: model file not found: %s\n", model);
+    return;
+  }
+  if (s->needs_mmproj && stat(mmproj, &st) != 0) {
+    snprintf(out, out_len, "ERROR: mmproj file not found: %s\n", mmproj);
     return;
   }
 
   reap_all();
   if (s->state == RUNNING) {
     int same = strcmp(s->model, model) == 0 &&
-               (!s->needs_backend || strcmp(s->backend, backend) == 0);
+               (!s->needs_backend || strcmp(s->backend, backend) == 0) &&
+               (!s->needs_mmproj || strcmp(s->mmproj, mmproj) == 0);
     if (same) {
       snprintf(out, out_len, "OK: already running pid=%d port=%d (idempotent)\n", s->pid, s->fixed_port);
     } else {
@@ -239,6 +267,8 @@ static void start_worker(const char* worker, const char* model, const char* back
     snprintf(port_str, sizeof(port_str), "%d", s->fixed_port);
     if (s->needs_backend) {
       execl(s->binary_path, s->binary_path, model, backend, port_str, (char*)NULL);
+    } else if (s->needs_mmproj) {
+      execl(s->binary_path, s->binary_path, model, mmproj, port_str, (char*)NULL);
     } else {
       execl(s->binary_path, s->binary_path, model, port_str, (char*)NULL);
     }
@@ -250,6 +280,10 @@ static void start_worker(const char* worker, const char* model, const char* back
   s->state = RUNNING;
   strncpy(s->model, model, sizeof(s->model) - 1);
   s->model[sizeof(s->model) - 1] = '\0';
+  if (s->needs_mmproj) {
+    strncpy(s->mmproj, mmproj, sizeof(s->mmproj) - 1);
+    s->mmproj[sizeof(s->mmproj) - 1] = '\0';
+  }
   if (s->needs_backend) {
     strncpy(s->backend, backend, sizeof(s->backend) - 1);
     s->backend[sizeof(s->backend) - 1] = '\0';
@@ -297,9 +331,10 @@ static void status_line(WorkerSlot* s, char* out, size_t out_len) {
   reap_all();
   switch (s->state) {
     case RUNNING:
-      snprintf(out, out_len, "%s RUNNING pid=%d port=%d model=%s%s%s\n",
+      snprintf(out, out_len, "%s RUNNING pid=%d port=%d model=%s%s%s%s%s\n",
                s->name, s->pid, s->fixed_port, s->model,
-               s->needs_backend ? " backend=" : "", s->needs_backend ? s->backend : "");
+               s->needs_backend ? " backend=" : "", s->needs_backend ? s->backend : "",
+               s->needs_mmproj ? " mmproj=" : "", s->needs_mmproj ? s->mmproj : "");
       break;
     case EXITED:
       snprintf(out, out_len, "%s EXITED pid=%d exit_code=%d last_model=%s\n",
@@ -311,10 +346,10 @@ static void status_line(WorkerSlot* s, char* out, size_t out_len) {
 }
 
 static void handle_command(const char* cmd, const char* worker, const char* model,
-                            const char* backend, char* out, size_t out_len) {
+                            const char* backend, const char* mmproj, char* out, size_t out_len) {
   if (strcmp(cmd, "START") == 0) {
     if (!worker[0]) { snprintf(out, out_len, "ERROR: START requires a worker field\n"); return; }
-    start_worker(worker, model, backend[0] ? backend : "cpu", out, out_len);
+    start_worker(worker, model, backend[0] ? backend : "cpu", mmproj, out, out_len);
   } else if (strcmp(cmd, "STOP") == 0) {
     if (!worker[0]) { snprintf(out, out_len, "ERROR: STOP requires a worker field\n"); return; }
     stop_worker(worker, out, out_len);
@@ -338,8 +373,9 @@ static void handle_command(const char* cmd, const char* worker, const char* mode
 // Reads a request (command line + "key: value" lines) until a blank line
 // or EOF. Parses into fixed output buffers -- deliberately not a general
 // parser, since the accepted vocabulary is fixed and small.
-static void read_request(int client, char* cmd, char* worker, char* model, char* backend) {
-  cmd[0] = worker[0] = model[0] = backend[0] = '\0';
+static void read_request(int client, char* cmd, char* worker, char* model, char* backend,
+                          char* mmproj) {
+  cmd[0] = worker[0] = model[0] = backend[0] = mmproj[0] = '\0';
   char buf[4096];
   size_t total = 0;
   while (total < sizeof(buf) - 1) {
@@ -371,6 +407,7 @@ static void read_request(int client, char* cmd, char* worker, char* model, char*
         if (strcmp(key, "worker") == 0) { strncpy(worker, val, 31); worker[31] = '\0'; }
         else if (strcmp(key, "model") == 0) { strncpy(model, val, 255); model[255] = '\0'; }
         else if (strcmp(key, "backend") == 0) { strncpy(backend, val, 7); backend[7] = '\0'; }
+        else if (strcmp(key, "mmproj") == 0) { strncpy(mmproj, val, 255); mmproj[255] = '\0'; }
       }
     }
     line = strtok(NULL, "\n");
@@ -395,7 +432,7 @@ int main(int argc, char** argv) {
     return 1;
   }
   listen(srv, 4);
-  fprintf(stderr, "READY cerebrate-supervisor port=%d workers=infer,generate\n", CONTROL_PORT);
+  fprintf(stderr, "READY cerebrate-supervisor port=%d workers=infer,generate,gguf\n", CONTROL_PORT);
 
   while (1) {
     int client = accept(srv, NULL, NULL);
@@ -407,14 +444,14 @@ int main(int argc, char** argv) {
     struct timeval recv_timeout = {10, 0};
     setsockopt(client, SOL_SOCKET, SO_RCVTIMEO, &recv_timeout, sizeof(recv_timeout));
 
-    char cmd[16], worker[32], model[256], backend[8];
-    read_request(client, cmd, worker, model, backend);
+    char cmd[16], worker[32], model[256], backend[8], mmproj[256];
+    read_request(client, cmd, worker, model, backend, mmproj);
 
     char response[1024];
     if (cmd[0] == '\0') {
       snprintf(response, sizeof(response), "ERROR: empty request\n");
     } else {
-      handle_command(cmd, worker, model, backend, response, sizeof(response));
+      handle_command(cmd, worker, model, backend, mmproj, response, sizeof(response));
     }
     write(client, response, strlen(response));
     close(client);

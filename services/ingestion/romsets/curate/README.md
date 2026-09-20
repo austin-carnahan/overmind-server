@@ -1,0 +1,97 @@
+# curate
+
+On-demand Python CLI implementing the
+[romset curation pipeline](../../../../design-notes/romset-curation-pipeline.md):
+archive tier → ScreenScraper identification → candidate ranking → IGDB
+enrichment (candidates only) → Bayesian score → top-100 manifest → library
+tier promotion.
+
+Not a service — nothing here runs continuously. Each stage is a subcommand,
+run on demand via Docker, like Igir already is (see
+[Igir workflow](../../../../runbooks/romsets/igir.md)):
+
+```sh
+docker build -t overmind-curate .
+docker run --rm --env-file config.env \
+  -v /mnt/library/romsets-archive:/archive:ro \
+  -v /mnt/library/romsets:/library \
+  -v /var/lib/overmind/romarr/dats:/dats:ro \
+  -v /var/lib/overmind/curation:/curation \
+  overmind-curate <subcommand> --platform genesis [options]
+```
+
+`/var/lib/overmind/curation` holds the persistent cache (ScreenScraper/IGDB
+raw responses) and generated manifests — small, low-write state per the
+[storage layout](../../../../design-notes/storage-layout.md) convention, not
+Library content.
+
+## ScreenScraper access goes through Skyscraper
+
+The `scrape` stage shells out to [Skyscraper](https://github.com/Gemba/skyscraper)
+(the actively-maintained fork) rather than calling the ScreenScraper API
+directly. ScreenScraper's own developer credentials are gated behind an
+approval process that's impractical for a small personal project; Skyscraper
+ships with its own registered developer credentials compiled in, so it only
+needs a normal, freely created ScreenScraper account
+(`SCREENSCRAPER_SSID`/`SCREENSCRAPER_SSPASSWORD`). The image builds
+Skyscraper from source using its own official `docker/Dockerfile` recipe
+(adapted below to also carry the Python `curate` package in the same
+image, so `scrape` can just shell out to the `Skyscraper` binary without a
+second container). Output is parsed from the `gamelist.xml` Skyscraper
+generates, joined back to our inventory by archive-tier path.
+
+## Stages
+
+| Subcommand | Needs | Reads | Writes |
+| --- | --- | --- | --- |
+| `inventory` | nothing external | archive tier + DAT file | `curation/<platform>/inventory.json` |
+| `scrape` | ScreenScraper account | `inventory.json` | `curation/<platform>/identified.json`, response cache |
+| `rank` | nothing external | `identified.json` | `curation/<platform>/candidates.json` |
+| `enrich-igdb` | Twitch/IGDB app credentials | `candidates.json` | `candidates.json` (in place), `ambiguous-matches.csv` |
+| `score` | nothing external | `candidates.json` | `candidates.json` (scored, in place) |
+| `select` | nothing external | scored `candidates.json`, `overrides.json` | `top-100.json`, `top-100.csv`, `all-candidates.csv`, `unmatched-*.csv` |
+| `deploy` | nothing external | `top-100.json`, archive tier | copies into library tier |
+
+Every stage reads/caches to disk so reruns are cheap: `scrape` and
+`enrich-igdb` skip anything already cached by hash/identity, so a rerun
+after adding new archive-tier games only fetches what's new. Force a
+refresh of external data with `--refresh` on the relevant subcommand — this
+is a separate, explicit choice, never automatic.
+
+## Credentials
+
+Copy `config.env.example` to `config.env` (gitignored, never commit it) and
+fill in:
+
+- `SCREENSCRAPER_SSID` / `SCREENSCRAPER_SSPASSWORD` — a normal, free
+  ScreenScraper account. No separate developer credentials are needed;
+  Skyscraper supplies its own.
+- `IGDB_CLIENT_ID` / `IGDB_CLIENT_SECRET` — from a Twitch developer
+  application (IGDB auth rides on Twitch's OAuth); free for noncommercial
+  use.
+
+Two things are still unverified pending real accounts/build: `enrich-igdb`
+follows IGDB's documented v4 query contract but hasn't run against the live
+API yet; and the Skyscraper build step in the Dockerfile (adapted from
+Skyscraper's own official recipe) hasn't been build-tested here — no Docker
+daemon was available in the environment that wrote it. Treat the first real
+`docker build` and first real `scrape`/`enrich-igdb` runs as verification,
+not just execution.
+
+## Example: Genesis, end to end
+
+```sh
+docker run --rm --env-file config.env -v ... overmind-curate inventory --platform genesis --dat /dats/genesis.dat
+docker run --rm --env-file config.env -v ... overmind-curate scrape --platform genesis
+docker run --rm --env-file config.env -v ... overmind-curate rank --platform genesis --candidates 150
+docker run --rm --env-file config.env -v ... overmind-curate enrich-igdb --platform genesis
+docker run --rm --env-file config.env -v ... overmind-curate score --platform genesis
+docker run --rm --env-file config.env -v ... overmind-curate select --platform genesis --limit 100
+docker run --rm --env-file config.env -v ... overmind-curate deploy --platform genesis
+```
+
+`scrape` maps our platform names to Skyscraper's own platform keys (e.g.
+`genesis` → `megadrive`) via `PLATFORM_MAP` in `curate/screenscraper.py` —
+extend that dict before curating a new platform; check
+[Skyscraper's PLATFORMS.md](https://github.com/Gemba/skyscraper/blob/master/docs/PLATFORMS.md)
+for the right key and aliases.

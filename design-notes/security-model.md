@@ -11,11 +11,15 @@
 - Incoming files remain untrusted through quarantine, scan, type/archive checks,
   and domain validation. A successful ffprobe or malware scan is one check, not
   proof of safety or permission to bypass the rest of the import gate.
-- Validate romsets against DAT checksums before promotion — there is no
-  separate master archive to fall back on if a destructive operation damages
-  the library, so this validation gate is the only protection. Preserve other
-  unique mutable content (saves). Automated library managers must not bypass
-  the validation gate.
+- Validate romsets against DAT checksums before promotion into the archive
+  tier (`/mnt/library/romsets-archive/<system>` — DAT-verified, broadly
+  curated, kept indefinitely); further curate from there into the
+  client-facing tier (`/mnt/library/romsets/<system>` — the only tier exposed
+  to SMB/R-Shop). Re-acquisition, not a preserved-original copy, is the
+  fallback if the archive tier itself is damaged by a destructive operation —
+  validate before promoting, dry-run before any destructive Igir run.
+  Preserve other unique mutable content (saves). Automated library managers
+  must not bypass the validation gate.
 - Transmission's outbound VPN, private remote access, and DNS privacy are distinct.
   Verify fail-closed download behavior without breaking host administration.
 - Consider `noexec,nodev,nosuid` only for compatible payload/import paths. Projects
