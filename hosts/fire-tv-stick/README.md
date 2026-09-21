@@ -108,118 +108,68 @@ and `manifest/apps.yaml` for exact sources/versions.
   this device" pattern as Tailscale — confirmed not installable via the
   Appstore on this real unit, sideloaded instead (see Stage 2).
 
-## RetroArch OK-button fix
+## RetroArch: gamepad-only, remote support abandoned (2026-09-20)
 
-**Symptom:** the Fire TV remote's physical OK/Center button did nothing in
-RetroArch's menu (Settings, XMB) — D-pad and the Back key worked fine, in
-every combination of Menu Swap OK/Cancel and Unified Menu Controls
-settings. This was real and reproducible, not user error.
+**Final decision:** RetroArch is used exclusively with a real gamepad
+(8BitDo Pro 2) going forward. The Fire TV remote is not used with
+RetroArch at all — not for menu navigation, not as a fallback. The
+custom trampoline launcher (`retroarch-launcher-app/`) and its config
+(`retro_fix2.cfg`) have been removed from the device and this repo;
+**"RetroArch (32-bit)"**, the plain unmodified app, is the only tile now.
+The remote remains fully normal for every other app on the device
+(Projectivy, Jellyfin, R-Shop, etc.) — this decision is scoped to
+RetroArch specifically.
 
-**Root cause (confirmed via RetroArch's own GitHub history, not
-speculation):** RetroArch 1.22.2 shipped a regression. A fix for a
-different bug ("Enter key not working in menus", PR
-[#18405](https://github.com/libretro/RetroArch/pull/18405), merged
-2025-11-16, first released in 1.22.2) added a side effect to
-`input/drivers/android_input.c`: any press reporting Android keycode
-`AKEYCODE_DPAD_CENTER` (23) — exactly what this remote's OK button
-sends — gets silently relabeled internally as `AKEYCODE_ENTER` (66)
-*before* it reaches the button-state array RetroArch's menu and RetroPad
-system both read. The remote's autoconfig binds `input_b_btn = "23"`,
-which checks a slot that can now never be set, since every real press
-lands in slot 66 instead. This affects any Android device whose confirm
-button reports keycode 23 (TV remotes, CEC remotes) — it is not specific
-to this remote being autoconfigured as `input_device_type = "remote"`
-(verified by removing that field entirely via a repackaged APK; no
-change in behavior, ruling out that theory before finding the real one).
+This closes out an extensive real-hardware debugging effort, kept below
+for the record since the underlying RetroArch regressions are real and
+may matter again later (e.g. if a future RetroArch update changes this
+calculus, or another remote-driven Android TV app hits the same family
+of bugs):
 
-**The fix (two config values, no root, no core APK change):**
+**Bug 1 — remote's OK button did nothing in RetroArch's menu.**
+Root-caused (via RetroArch's own GitHub history, not speculation) to a
+real RetroArch 1.22.2 regression: a fix for a different bug ("Enter key
+not working in menus", PR
+[#18405](https://github.com/libretro/RetroArch/pull/18405)) added a side
+effect to `input/drivers/android_input.c` that silently relabels any
+`AKEYCODE_DPAD_CENTER` (23) press — exactly what this remote's OK button
+sends — as `AKEYCODE_ENTER` (66) before RetroArch's own button-state
+array sees it, so the remote's autoconfig bind (`input_b_btn = "23"`)
+checks a slot that can never be set. Filed upstream as
+[libretro/RetroArch#19593](https://github.com/libretro/RetroArch/issues/19593)
+with a suggested minimal patch, not submitted as a PR (no build/test
+environment here). Worked around at the time with
+`input_player1_b_btn = "66"` + `menu_swap_ok_cancel_buttons = "true"` in
+a custom config, delivered via a trampoline launcher app since a plain
+tap on RetroArch's icon has no way to load a non-default config file.
 
-```ini
-input_player1_b_btn = "66"           # bind Center to where it actually lands now
-menu_swap_ok_cancel_buttons = "true" # make that slot mean "confirm", not "cancel"
-```
+**Bug 2 — adding a real gamepad broke the workaround.** With the 8BitDo
+Pro 2 also connected, using the remote after the gamepad caused
+RetroArch to reassign ports ("Fire Stick Remote configured in port 1",
+"8BitDo Controller configured in port 2"), after which the gamepad
+produced no input at all (every custom bind was `input_player1_*`, and
+the gamepad was no longer in port 1). Root-caused to a known Android TV
+bug ([libretro/RetroArch#16873](https://github.com/libretro/RetroArch/issues/16873)):
+reconnecting/re-activating an input device reports a changed OS-level
+identity, which RetroArch reads as a brand-new controller and
+increments its port rather than reusing the original. Two other
+hypotheses were tried and reverted first (rebinding the OK-button fix
+off the global menu-swap broke the remote's Back key without fixing the
+port bug; disabling `input_autodetect_enable` broke every input device
+entirely) before finding RetroArch's actual purpose-built setting for
+this exact bug, `android_input_disconnect_workaround`. **This did not
+actually fix the reported symptom when tested for real** — the
+port-reassignment recurred even with the workaround enabled, which is
+what settled the decision to stop trying to reconcile the remote with
+RetroArch's Android input handling at all, rather than keep chasing
+further Android-TV-specific edge cases in a two-input-device setup.
 
-These live in `config/retro_fix2.cfg` on the device's accessible storage
-(`/storage/emulated/0/RetroArch/config/`, not committed here — device
-state). A normal tap on RetroArch's own icon has no way to tell it to
-load a non-default config file, so a plain launch would still hit the
-bug. The fix is delivered via a small trampoline app instead — see
-`retroarch-launcher-app/` below.
-
-Also set in this file (2026-09-20): `rgui_browser_directory` — was
-`"default"` (unset), now `/storage/DF3B-5BC7/roms`, the same shared parent
-R-Shop downloads into (see "Local storage layout" under the R-Shop section
-below) — so RetroArch's own Load Content file browser starts at the same
-tree instead of the device's generic root.
-
-**Filed upstream:** [libretro/RetroArch#19593](https://github.com/libretro/RetroArch/issues/19593)
-— no existing issue covered this exact regression (confirmed via GitHub
-search before filing). Includes a suggested minimal patch (gate the
-`DPAD_CENTER → ENTER` rewrite on `AINPUT_SOURCE_DPAD`, verified this
-remote reports `Sources: 0x00000301` = `SOURCE_KEYBOARD | SOURCE_DPAD`,
-distinguishing it from a plain external keyboard), not submitted as a
-PR since there's no build/test environment here to validate it beyond
-the empirical device-level check.
-
-**Ruled out along the way** (kept here so this isn't re-litigated):
-Menu Swap / Unified Menu Controls toggles alone (they only affect the
-Android system Back key's role, a completely separate code path from
-the joypad button system Center lives in); redirecting RetroArch's
-"Configuration files" directory; regenerating the autoconfig profile via
-"Save Controller Profile"; removing `input_device_type = "remote"` from
-the bundled autoconfig (required a repackaged, re-signed APK to test —
-useful for ruling out the wrong theory, not the actual fix).
-
-## RetroArch controller port reassignment (8BitDo Pro 2)
-
-**Symptom (2026-09-20):** with a real gamepad (8BitDo Pro 2) paired
-alongside the Fire TV remote, using the remote after the gamepad caused
-RetroArch to reassign ports — "Fire Stick Remote configured in port 1",
-"8BitDo Controller configured in port 2" — and the gamepad then produced
-no input at all (port 2 has no bindings; every custom bind in
-`retro_fix2.cfg` is `input_player1_*`, for the remote fix above).
-
-**Two things ruled out first, in order, each made things worse or did
-nothing:**
-
-1. Suspected the OK-button fix's global `menu_swap_ok_cancel_buttons =
-   "true"` was inverting the gamepad's physical East button (RetroArch's
-   RetroPad A/B naming follows SNES layout, so on an Xbox-style pad
-   physical East = RetroPad A — a well-known point of confusion) from
-   confirm to cancel. Rebinding the remote's fix from
-   `input_player1_b_btn` to `input_player1_a_btn` and turning the swap
-   off did NOT fix the port-reassignment bug (unrelated mechanism) and
-   broke the remote's physical Back key as a side effect — reverted.
-2. Suspected `input_autodetect_enable` (governs automatic port
-   assignment on device connect/activity). Disabling it broke every
-   input device entirely, including the remote — reverted immediately.
-
-**Actual root cause, confirmed via a real GitHub issue matching this
-exact symptom
-([libretro/RetroArch#16873](https://github.com/libretro/RetroArch/issues/16873)):**
-a known Android TV bug where reconnecting/re-activating an input device
-reports a changed OS-level device identity, which RetroArch reads as a
-brand-new controller rather than the same one — incrementing its port
-instead of reusing the original.
-
-**The fix:** `android_input_disconnect_workaround = "true"` in
-`retro_fix2.cfg` (was `"false"`, RetroArch's own default) — a real,
-purpose-built RetroArch setting for exactly this bug, confirmed via
-RetroArch's own source
-(`settings/settings_def_input_android_workaround.h`) and the linked
-issue thread, not a guess.
-
-**Known limitation, by RetroArch's own setting description:** "Impedes 2
-players with identical controllers." The workaround almost certainly
-identifies "is this a reconnect of the same controller" by device
-name/vendor/product ID rather than the OS-level identity (since that's
-exactly what the underlying bug corrupts) — which two identical
-controllers share, so a second identical 8BitDo Pro 2 added for local
-multiplayer would likely get misidentified as a reconnect of the first.
-**Deliberately left enabled for now** (single gamepad + remote); revisit
-when a second identical controller is actually added — likely needs to
-be turned back off in favor of a different per-session port-assignment
-approach at that point, not yet investigated.
+**Ruled out along the way** (kept so this isn't re-litigated if anyone
+revisits remote support later): Menu Swap / Unified Menu Controls
+toggles alone; redirecting RetroArch's "Configuration files" directory;
+regenerating the autoconfig profile via "Save Controller Profile";
+removing `input_device_type = "remote"` from the bundled autoconfig
+(required a repackaged, re-signed APK to test).
 
 ## RetroArch playlists (XMB console tabs)
 
@@ -345,82 +295,32 @@ not a full reconfiguration, since the underlying `smb` source (host,
 share, credentials) is defined exactly once and reused, but not fully
 automatic either.
 
-**What's still open, deliberately unfixed:** once past onboarding,
-confirm/menu are bound to real gamepad buttons
-(`LogicalKeyboardKey.gameButtonA` / `gameButtonStart` in
-`lib/core/widgets/console_focusable.dart` and `lib/core/input/app_actions.dart`)
-which this remote cannot send -- it sends `LogicalKeyboardKey.select`
-(Android `DPAD_CENTER`) instead, which isn't in R-Shop's accepted-keys
-list. Same root-cause family as the RetroArch `DPAD_CENTER` regression
-above, and the fix would be similarly small (add `select` to the accepted
-keys) -- but deliberately not patched, since Stage 8's Bluetooth
-controller will send `gameButtonA`/`gameButtonStart` natively and makes
-this moot. Revisit only if a real controller still doesn't work; the fix
-would need a real Flutter rebuild (isolated SDK setup documented in
-`retroarch-launcher-app/README.md`'s spirit, not yet written up for
-R-Shop specifically since it wasn't needed here).
+**Resolved via Stage 8's real gamepad (2026-09-20):** confirm/menu are
+bound to real gamepad buttons (`LogicalKeyboardKey.gameButtonA` /
+`gameButtonStart` in `lib/core/widgets/console_focusable.dart` and
+`lib/core/input/app_actions.dart`), which the Fire TV remote cannot
+send — it sends `LogicalKeyboardKey.select` (Android `DPAD_CENTER`)
+instead, which isn't in R-Shop's accepted-keys list. Same root-cause
+family as the RetroArch `DPAD_CENTER` regression above. Deliberately not
+patched at the time, betting on Stage 8's Bluetooth controller sending
+`gameButtonA`/`gameButtonStart` natively — confirmed correct: the 8BitDo
+Pro 2 navigates R-Shop's menu fine. If a real controller ever doesn't
+work here, the fix would need a real Flutter rebuild (isolated SDK
+setup — see git history
+for `retroarch-launcher-app/README.md`, since removed, for the general
+javac/d8/aapt2-without-Gradle pattern if this needs revisiting).
 
-## `retroarch-launcher-app/`
+## `retroarch-launcher-app/` — removed (2026-09-20)
 
-A minimal hand-built Android app (no Gradle — compiled directly with
-`javac`/`d8`/`aapt2` from the Android SDK build-tools, source in
-`retroarch-launcher-app/src/`) with a single trampoline Activity: on
-launch it starts RetroArch's `RetroActivityFuture` directly with
-`-e CONFIGFILE /storage/emulated/0/RetroArch/config/retro_fix2.cfg`,
-then finishes immediately. It shows up as its own launcher tile,
-**"RetroArch (Fixed)"**, self-signed (debug-equivalent key, see
-`retroarch-launcher-app/debug.keystore` — gitignored, regenerate with
-`keytool` if lost, self-signing doesn't need to match anything).
-This is the tile to actually launch RetroArch from going forward — the
-plain "RetroArch (32-bit)" tile still exists but launches without the
-fix. Rebuild steps are in `retroarch-launcher-app/README.md`.
-
-**Missing home-row icon, fixed (2026-09-20):** the trampoline showed no
-tile image at all, while the real RetroArch app did. Root cause, confirmed
-by pulling and comparing both APKs with `aapt2 dump badging`: Android
-TV's home-row tile reads `android:banner`, a dedicated landscape image —
-real RetroArch ships a proper 320×180 banner (`res/O5.png`) separate from
-its icon; the trampoline reused the same 192×192 **square** icon for both
-`android:icon` and `android:banner`, which the launcher silently declines
-to render as a banner. Fixed by adding a real 320×180
-`res/mipmap/ic_banner.png` (generated from the existing flat-color
-placeholder icon — there's no real logo here, just a correctly-shaped
-version of the same placeholder) and pointing `android:banner` at it
-instead of reusing `ic_launcher`. Confirmed via `aapt2 dump badging` that
-the rebuilt APK resolves `banner='res/mipmap/ic_banner.png'` distinct from
-`icon='res/mipmap/ic_launcher.png'`, matching the real app's pattern.
-Installed as an in-place upgrade (`adb install -r`, same `debug.keystore`,
-no uninstall needed).
-
-**Real assets swapped in, and a separate launcher-cache gap found
-(2026-09-20):** the flat-color placeholder banner/icon were replaced with
-the real RetroArch banner and mascot icon, extracted directly from the
-user's own installed RetroArch APK (`res/O5.png`, a real 320×180
-banner) — legitimate reuse, since this trampoline only ever launches that
-same app. A square icon was cropped from the same banner (just the alien
-mascot, avoiding the wordmark) for `android:icon`. Rebuilt, `versionCode`
-bumped 1→3, reinstalled — `aapt2 dump badging` confirms both resources
-resolve correctly in the installed APK. **But Projectivy (the launcher)
-still shows the old placeholder tile**, surviving a force-stop, a full
-reinstall, and a `versionCode` bump — its icon cache is keyed on
-something else entirely, or simply doesn't invalidate on package update.
-The only known fix is `adb shell pm clear com.spocky.projengmenu`, which
-would also reset Projectivy's custom categories/layout, not just its icon
-cache — left alone per user decision (2026-09-20): the app-level fix is
-correct and verified via `aapt2`, this is purely a stale-display issue in
-Projectivy itself. Revisit if Projectivy's cache ever gets cleared for
-another reason, or if a narrower "rescan/refresh apps" option is found in
-its own settings.
-
-R-Shop's own trampoline (`rshop-launcher-app/`) had the exact same
-square-icon-as-banner issue. Rather than fix it, the trampoline was
-removed entirely (2026-09-20): it existed purely for a home-row tile (no
-special launch args, unlike this one), and the plain `R-Shop` icon works
-identically otherwise, so a second launcher wasn't worth maintaining just
-for that. R-Shop now launches from its own icon in Projectivy's app list
-(not the home row, since R-Shop's own manifest lacks `LEANBACK_LAUNCHER`
-— see bug (1) below). Revisit only if a home-row tile for R-Shop
-specifically becomes worth building again.
+Used to exist here: a minimal hand-built trampoline app (no Gradle —
+`javac`/`d8`/`aapt2` directly) that launched RetroArch with a custom
+config carrying the OK-button fix, shown as its own tile ("RetroArch
+(Fixed)"). Removed along with `retro_fix2.cfg` as part of the decision to
+abandon remote support in RetroArch entirely and go gamepad-only — see
+"RetroArch: gamepad-only, remote support abandoned" above for the full
+story, including a real banner/icon-cache saga this trampoline went
+through before being removed. **"RetroArch (32-bit)"**, the plain
+unmodified app, is the only RetroArch tile now.
 
 ## Provisioning workspace
 
@@ -468,13 +368,14 @@ stages, given what's actually been learned on real hardware:
 4. **Media/discovery clients** — DONE. SmartTube (`armeabi-v7a`, package
    `org.smarttube.stable`) and Seerr TV (Vermino, package `com.seerr.tv`)
    both installed, architecture-verified, launched cleanly.
-5. **RetroArch baseline** — IN PROGRESS. Hit and resolved a real blocker
-   first: the Fire TV remote's physical OK/Center button did nothing at
-   all in RetroArch's menu. Root-caused to a genuine RetroArch 1.22.2
-   regression (not a config mistake, not a "remote"-device-class
-   limitation) — see "RetroArch OK-button fix" below for the full
-   writeup. Fixed via a custom config + a small trampoline launcher app.
-   Still remaining: apply
+5. **RetroArch baseline** — IN PROGRESS, remote support abandoned
+   (2026-09-20). Real, root-caused RetroArch 1.22.2 regressions were
+   found and worked around for a while (remote OK-button, then a
+   controller port-reassignment bug once a real gamepad was added), but
+   the port bug's fix didn't actually hold up under real testing — see
+   "RetroArch: gamepad-only, remote support abandoned" below for the
+   full story. Final decision: vanilla RetroArch ("RetroArch (32-bit)"),
+   gamepad-only, no remote support attempted. Still remaining: apply
    [fire_tv_emulation_design.md](../../design-notes/fire_tv_emulation_design.md)'s
    settings, point at the confirmed `DF3B-5BC7` USB volume, run the
    per-system validation set.
@@ -498,15 +399,21 @@ stages, given what's actually been learned on real hardware:
    proofing). Box art is currently blank — R-Shop has no artwork source
    configured yet (a separate concern from ScreenScraper's own downloaded
    media in `curate`'s cache, not wired to R-Shop), not yet addressed.
-   Still remaining: install/cache/remove and the confirm-button gamepad
-   gap (see below) are unverified with real button presses; the
-   direct-launch handoff into RetroArch is untouched.
+   Confirm/menu navigation confirmed working with a real gamepad
+   (8BitDo Pro 2, see Stage 8) — the `gameButtonA`/`gameButtonStart` gap
+   this was waiting on is resolved. Still remaining: install/cache/remove
+   flows themselves are unverified with real button presses beyond
+   navigation; the direct-launch handoff into RetroArch is untouched.
 7. **Save sync** (Syncthing-Fork) — not yet started.
-8. **Controllers** — pairing, hotkey mapping — not yet started. Also the
-   answer to R-Shop's remaining open item (confirm/menu need real
-   `gameButtonA`/`gameButtonStart`, which this remote can't send but any
-   Bluetooth controller will) — deliberately deferred to here rather than
-   patched, see "R-Shop bugs and workarounds" below.
+8. **Controllers** — IN PROGRESS. 8BitDo Pro 2 paired via Amazon's
+   Bluetooth settings, confirmed working for R-Shop navigation and (as a
+   plain gamepad, no custom config) RetroArch. Resolved R-Shop's
+   remaining confirm/menu gap as anticipated. Hit a real Android-TV-level
+   controller port-reassignment bug when used alongside the Fire TV
+   remote in RetroArch specifically — see "RetroArch: gamepad-only,
+   remote support abandoned" below; resolved by not using the remote
+   with RetroArch at all, not by fixing the underlying bug. Hotkey
+   mapping still not started.
 9. **Travel validation** — actually exercise the Tailscale path installed
    in Stage 3 — not yet started.
 10. **Final polish + acceptance pass** — Projectivy launcher cleanup,

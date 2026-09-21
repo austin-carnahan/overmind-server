@@ -150,36 +150,17 @@ apps:
     update_mechanism: appstore
     note: installed and signed in (2026-09-19), pointed at http://192.168.68.55:8096 (jellyfin.home.arpa works over http:// from other clients; not yet confirmed the Fire TV itself resolves it -- using the direct IP for now)
 
-  - name: RetroArch (Fixed)
-    upstream: n/a -- home-built, source in ../retroarch-launcher-app/
-    # Not a real emulator, a one-Activity trampoline that launches
-    # RetroArch (32-bit, above) with -e CONFIGFILE pointing at
-    # config/retro_fix2.cfg on device, working around a real RetroArch
-    # 1.22.2 regression (DPAD_CENTER handling -- see the "RetroArch
-    # OK-button fix" section in ../README.md). Exists because a plain
-    # tap on RetroArch's own icon has no way to pass that argument.
-    package: com.homeserver.retroarchlaunch
-    version: "1.2 (versionCode 3)"
-    artifact: n/a -- built locally, not downloaded (see retroarch-launcher-app/README.md)
-    architecture: n/a -- pure Java, no native libs, single trampoline Activity
-    checksum: n/a
-    install_source: home-built (javac/d8/aapt2, no Gradle -- see retroarch-launcher-app/README.md)
-    update_mechanism: manual rebuild if the fixed config's path or contents ever change
-    status: |-
-      INSTALLED (2026-09-20), confirmed working end-to-end -- this is the
-      tile to launch RetroArch from going forward, not the plain
-      "RetroArch (32-bit)" tile. Home-row banner fixed (2026-09-20): was
-      showing no icon at all (reused a square icon as the banner; Android
-      TV's home row needs a real landscape banner) -- see
-      ../README.md's retroarch-launcher-app section for the full
-      diagnosis. Rebuilt with a proper 320x180 banner, reinstalled in
-      place (same keystore). Real assets swapped in afterward (extracted
-      from the user's own installed RetroArch APK: banner + a cropped
-      mascot icon), versionCode bumped 1->3, reinstalled -- confirmed
-      correct via aapt2 dump badging. Known unresolved display issue, not
-      an app bug: Projectivy (the launcher) still shows the old
-      placeholder tile, surviving force-stop/reinstall/versionCode bump --
-      its icon cache doesn't invalidate on package update. Fix would be
-      `pm clear com.spocky.projengmenu`, which also resets Projectivy's
-      custom categories/layout -- left alone per user decision, purely
-      cosmetic.
+  - name: RetroArch (Fixed) -- REMOVED (2026-09-21)
+    upstream: n/a -- was home-built, source formerly in ../retroarch-launcher-app/
+    # Was a one-Activity trampoline launching RetroArch with -e CONFIGFILE
+    # pointing at a custom config carrying the OK-button fix. Uninstalled
+    # (com.homeserver.retroarchlaunch) and source deleted as part of the
+    # decision to abandon Fire TV remote support in RetroArch entirely and
+    # go gamepad-only -- the port-reassignment bug this ran into once a
+    # real gamepad (8BitDo Pro 2) was added couldn't be reliably fixed
+    # (RetroArch's own purpose-built android_input_disconnect_workaround
+    # setting did not resolve it when actually tested). See the "RetroArch:
+    # gamepad-only, remote support abandoned" section in ../README.md for
+    # the full history. "RetroArch (32-bit)" (plain, unmodified) is the
+    # only RetroArch tile now.
+    status: REMOVED (2026-09-21) -- see ../README.md
