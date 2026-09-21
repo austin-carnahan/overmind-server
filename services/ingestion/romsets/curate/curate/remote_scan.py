@@ -45,12 +45,32 @@ def _is_junk(file_name: str) -> bool:
     return bool(JUNK_TAG_RE.search(file_name))
 
 
+def _get_with_retry(
+    session: requests.Session, url: str, max_attempts: int = 5, backoff_base_seconds: float = 3.0, **kwargs
+) -> requests.Response:
+    """A multi-hour unattended scan against a third-party site WILL see
+    transient timeouts/connection resets -- confirmed the hard way (a real
+    run crashed after 267/11,170 pages on one ReadTimeout, losing hours of
+    progress since nothing was persisted until the very end). Retry with
+    backoff instead of letting one bad request kill the whole run."""
+    last_exc: Exception | None = None
+    for attempt in range(1, max_attempts + 1):
+        try:
+            resp = session.get(url, **kwargs)
+            resp.raise_for_status()
+            return resp
+        except requests.exceptions.RequestException as exc:
+            last_exc = exc
+            if attempt < max_attempts:
+                time.sleep(backoff_base_seconds * attempt)
+    raise last_exc
+
+
 def fetch_listing(session: requests.Session, listing_url: str, cache_path: Path, refresh: bool = False) -> list[dict]:
     if cache_path.exists() and not refresh:
         html = cache_path.read_text()
     else:
-        resp = session.get(listing_url, timeout=30)
-        resp.raise_for_status()
+        resp = _get_with_retry(session, listing_url, timeout=30)
         html = resp.text
         cache_path.parent.mkdir(parents=True, exist_ok=True)
         cache_path.write_text(html)
@@ -79,8 +99,7 @@ def fetch_rom_metadata(
     if cache_file.exists() and not refresh:
         return json.loads(cache_file.read_text())
 
-    resp = session.get(f"{base_url.rstrip('/')}/rom", params={"id": rom_id}, timeout=30)
-    resp.raise_for_status()
+    resp = _get_with_retry(session, f"{base_url.rstrip('/')}/rom", params={"id": rom_id}, timeout=30)
     match = ROM_JSON_RE.search(resp.text)
     cache_dir.mkdir(parents=True, exist_ok=True)
     if not match:
@@ -119,11 +138,31 @@ def build_remote_inventory(
     skipped_region = 0
     skipped_fetch_failed = 0
 
-    for entry in entries:
-        rom = fetch_rom_metadata(session, base_url, entry["id"], rom_cache_dir, rate_limit_seconds, refresh=refresh)
+    for i, entry in enumerate(entries, start=1):
+        try:
+            rom = fetch_rom_metadata(
+                session, base_url, entry["id"], rom_cache_dir, rate_limit_seconds, refresh=refresh
+            )
+        except requests.exceptions.RequestException:
+            # Already retried with backoff inside fetch_rom_metadata -- this
+            # one page is truly unreachable. Don't let it take down a
+            # multi-hour run; count it and move on.
+            skipped_fetch_failed += 1
+            continue
         if rom is None:
             skipped_fetch_failed += 1
             continue
+
+        # Checkpoint periodically to a side file (never out_path itself --
+        # this is pre-dedup, a different shape than the final output, and
+        # out_path should only ever hold a complete result). A crash losing
+        # a few hundred entries' bookkeeping is a lot cheaper to redo than
+        # losing the whole run -- confirmed the hard way once already (see
+        # _get_with_retry). The per-page cache already makes redoing them
+        # fast regardless; this just makes progress inspectable mid-run.
+        if i % 200 == 0:
+            checkpoint_path = cache_dir / "raw_records.checkpoint.json"
+            checkpoint_path.write_text(json.dumps(raw_records, indent=2))
 
         file_name = rom.get("file_name", entry["file_name"])
         if _is_junk(file_name):
