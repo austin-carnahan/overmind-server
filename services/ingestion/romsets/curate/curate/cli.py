@@ -90,8 +90,11 @@ def cmd_select(args):
 
 def cmd_deploy(args):
     top_100_path = platform_dir(args.platform) / "top-100.json"
-    deployed = deploy_top(top_100_path, ARCHIVE_ROOT / args.platform, LIBRARY_ROOT / args.platform)
-    print(f"copied {len(deployed)} files into {LIBRARY_ROOT / args.platform}")
+    result = deploy_top(top_100_path, ARCHIVE_ROOT / args.platform, LIBRARY_ROOT / args.platform)
+    print(
+        f"copied {len(result['copied'])}, removed {len(result['removed'])} stale file(s) "
+        f"-> {LIBRARY_ROOT / args.platform}"
+    )
 
 
 def main():
