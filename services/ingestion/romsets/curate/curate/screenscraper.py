@@ -30,22 +30,36 @@ def _run_skyscraper(
     sspassword: str,
     refresh: bool,
 ):
+    """Two separate passes, matching Skyscraper's own official scrape.sh +
+    save.sh pattern -- a single invocation with both -s and -g/-o only
+    gathers into the resource cache, it does NOT also flush a gamelist.xml.
+    """
     sky_platform = PLATFORM_MAP.get(platform, platform)
     gamelist_dir.mkdir(parents=True, exist_ok=True)
-    cmd = [
+
+    gather_cmd = [
         "Skyscraper",
         "-p", sky_platform,
         "-s", "screenscraper",
         "-u", f"{ssid}:{sspassword}",
+        "-i", str(rom_dir),
+        "-d", str(cache_dir),
+        "--flags", "unattend",
+    ]
+    if refresh:
+        gather_cmd += ["--cache", "refresh"]
+    subprocess.run(gather_cmd, check=True)
+
+    flush_cmd = [
+        "Skyscraper",
+        "-p", sky_platform,
         "-i", str(rom_dir),
         "-g", str(gamelist_dir),
         "-o", str(media_dir),
         "-d", str(cache_dir),
         "--flags", "relative,unattend",
     ]
-    if refresh:
-        cmd += ["--cache", "refresh"]
-    subprocess.run(cmd, check=True)
+    subprocess.run(flush_cmd, check=True)
 
 
 def _text(game: ET.Element, tag: str) -> str | None:
