@@ -16,14 +16,14 @@ SCREENSCRAPER_WEIGHT = 10.0
 IGDB_VOTE_CAP = 100.0
 
 
-def _to_100(rating_0_to_1: float | None) -> float | None:
+def to_100(rating_0_to_1: float | None) -> float | None:
     return None if rating_0_to_1 is None else rating_0_to_1 * 100.0
 
 
-def _platform_prior(candidates: list[dict]) -> float:
+def platform_prior(candidates: list[dict]) -> float:
     combined = []
     for c in candidates:
-        s = _to_100(c.get("screenscraper_rating"))
+        s = to_100(c.get("screenscraper_rating"))
         i = c.get("igdb_rating")
         vals = [v for v in (s, i) if v is not None]
         if vals:
@@ -33,7 +33,7 @@ def _platform_prior(candidates: list[dict]) -> float:
     return sum(combined) / len(combined)
 
 
-def _bayesian_score(prior: float, s: float | None, i: float | None, v: float | None) -> float | None:
+def bayesian_score(prior: float, s: float | None, i: float | None, v: float | None) -> float | None:
     if s is None and i is None:
         return None
     v = min(v or 0.0, IGDB_VOTE_CAP)
@@ -51,13 +51,13 @@ def _bayesian_score(prior: float, s: float | None, i: float | None, v: float | N
 
 def score_candidates(candidates_path: Path) -> list[dict]:
     candidates = json.loads(candidates_path.read_text())
-    prior = _platform_prior(candidates)
+    prior = platform_prior(candidates)
     for c in candidates:
-        s = _to_100(c.get("screenscraper_rating"))
+        s = to_100(c.get("screenscraper_rating"))
         i = c.get("igdb_rating")
         v = c.get("igdb_rating_count")
         c["platform_prior"] = prior
-        c["final_score"] = _bayesian_score(prior, s, i, v)
+        c["final_score"] = bayesian_score(prior, s, i, v)
         c["rating_coverage"] = sum(1 for val in (s, i) if val is not None)
     candidates_path.write_text(json.dumps(candidates, indent=2))
     return candidates

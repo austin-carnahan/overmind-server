@@ -1,10 +1,44 @@
 {
   "genesis": {
-    "Some Game": {
-      "igdb_id": 1234,
-      "force_include": false,
-      "force_exclude": false,
-      "note": "Resolved alternate North American title"
+    "Old Towers": {
+      "force_exclude": true,
+      "note": "Homebrew puzzle game -- slipped past Igir's --only-retail DAT-category filter; scored highly on ScreenScraper's small, unweighted voter pool alongside genuine classics"
+    },
+    "Griel's Quest": {
+      "force_exclude": true,
+      "note": "Homebrew RPG -- same gap as Old Towers"
+    },
+    "Golden Axe": {
+      "force_include": true,
+      "note": "User favorite, didn't make the automatic candidate cut"
+    },
+    "Golden Axe II": {
+      "force_include": true
+    },
+    "Michael Jackson's Moonwalker": {
+      "force_include": true
+    },
+    "Rocket Knight Adventures": {
+      "force_include": true
+    },
+    "Revenge of Shinobi, The": {
+      "force_include": true
+    },
+    "Shadow Dancer - The Secret of Shinobi": {
+      "force_include": true
+    },
+    "Shinobi III - Return of the Ninja Master": {
+      "force_include": true
+    },
+    "Teenage Mutant Ninja Turtles - The Hyperstone Heist": {
+      "force_include": true
+    },
+    "Mega Man - The Wily Wars": {
+      "force_include": true
+    },
+    "X-Men 2 - Clone Wars": {
+      "force_include": true,
+      "note": "Personal favorite, not widely listed on \"best of\" lists"
     }
   }
 }

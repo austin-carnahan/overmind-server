@@ -8,24 +8,15 @@ contract.
 import csv
 import difflib
 import json
-import re
 import time
 from pathlib import Path
 
 import requests
 
+from .titles import clean_title
+
 TOKEN_URL = "https://id.twitch.tv/oauth2/token"
 GAMES_URL = "https://api.igdb.com/v4/games"
-
-# No-Intro-style region/language/revision tags -- e.g. "Phantasy Star IV
-# (USA)" or "Flashback (USA)(En,Fr)". IGDB's search endpoint returns zero
-# results when these are left in (confirmed against the live API, not a
-# guess); strip them before querying.
-_TAG_RE = re.compile(r"\s*\([^)]*\)")
-
-
-def _clean_title(raw_title: str) -> str:
-    return _TAG_RE.sub("", raw_title).strip()
 
 FIELDS = (
     "name,alternative_names.name,platforms.name,first_release_date,"
@@ -113,7 +104,7 @@ def enrich_candidates(
     ambiguous_rows = []
     for record in candidates:
         raw_title = record.get("display_name") or record.get("dat_name") or record["canonical_filename"]
-        title = _clean_title(raw_title)
+        title = clean_title(raw_title)
         cache_key = record["sha1"]
         cache_file = cache_dir / f"{cache_key}.json"
         if cache_file.exists() and not refresh:

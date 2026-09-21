@@ -1,24 +1,13 @@
-"""Stage: select. Deterministic ordering and top-N cut, plus the review CSVs."""
+"""Stage: select. Deterministic ordering, dedup, force-include/exclude, and
+the top-N cut, plus the review CSVs."""
 
 import csv
 import json
-import re
 from pathlib import Path
 
-from .overrides import apply_overrides, load_overrides
-
-_TAG_RE = re.compile(r"\s*\([^)]*\)")
-
-
-def _base_title(record: dict) -> str:
-    """Normalize away region/rerelease/edition tags so alternate editions of
-    the same game (e.g. a base release and its 'Sega Channel' or 'Sega Ages'
-    rerelease) are recognized as one game, not two -- confirmed against a
-    real run to be a real gap: 9 of 100 slots were duplicate base titles
-    before this was added.
-    """
-    raw = record.get("dat_name") or record.get("canonical_filename") or ""
-    return _TAG_RE.sub("", raw).strip().lower()
+from .overrides import excluded_base_titles, forced_base_titles, load_overrides, resolve_forced_records
+from .scoring import bayesian_score, to_100
+from .titles import base_title
 
 REPORT_FIELDS = [
     "rank",
@@ -35,6 +24,7 @@ REPORT_FIELDS = [
     "igdb_match_method",
     "igdb_id",
     "screenscraper_id",
+    "forced_include",
     "override",
 ]
 
@@ -57,6 +47,18 @@ def _write_csv(path: Path, records: list[dict]):
         writer.writerows(records)
 
 
+def _score_forced_record(record: dict, prior: float) -> dict:
+    """Forced records come from the full identified pool, not the scored
+    candidates -- give them a comparable score (ScreenScraper-only variant,
+    since we don't IGDB-enrich outside the candidate pool) so final ordering
+    isn't arbitrary. Inclusion never depends on this score."""
+    s = to_100(record.get("screenscraper_rating"))
+    record.setdefault("platform_prior", prior)
+    record.setdefault("final_score", bayesian_score(prior, s, None, None))
+    record.setdefault("rating_coverage", 1 if s is not None else 0)
+    return record
+
+
 def select_top(
     identified_path: Path,
     candidates_path: Path,
@@ -69,25 +71,33 @@ def select_top(
     candidates = json.loads(candidates_path.read_text())
 
     overrides = load_overrides(overrides_path, platform)
-    candidates = apply_overrides(candidates, overrides)
+    excluded = excluded_base_titles(overrides)
+    forced = forced_base_titles(overrides)
+
+    forced_records, missing_forced = resolve_forced_records(forced, identified)
+    prior = candidates[0]["platform_prior"] if candidates else 70.0
+    forced_records = [_score_forced_record(r, prior) for r in forced_records]
+    forced_bases = {base_title(r) for r in forced_records}
+
+    candidates = [c for c in candidates if base_title(c) not in excluded and base_title(c) not in forced_bases]
     candidates.sort(key=_sort_key)
     for i, record in enumerate(candidates, start=1):
         record["pool_rank"] = i  # position among all candidates, before dedup
 
-    seen_base_titles: set[str] = set()
-    top = []
+    # Forced titles always make the list; fill remaining slots from the
+    # normally-ranked, deduped pool.
+    top = list(forced_records)
+    seen_base_titles = set(forced_bases)
     for record in candidates:
-        base = _base_title(record)
+        if len(top) >= limit:
+            break
+        base = base_title(record)
         if base in seen_base_titles:
             continue
         seen_base_titles.add(base)
         top.append(record)
-        if len(top) == limit:
-            break
 
-    # A clean 1..N rank for the actual deployed selection -- pool_rank has
-    # gaps where a duplicate base title was skipped, which is confusing in
-    # a "top 100" report.
+    top.sort(key=_sort_key)
     for i, record in enumerate(top, start=1):
         record["rank"] = i
 
@@ -101,5 +111,8 @@ def select_top(
 
     unmatched_igdb = [r for r in candidates if r.get("igdb_match_method") == "unmatched"]
     _write_csv(out_dir / "unmatched-igdb.csv", unmatched_igdb)
+
+    if missing_forced:
+        (out_dir / "overrides-not-found.txt").write_text("\n".join(missing_forced) + "\n")
 
     return top
