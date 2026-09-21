@@ -159,7 +159,7 @@ apps:
     # OK-button fix" section in ../README.md). Exists because a plain
     # tap on RetroArch's own icon has no way to pass that argument.
     package: com.homeserver.retroarchlaunch
-    version: "1.0"
+    version: "1.2 (versionCode 3)"
     artifact: n/a -- built locally, not downloaded (see retroarch-launcher-app/README.md)
     architecture: n/a -- pure Java, no native libs, single trampoline Activity
     checksum: n/a
@@ -173,4 +173,13 @@ apps:
       TV's home row needs a real landscape banner) -- see
       ../README.md's retroarch-launcher-app section for the full
       diagnosis. Rebuilt with a proper 320x180 banner, reinstalled in
-      place (same keystore).
+      place (same keystore). Real assets swapped in afterward (extracted
+      from the user's own installed RetroArch APK: banner + a cropped
+      mascot icon), versionCode bumped 1->3, reinstalled -- confirmed
+      correct via aapt2 dump badging. Known unresolved display issue, not
+      an app bug: Projectivy (the launcher) still shows the old
+      placeholder tile, surviving force-stop/reinstall/versionCode bump --
+      its icon cache doesn't invalidate on package update. Fix would be
+      `pm clear com.spocky.projengmenu`, which also resets Projectivy's
+      custom categories/layout -- left alone per user decision, purely
+      cosmetic.

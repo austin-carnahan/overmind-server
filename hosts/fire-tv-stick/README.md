@@ -341,6 +341,26 @@ the rebuilt APK resolves `banner='res/mipmap/ic_banner.png'` distinct from
 Installed as an in-place upgrade (`adb install -r`, same `debug.keystore`,
 no uninstall needed).
 
+**Real assets swapped in, and a separate launcher-cache gap found
+(2026-09-20):** the flat-color placeholder banner/icon were replaced with
+the real RetroArch banner and mascot icon, extracted directly from the
+user's own installed RetroArch APK (`res/O5.png`, a real 320×180
+banner) — legitimate reuse, since this trampoline only ever launches that
+same app. A square icon was cropped from the same banner (just the alien
+mascot, avoiding the wordmark) for `android:icon`. Rebuilt, `versionCode`
+bumped 1→3, reinstalled — `aapt2 dump badging` confirms both resources
+resolve correctly in the installed APK. **But Projectivy (the launcher)
+still shows the old placeholder tile**, surviving a force-stop, a full
+reinstall, and a `versionCode` bump — its icon cache is keyed on
+something else entirely, or simply doesn't invalidate on package update.
+The only known fix is `adb shell pm clear com.spocky.projengmenu`, which
+would also reset Projectivy's custom categories/layout, not just its icon
+cache — left alone per user decision (2026-09-20): the app-level fix is
+correct and verified via `aapt2`, this is purely a stale-display issue in
+Projectivy itself. Revisit if Projectivy's cache ever gets cleared for
+another reason, or if a narrower "rescan/refresh apps" option is found in
+its own settings.
+
 R-Shop's own trampoline (`rshop-launcher-app/`) had the exact same
 square-icon-as-banner issue. Rather than fix it, the trampoline was
 removed entirely (2026-09-20): it existed purely for a home-row tile (no
