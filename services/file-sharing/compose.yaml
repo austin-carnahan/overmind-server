@@ -15,6 +15,11 @@ services:
       ACCOUNT_romsets: ${SAMBA_PASSWORD}
       UID_romsets: "1000"
       SAMBA_VOLUME_CONFIG_romsets: "[romsets];path=/shares/romsets;valid users=romsets;read only=yes;browseable=yes;guest ok=no"
+      # Default log level (1) doesn't record enough to diagnose an
+      # ACCESS_DENIED at tree-connect (e.g. distinguishing a guest fallback
+      # from a real permission problem) -- 3 logs auth/connection detail
+      # without being as noisy as full protocol tracing.
+      SAMBA_GLOBAL_CONFIG_loglevel: "log level = 3"
       # Neither Bonjour discovery (Apple) nor WSD (Windows) are relevant to
       # an Android/Fire TV client — disabled to reduce surface, not because
       # either is known to cause a problem.
