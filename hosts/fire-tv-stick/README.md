@@ -146,6 +146,12 @@ load a non-default config file, so a plain launch would still hit the
 bug. The fix is delivered via a small trampoline app instead — see
 `retroarch-launcher-app/` below.
 
+Also set in this file (2026-09-20): `rgui_browser_directory` — was
+`"default"` (unset), now `/storage/DF3B-5BC7/roms`, the same shared parent
+R-Shop downloads into (see "Local storage layout" under the R-Shop section
+below) — so RetroArch's own Load Content file browser starts at the same
+tree instead of the device's generic root.
+
 **Filed upstream:** [libretro/RetroArch#19593](https://github.com/libretro/RetroArch/issues/19593)
 — no existing issue covered this exact regression (confirmed via GitHub
 search before filing). Includes a suggested minimal patch (gate the
@@ -232,6 +238,23 @@ by writing a direct legacy `providers` entry (`type: smb`, `host`, `port`,
 what's actually read for game loading, the latter keeps the in-app Sources
 screen and future `SourcesNotifier`-driven edits consistent. Confirmed via
 screenshot: "100 Games", every card tagged `SMB`, real curated titles.
+
+**Local storage layout (2026-09-20):** `target_folder` is
+`/storage/DF3B-5BC7/roms/genesis` — matching the `roms/<system>/` layout
+already decided in
+[fire_tv_emulation_design.md](../../design-notes/fire_tv_emulation_design.md#7-rom-storage-model),
+not an ad-hoc path. RetroArch's `rgui_browser_directory` (previously
+unset, `"default"`) is now pointed at the shared parent
+`/storage/DF3B-5BC7/roms` so its own Load Content browser starts at the
+same tree R-Shop populates. One real constraint, not fixable from this
+side: R-Shop's SMB provider type can't self-describe every platform the
+way its RomM integration can (`Source.supportsAutoMap` is `true` only for
+`SourceType.romm` — confirmed in `lib/models/config/source.dart`), so
+adding each future curated platform still needs one small `SystemConfig`
+block (id/name/`target_folder`/`manual_mappings`) added to config.json —
+not a full reconfiguration, since the underlying `smb` source (host,
+share, credentials) is defined exactly once and reused, but not fully
+automatic either.
 
 **What's still open, deliberately unfixed:** once past onboarding,
 confirm/menu are bound to real gamepad buttons
