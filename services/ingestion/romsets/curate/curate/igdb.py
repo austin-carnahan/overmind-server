@@ -8,6 +8,7 @@ contract.
 import csv
 import difflib
 import json
+import re
 import time
 from pathlib import Path
 
@@ -15,6 +16,16 @@ import requests
 
 TOKEN_URL = "https://id.twitch.tv/oauth2/token"
 GAMES_URL = "https://api.igdb.com/v4/games"
+
+# No-Intro-style region/language/revision tags -- e.g. "Phantasy Star IV
+# (USA)" or "Flashback (USA)(En,Fr)". IGDB's search endpoint returns zero
+# results when these are left in (confirmed against the live API, not a
+# guess); strip them before querying.
+_TAG_RE = re.compile(r"\s*\([^)]*\)")
+
+
+def _clean_title(raw_title: str) -> str:
+    return _TAG_RE.sub("", raw_title).strip()
 
 FIELDS = (
     "name,alternative_names.name,platforms.name,first_release_date,"
@@ -48,9 +59,8 @@ def _year(unix_ts: int | None) -> int | None:
     return datetime.datetime.utcfromtimestamp(unix_ts).year
 
 
-def _match(record: dict, results: list[dict]) -> tuple[dict | None, str, float]:
+def _match(record: dict, title: str, results: list[dict]) -> tuple[dict | None, str, float]:
     """Return (best_match, method, confidence) per the documented matching order/thresholds."""
-    title = record.get("display_name") or record.get("dat_name") or record["canonical_filename"]
     want_year = None
     if record.get("release_date"):
         try:
@@ -102,7 +112,8 @@ def enrich_candidates(
 
     ambiguous_rows = []
     for record in candidates:
-        title = record.get("display_name") or record.get("dat_name") or record["canonical_filename"]
+        raw_title = record.get("display_name") or record.get("dat_name") or record["canonical_filename"]
+        title = _clean_title(raw_title)
         cache_key = record["sha1"]
         cache_file = cache_dir / f"{cache_key}.json"
         if cache_file.exists() and not refresh:
@@ -112,7 +123,7 @@ def enrich_candidates(
             cache_file.write_text(json.dumps(results))
             time.sleep(rate_limit_seconds)
 
-        best, method, confidence = _match(record, results)
+        best, method, confidence = _match(record, title, results)
         if best:
             record["igdb_id"] = best.get("id")
             record["igdb_rating"] = best.get("rating")
