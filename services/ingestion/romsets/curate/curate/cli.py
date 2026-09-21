@@ -5,6 +5,8 @@ from pathlib import Path
 from .deploy import deploy_top
 from .igdb import enrich_candidates
 from .inventory import build_inventory
+from .platforms import retroarch_name
+from .playlist import build_playlist
 from .rank import rank_candidates
 from .scoring import score_candidates
 from .screenscraper import scrape_platform
@@ -97,6 +99,13 @@ def cmd_deploy(args):
     )
 
 
+def cmd_playlist(args):
+    library_dir = LIBRARY_ROOT / args.platform
+    out_path = platform_dir(args.platform) / f"{retroarch_name(args.platform)}.lpl"
+    count = build_playlist(args.platform, library_dir, args.device_rom_dir, out_path)
+    print(f"{count} items -> {out_path} (db_name/filename: {retroarch_name(args.platform)}.lpl)")
+
+
 def main():
     parser = argparse.ArgumentParser(prog="curate")
     sub = parser.add_subparsers(dest="command", required=True)
@@ -133,6 +142,15 @@ def main():
     p = sub.add_parser("deploy")
     p.add_argument("--platform", required=True)
     p.set_defaults(func=cmd_deploy)
+
+    p = sub.add_parser("playlist")
+    p.add_argument("--platform", required=True)
+    p.add_argument(
+        "--device-rom-dir",
+        required=True,
+        help="Absolute path on the target device where these ROMs live, e.g. /storage/DF3B-5BC7/roms/genesis",
+    )
+    p.set_defaults(func=cmd_playlist)
 
     args = parser.parse_args()
     args.func(args)

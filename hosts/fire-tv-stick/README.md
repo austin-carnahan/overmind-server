@@ -170,6 +170,41 @@ the joypad button system Center lives in); redirecting RetroArch's
 the bundled autoconfig (required a repackaged, re-signed APK to test —
 useful for ruling out the wrong theory, not the actual fix).
 
+## RetroArch playlists (XMB console tabs)
+
+RetroArch's XMB menu only shows a console tab (icon row) for a system once
+a non-empty playlist (`.lpl`) exists for it — there's no "available
+consoles" view otherwise. Playlists are normally built by RetroArch's own
+"Import Content → Scan Directory", but that requires menu navigation,
+which (like the OK-button issue above) can't be driven via `adb shell
+input` — RetroArch reads raw input devices directly, not synthetic
+Android key events. Since playlist files are plain JSON on shared storage
+(`/storage/emulated/0/RetroArch/playlists/`, not app-private), the fix is
+the same class of workaround as the config edits above: build the `.lpl`
+directly and push it.
+
+**Naming is exact and load-bearing.** RetroArch matches its XMB icon and
+thumbnail set to a playlist's base filename (and each item's `db_name`)
+against Libretro's own canonical database/thumbnail-repo names — not our
+own internal platform keys — so spelling/capitalization/spaces/hyphens
+must match exactly (e.g. `Sega - Mega Drive - Genesis`, not `genesis` or
+`Sega Genesis`). ROM folder names stay simple either way; only the
+playlist file, its items' `db_name`, and the eventual
+`thumbnails/<canonical name>/` directory need to match. This is now
+formalized in `services/ingestion/romsets/curate`'s `playlist` subcommand
+and `curate/platforms.py`'s canonical-name table (covering genesis, nes,
+snes, n64, psx, dreamcast) rather than a one-off hand-built file.
+
+First playlist (2026-09-20): built from the 26 Genesis titles actually
+downloaded to `/storage/DF3B-5BC7/roms/genesis` at the time (not the full
+100-title library tier — `curate` running on Overmind has no visibility
+into what a given device has actually downloaded via R-Shop), pushed to
+`playlists/Sega - Mega Drive - Genesis.lpl`, confirmed working: a new
+console tab appeared on RetroArch's XMB main menu showing the real
+library. Regenerate (device-side, from an actual directory listing, or via
+`curate playlist` if listing everything curated is acceptable) after
+downloading more titles.
+
 ## R-Shop bugs and workarounds
 
 Three real, separate bugs/gaps, all worked around without touching

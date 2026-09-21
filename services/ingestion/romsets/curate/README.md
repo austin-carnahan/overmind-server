@@ -51,6 +51,42 @@ generates, joined back to our inventory by archive-tier path.
 | `score` | nothing external | `candidates.json` | `candidates.json` (scored, in place) |
 | `select` | nothing external | scored `candidates.json`, `overrides.json` | `top-100.json`, `top-100.csv`, `all-candidates.csv`, `unmatched-*.csv` |
 | `deploy` | nothing external | `top-100.json`, archive tier | copies into library tier |
+| `playlist` | nothing external | deployed library tier | `curation/<platform>/<RetroArch name>.lpl` |
+
+## RetroArch playlist naming
+
+`playlist` builds a `.lpl` using RetroArch's own canonical per-platform
+names (`curate/platforms.py`'s `RETROARCH_SYSTEM_NAMES`) — RetroArch
+matches its XMB icon and thumbnail set to a playlist's exact base filename
+(and each item's `db_name`), not our own internal platform key, so
+spelling/capitalization/spaces/hyphens must match Libretro's own
+database/thumbnail-repo naming exactly:
+
+| Internal key | RetroArch canonical name |
+| --- | --- |
+| `genesis` | `Sega - Mega Drive - Genesis` |
+| `nes` | `Nintendo - Nintendo Entertainment System` |
+| `snes` | `Nintendo - Super Nintendo Entertainment System` |
+| `n64` | `Nintendo - Nintendo 64` |
+| `psx` | `Sony - PlayStation` |
+| `dreamcast` | `Sega - Dreamcast` |
+
+ROM folder names (both `/mnt/library/romsets/<platform>` on the server and
+`/storage/<device>/roms/<platform>` on the device) stay simple and never
+need to match this table — only the playlist filename, each item's
+`db_name`, and the `thumbnails/<name>/` directory RetroArch expects
+alongside `playlists/` do.
+
+`playlist` has no visibility into what R-Shop has actually downloaded to a
+given device — it builds a playlist entry for every title in the deployed
+library tier, pointed at `--device-rom-dir`. Entries for titles not yet
+downloaded to that specific device will fail to launch until R-Shop
+downloads them; regenerate device-side (listing the real ROM directory,
+as was done for the initial Genesis playlist) instead if a playlist
+matching only currently-downloaded titles is wanted. The generated file
+still needs to be pushed to the device manually (`adb push` into
+`/storage/emulated/0/RetroArch/playlists/`) — this tool has no device
+access from inside its Docker container.
 
 Every stage reads/caches to disk so reruns are cheap: `scrape` and
 `enrich-igdb` skip anything already cached by hash/identity, so a rerun
