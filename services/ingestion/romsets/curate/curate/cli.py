@@ -1,6 +1,7 @@
 import argparse
 import os
 from pathlib import Path
+from urllib.parse import urlsplit
 
 from .deploy import deploy_top
 from .igdb import enrich_candidates
@@ -8,6 +9,7 @@ from .inventory import build_inventory
 from .platforms import retroarch_name
 from .playlist import build_playlist
 from .rank import rank_candidates
+from .remote_scan import build_remote_inventory
 from .scoring import score_candidates
 from .screenscraper import scrape_platform
 from .select import select_top
@@ -99,6 +101,33 @@ def cmd_deploy(args):
     )
 
 
+def cmd_remote_scan(args):
+    dat_path = Path(args.dat) if args.dat else DATS_ROOT / f"{args.platform}.dat"
+    base_url = args.base_url
+    if base_url is None:
+        parts = urlsplit(args.listing_url)
+        base_url = f"{parts.scheme}://{parts.netloc}"
+    cache_dir = CURATION_ROOT / "cache" / "remote-scan" / args.platform
+    out_path = platform_dir(args.platform) / "inventory.json"
+    result = build_remote_inventory(
+        args.platform,
+        args.listing_url,
+        base_url,
+        dat_path,
+        cache_dir,
+        out_path,
+        rate_limit_seconds=args.rate_limit_seconds,
+        refresh=args.refresh,
+        limit=args.limit,
+    )
+    s = result["summary"]
+    print(
+        f"{s['total_listed']} listed, {s['fetch_failed']} fetch-failed, "
+        f"{s['junk_excluded']} junk-excluded, {s['region_excluded']} region-excluded, "
+        f"{s['before_dedup']} survived filtering, {s['after_dedup']} after 1G1R dedup -> {out_path}"
+    )
+
+
 def cmd_playlist(args):
     library_dir = LIBRARY_ROOT / args.platform
     out_path = platform_dir(args.platform) / f"{retroarch_name(args.platform)}.lpl"
@@ -142,6 +171,16 @@ def main():
     p = sub.add_parser("deploy")
     p.add_argument("--platform", required=True)
     p.set_defaults(func=cmd_deploy)
+
+    p = sub.add_parser("remote-scan")
+    p.add_argument("--platform", required=True)
+    p.add_argument("--listing-url", required=True, help="Browse/listing page URL for this platform")
+    p.add_argument("--base-url", help="Defaults to the scheme+host of --listing-url")
+    p.add_argument("--dat")
+    p.add_argument("--rate-limit-seconds", type=float, default=0.75, help="Delay between per-title page fetches")
+    p.add_argument("--limit", type=int, help="Only scan the first N listing entries (testing)")
+    p.add_argument("--refresh", action="store_true")
+    p.set_defaults(func=cmd_remote_scan)
 
     p = sub.add_parser("playlist")
     p.add_argument("--platform", required=True)
