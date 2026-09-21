@@ -17,6 +17,7 @@ from pathlib import Path
 # docs/PLATFORMS.md in the Skyscraper repo. Extend as new platforms are added.
 PLATFORM_MAP = {
     "genesis": "megadrive",
+    "n64": "n64",  # matches our own key already, listed for explicitness
 }
 
 
