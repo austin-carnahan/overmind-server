@@ -22,6 +22,7 @@ def _base_title(record: dict) -> str:
 
 REPORT_FIELDS = [
     "rank",
+    "pool_rank",
     "canonical_filename",
     "display_name",
     "sha1",
@@ -71,7 +72,7 @@ def select_top(
     candidates = apply_overrides(candidates, overrides)
     candidates.sort(key=_sort_key)
     for i, record in enumerate(candidates, start=1):
-        record["rank"] = i
+        record["pool_rank"] = i  # position among all candidates, before dedup
 
     seen_base_titles: set[str] = set()
     top = []
@@ -83,6 +84,12 @@ def select_top(
         top.append(record)
         if len(top) == limit:
             break
+
+    # A clean 1..N rank for the actual deployed selection -- pool_rank has
+    # gaps where a duplicate base title was skipped, which is confusing in
+    # a "top 100" report.
+    for i, record in enumerate(top, start=1):
+        record["rank"] = i
 
     out_dir.mkdir(parents=True, exist_ok=True)
     (out_dir / "top-100.json").write_text(json.dumps(top, indent=2))
