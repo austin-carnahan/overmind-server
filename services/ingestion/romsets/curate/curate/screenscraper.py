@@ -45,7 +45,7 @@ def _run_skyscraper(
         "-u", f"{ssid}:{sspassword}",
         "-i", str(rom_dir),
         "-d", str(cache_dir),
-        "--flags", "unattend",
+        "--flags", "unattend,nocovers,noscreenshots,nomarquees,nowheels",
     ]
     if refresh:
         gather_cmd += ["--cache", "refresh"]
