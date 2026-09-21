@@ -62,8 +62,9 @@ apps:
     install_source: sideload
     update_mechanism: manual
     status: |-
-      INSTALLED (2026-09-20). Two real, separate bugs found and worked
-      around -- see hosts/fire-tv-stick/README.md's "R-Shop bugs and
+      INSTALLED (2026-09-20), browsing the real curated Genesis library over
+      SMB end-to-end (2026-09-20). Three real, separate bugs/gaps found and
+      worked around -- see hosts/fire-tv-stick/README.md's "R-Shop bugs and
       workarounds" section for the full writeup. Summary:
       (1) No LEANBACK_LAUNCHER category in its manifest -- invisible on Fire
       TV's home row. Worked around with a trampoline launcher app (same
@@ -81,11 +82,25 @@ apps:
       engineered from R-Shop's own source, matching what "Local games only"
       would have produced) directly into the app's private storage -- no
       SAF picker, no root, no rebuild.
+      (3) A config with a v3 "sources"/"manual_mappings" SMB entry loaded
+      without error but still showed 0 games ("Local files only"). Game
+      loading actually branches on the legacy "providers" list being empty,
+      not the v3 fields -- those only sync into "providers" via the app's
+      own runtime SourcesNotifier rebuild, which never runs for a
+      directly-written config file. Fixed by writing both: a direct legacy
+      "providers" entry (type smb, host/port/share/path/auth -- what's
+      actually read) plus the v3 "sources" entry (for the in-app Sources
+      screen). Confirmed via screenshot: "100 Games", every card tagged SMB,
+      real curated titles. Box art is blank -- no artwork source configured
+      for R-Shop yet, separate from ScreenScraper's own media in
+      services/ingestion/romsets/curate's cache -- not yet addressed.
       Once past onboarding, confirm/menu bind to real gamepad buttons
       (gameButtonA/gameButtonStart) which this remote cannot send (same
       root-cause family as the RetroArch DPAD_CENTER regression) --
       deliberately NOT patched, since Stage 8's Bluetooth controller sends
       these natively. Revisit only if a real controller still doesn't work.
+      Install/cache/remove flows are still unverified with real button
+      presses.
 
   - name: Seerr TV
     upstream: https://github.com/Vermino/seerr-tv

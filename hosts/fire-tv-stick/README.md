@@ -166,8 +166,8 @@ useful for ruling out the wrong theory, not the actual fix).
 
 ## R-Shop bugs and workarounds
 
-Two real, separate bugs, both worked around without touching R-Shop's own
-code or rebuilding it:
+Three real, separate bugs/gaps, all worked around without touching
+R-Shop's own code or rebuilding it:
 
 **1. No home-screen tile.** R-Shop's manifest doesn't declare
 `LEANBACK_LAUNCHER`, so it's invisible on Fire TV's actual TV-apps row
@@ -214,6 +214,24 @@ Verified working end-to-end: boots straight into a real, properly-rendered
 console view (tested with a placeholder local system pointed at the
 confirmed-writable `DF3B-5BC7` USB volume), skipping the broken screen
 entirely.
+
+**3. A hand-written config with an SMB source loaded but showed 0 games.**
+Once `services/file-sharing` was deployed and a real config was written
+(source of type `smb`, host/share/path, plus a `manual_mappings` entry
+tying the `megadrive` system to it — the documented v3 schema in
+`lib/models/config/{source,system_config}.dart`), R-Shop loaded it without
+error but still showed "Local files only" and 0 games. Root cause,
+confirmed by reading `game_list_controller.dart`: the actual game-loading
+path branches on the **legacy** `systemConfig.providers` list being empty,
+not on the v3 `sources`/`manual_mappings` fields — those only ever get
+folded into `providers` by `SourcesNotifier`'s own runtime rebuild
+(triggered by in-app source mutations), which never runs for a config
+written directly to disk via the onboarding-bypass mechanism above. Fixed
+by writing a direct legacy `providers` entry (`type: smb`, `host`, `port`,
+`share`, `path`, `auth`) alongside the v3 `sources` entry — the former is
+what's actually read for game loading, the latter keeps the in-app Sources
+screen and future `SourcesNotifier`-driven edits consistent. Confirmed via
+screenshot: "100 Games", every card tagged `SMB`, real curated titles.
 
 **What's still open, deliberately unfixed:** once past onboarding,
 confirm/menu are bound to real gamepad buttons
@@ -301,16 +319,29 @@ stages, given what's actually been learned on real hardware:
    [fire_tv_emulation_design.md](../../design-notes/fire_tv_emulation_design.md)'s
    settings, point at the confirmed `DF3B-5BC7` USB volume, run the
    per-system validation set.
-6. **R-Shop integration** — IN PROGRESS. Installed, architecture-verified,
-   given a real home-screen tile, and two real platform-level bugs found
-   and worked around (no rebuild, no root) — see "R-Shop bugs and
-   workarounds" below for the full writeup. The config-write bypass
-   mechanism is proven end-to-end with a placeholder local system. Still
-   remaining: `services/file-sharing` (the SMB share R-Shop should
-   actually browse) is itself not yet deployed — documented as PROPOSED,
-   not running — so real library browse/cache/remove is blocked on that
-   separate infrastructure task, not on anything specific to R-Shop or
-   this device. The direct-launch handoff into RetroArch is untouched.
+6. **R-Shop integration** — DONE for browsing. Installed, architecture-
+   verified, given a real home-screen tile, two real platform-level bugs
+   found and worked around (no rebuild, no root) — see "R-Shop bugs and
+   workarounds" below. `services/file-sharing` is deployed and R-Shop's
+   config now points a real `smb` provider at it (`192.168.68.55`, share
+   `romsets`, path `genesis`) instead of the earlier local-only
+   placeholder — confirmed end-to-end via screenshot: "100 Games", every
+   card tagged `SMB`, real titles (Aladdin, Castlevania - Bloodlines,
+   Beyond Oasis, ...) matching the curated Genesis library tier exactly.
+   One real config-schema gap hit and fixed along the way: R-Shop's actual
+   game-loading path reads the **legacy** `system.providers` list
+   (`if (systemConfig.providers.isEmpty) → treat as local-only`), not the
+   newer `sources`/`manual_mappings` v3 fields — those only get synced
+   into `providers` by the app's own runtime `SourcesNotifier` rebuild,
+   which never runs for a config written directly to disk. Fixed by
+   writing both: a direct legacy `providers` entry (what's actually read)
+   plus the v3 `sources` entry (for the in-app Sources screen/future-
+   proofing). Box art is currently blank — R-Shop has no artwork source
+   configured yet (a separate concern from ScreenScraper's own downloaded
+   media in `curate`'s cache, not wired to R-Shop), not yet addressed.
+   Still remaining: install/cache/remove and the confirm-button gamepad
+   gap (see below) are unverified with real button presses; the
+   direct-launch handoff into RetroArch is untouched.
 7. **Save sync** (Syncthing-Fork) — not yet started.
 8. **Controllers** — pairing, hotkey mapping — not yet started. Also the
    answer to R-Shop's remaining open item (confirm/menu need real
@@ -323,8 +354,9 @@ stages, given what's actually been learned on real hardware:
     resolve the Stage 2 escape-gesture item, run the plan's full
     Acceptance Tests checklist — not yet started.
 
-Next up: Stage 5's remaining validation and Stage 6's real library
-browsing are both blocked on things outside this device (real ROM
-content and the SMB service, respectively) — likely next real step is
-deploying `services/file-sharing` on Overmind, or picking up Stage 7/8
+Next up: Stage 6's real library browsing is confirmed working end-to-end
+now (SMB deployed, real 100-title Genesis library, R-Shop pointed at it
+correctly) — remaining work there is install/cache/remove validation with
+real button presses, not infrastructure. Stage 5's per-system validation
+set is still open — likely next real step is that, or picking up Stage 7/8
 in the meantime.
