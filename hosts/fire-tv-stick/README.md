@@ -321,6 +321,32 @@ This is the tile to actually launch RetroArch from going forward — the
 plain "RetroArch (32-bit)" tile still exists but launches without the
 fix. Rebuild steps are in `retroarch-launcher-app/README.md`.
 
+**Missing home-row icon, fixed (2026-09-20):** the trampoline showed no
+tile image at all, while the real RetroArch app did. Root cause, confirmed
+by pulling and comparing both APKs with `aapt2 dump badging`: Android
+TV's home-row tile reads `android:banner`, a dedicated landscape image —
+real RetroArch ships a proper 320×180 banner (`res/O5.png`) separate from
+its icon; the trampoline reused the same 192×192 **square** icon for both
+`android:icon` and `android:banner`, which the launcher silently declines
+to render as a banner. Fixed by adding a real 320×180
+`res/mipmap/ic_banner.png` (generated from the existing flat-color
+placeholder icon — there's no real logo here, just a correctly-shaped
+version of the same placeholder) and pointing `android:banner` at it
+instead of reusing `ic_launcher`. Confirmed via `aapt2 dump badging` that
+the rebuilt APK resolves `banner='res/mipmap/ic_banner.png'` distinct from
+`icon='res/mipmap/ic_launcher.png'`, matching the real app's pattern.
+Installed as an in-place upgrade (`adb install -r`, same `debug.keystore`,
+no uninstall needed).
+
+R-Shop's own trampoline (`rshop-launcher-app/`) has the exact same
+square-icon-as-banner issue, unfixed — since it exists purely for a
+home-row tile (no special launch args, unlike this one) and the plain
+`R-Shop` icon works identically otherwise, the simpler fix is to just stop
+using the trampoline tile and launch R-Shop from its own icon instead
+(reachable via Projectivy's app list, not the home row, since R-Shop's own
+manifest lacks `LEANBACK_LAUNCHER` — see bug (1) below). Revisit only if a
+home-row tile for R-Shop specifically becomes worth having again.
+
 ## Provisioning workspace
 
 ```text

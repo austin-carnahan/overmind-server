@@ -162,4 +162,12 @@ apps:
     checksum: n/a
     install_source: home-built (javac/d8/aapt2, no Gradle -- see retroarch-launcher-app/README.md)
     update_mechanism: manual rebuild if the fixed config's path or contents ever change
-    status: INSTALLED (2026-09-20), confirmed working end-to-end -- this is the tile to launch RetroArch from going forward, not the plain "RetroArch (32-bit)" tile.
+    status: |-
+      INSTALLED (2026-09-20), confirmed working end-to-end -- this is the
+      tile to launch RetroArch from going forward, not the plain
+      "RetroArch (32-bit)" tile. Home-row banner fixed (2026-09-20): was
+      showing no icon at all (reused a square icon as the banner; Android
+      TV's home row needs a real landscape banner) -- see
+      ../README.md's retroarch-launcher-app section for the full
+      diagnosis. Rebuilt with a proper 320x180 banner, reinstalled in
+      place (same keystore).

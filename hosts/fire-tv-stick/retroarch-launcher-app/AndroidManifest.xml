@@ -9,7 +9,7 @@
     <application
         android:label="RetroArch (Fixed)"
         android:icon="@mipmap/ic_launcher"
-        android:banner="@mipmap/ic_launcher"
+        android:banner="@mipmap/ic_banner"
         android:allowBackup="false">
         <activity
             android:name=".TrampolineActivity"
