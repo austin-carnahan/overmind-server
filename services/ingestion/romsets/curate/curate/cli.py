@@ -6,6 +6,7 @@ from urllib.parse import urlsplit
 from .deploy import deploy_top
 from .igdb import enrich_candidates
 from .inventory import build_inventory
+from .placeholders import build_placeholders
 from .platforms import retroarch_name
 from .playlist import build_playlist
 from .rank import rank_candidates
@@ -32,6 +33,13 @@ def cmd_inventory(args):
     print(f"{len(records)} archive files hashed, {unmatched} not found in the DAT -> {out_path}")
 
 
+def cmd_placeholders(args):
+    inventory_path = platform_dir(args.platform) / "inventory.json"
+    out_dir = Path(args.out_dir) if args.out_dir else platform_dir(args.platform) / "placeholders"
+    created = build_placeholders(inventory_path, out_dir)
+    print(f"{created} placeholder(s) created -> {out_dir}")
+
+
 def cmd_scrape(args):
     creds = {
         "ssid": os.environ["SCREENSCRAPER_SSID"],
@@ -42,10 +50,11 @@ def cmd_scrape(args):
     media_dir = gamelist_dir / "media"
     cache_dir = CURATION_ROOT / "cache" / "skyscraper-resources"
     out_path = platform_dir(args.platform) / "identified.json"
+    rom_dir = Path(args.rom_dir) if args.rom_dir else ARCHIVE_ROOT / args.platform
     identified = scrape_platform(
         args.platform,
         inventory_path,
-        ARCHIVE_ROOT / args.platform,
+        rom_dir,
         gamelist_dir,
         media_dir,
         cache_dir,
@@ -144,8 +153,14 @@ def main():
     p.add_argument("--dat")
     p.set_defaults(func=cmd_inventory)
 
+    p = sub.add_parser("placeholders")
+    p.add_argument("--platform", required=True)
+    p.add_argument("--out-dir", help="Defaults to curation/<platform>/placeholders")
+    p.set_defaults(func=cmd_placeholders)
+
     p = sub.add_parser("scrape")
     p.add_argument("--platform", required=True)
+    p.add_argument("--rom-dir", help="Override the ROM directory Skyscraper scans (e.g. a placeholders dir for remote-sourced platforms)")
     p.add_argument("--refresh", action="store_true")
     p.set_defaults(func=cmd_scrape)
 
