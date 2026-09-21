@@ -170,6 +170,57 @@ the joypad button system Center lives in); redirecting RetroArch's
 the bundled autoconfig (required a repackaged, re-signed APK to test —
 useful for ruling out the wrong theory, not the actual fix).
 
+## RetroArch controller port reassignment (8BitDo Pro 2)
+
+**Symptom (2026-09-20):** with a real gamepad (8BitDo Pro 2) paired
+alongside the Fire TV remote, using the remote after the gamepad caused
+RetroArch to reassign ports — "Fire Stick Remote configured in port 1",
+"8BitDo Controller configured in port 2" — and the gamepad then produced
+no input at all (port 2 has no bindings; every custom bind in
+`retro_fix2.cfg` is `input_player1_*`, for the remote fix above).
+
+**Two things ruled out first, in order, each made things worse or did
+nothing:**
+
+1. Suspected the OK-button fix's global `menu_swap_ok_cancel_buttons =
+   "true"` was inverting the gamepad's physical East button (RetroArch's
+   RetroPad A/B naming follows SNES layout, so on an Xbox-style pad
+   physical East = RetroPad A — a well-known point of confusion) from
+   confirm to cancel. Rebinding the remote's fix from
+   `input_player1_b_btn` to `input_player1_a_btn` and turning the swap
+   off did NOT fix the port-reassignment bug (unrelated mechanism) and
+   broke the remote's physical Back key as a side effect — reverted.
+2. Suspected `input_autodetect_enable` (governs automatic port
+   assignment on device connect/activity). Disabling it broke every
+   input device entirely, including the remote — reverted immediately.
+
+**Actual root cause, confirmed via a real GitHub issue matching this
+exact symptom
+([libretro/RetroArch#16873](https://github.com/libretro/RetroArch/issues/16873)):**
+a known Android TV bug where reconnecting/re-activating an input device
+reports a changed OS-level device identity, which RetroArch reads as a
+brand-new controller rather than the same one — incrementing its port
+instead of reusing the original.
+
+**The fix:** `android_input_disconnect_workaround = "true"` in
+`retro_fix2.cfg` (was `"false"`, RetroArch's own default) — a real,
+purpose-built RetroArch setting for exactly this bug, confirmed via
+RetroArch's own source
+(`settings/settings_def_input_android_workaround.h`) and the linked
+issue thread, not a guess.
+
+**Known limitation, by RetroArch's own setting description:** "Impedes 2
+players with identical controllers." The workaround almost certainly
+identifies "is this a reconnect of the same controller" by device
+name/vendor/product ID rather than the OS-level identity (since that's
+exactly what the underlying bug corrupts) — which two identical
+controllers share, so a second identical 8BitDo Pro 2 added for local
+multiplayer would likely get misidentified as a reconnect of the first.
+**Deliberately left enabled for now** (single gamepad + remote); revisit
+when a second identical controller is actually added — likely needs to
+be turned back off in favor of a different per-session port-assignment
+approach at that point, not yet investigated.
+
 ## RetroArch playlists (XMB console tabs)
 
 RetroArch's XMB menu only shows a console tab (icon row) for a system once
