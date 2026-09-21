@@ -67,11 +67,14 @@ apps:
       worked around -- see hosts/fire-tv-stick/README.md's "R-Shop bugs and
       workarounds" section for the full writeup. Summary:
       (1) No LEANBACK_LAUNCHER category in its manifest -- invisible on Fire
-      TV's home row. Worked around with a trampoline launcher app (same
-      pattern as retroarch-launcher-app/, but unlike that one this trampoline
-      passes no special launch arguments -- it exists purely for tile
-      visibility, not because R-Shop's own icon doesn't work. Both are
-      equally functional; keep one or both.
+      TV's home row. A trampoline launcher app (same pattern as
+      retroarch-launcher-app/) was built and installed for tile visibility,
+      but removed again (2026-09-20): unlike RetroArch's, this trampoline
+      passed no special launch arguments -- it existed purely for a
+      home-row tile, and R-Shop's own icon is equally functional. Default
+      to launching R-Shop from its own icon in Projectivy's app list
+      (not the home row) instead of maintaining a second launcher for
+      cosmetics alone.
       (2) Onboarding's "Welcome" screen has no working confirm binding at
       all (not even the keys R-Shop itself defines elsewhere) -- every
       onboarding path is unreachable via remote or touch. Confirmed R-Shop

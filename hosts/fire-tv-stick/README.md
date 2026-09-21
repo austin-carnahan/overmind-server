@@ -213,10 +213,13 @@ R-Shop's own code or rebuilding it:
 **1. No home-screen tile.** R-Shop's manifest doesn't declare
 `LEANBACK_LAUNCHER`, so it's invisible on Fire TV's actual TV-apps row
 (it's still reachable via Projectivy's "Mobile Apps"/All Apps list, just
-not prominently). Fixed with `rshop-launcher-app/`, the same trampoline
-pattern as RetroArch's -- but unlike that one, **this trampoline passes no
-special launch arguments**. It exists purely so R-Shop has a proper tile;
-R-Shop's own icon works identically. Keep one or both.
+not prominently). A trampoline app (`rshop-launcher-app/`, same pattern as
+RetroArch's) was built for a proper tile, but — unlike RetroArch's, which
+passes a required launch argument — this one passed nothing special; it
+existed purely for tile visibility, and R-Shop's own icon works
+identically. Removed again (2026-09-20) as not worth maintaining a second
+launcher for: default to R-Shop's own icon in Projectivy's app list
+instead.
 
 **2. Onboarding is completely unreachable.** The "Welcome to R-Shop"
 screen's four setup options (Pair RomM / RomM login / Add my own server /
@@ -338,14 +341,15 @@ the rebuilt APK resolves `banner='res/mipmap/ic_banner.png'` distinct from
 Installed as an in-place upgrade (`adb install -r`, same `debug.keystore`,
 no uninstall needed).
 
-R-Shop's own trampoline (`rshop-launcher-app/`) has the exact same
-square-icon-as-banner issue, unfixed — since it exists purely for a
-home-row tile (no special launch args, unlike this one) and the plain
-`R-Shop` icon works identically otherwise, the simpler fix is to just stop
-using the trampoline tile and launch R-Shop from its own icon instead
-(reachable via Projectivy's app list, not the home row, since R-Shop's own
-manifest lacks `LEANBACK_LAUNCHER` — see bug (1) below). Revisit only if a
-home-row tile for R-Shop specifically becomes worth having again.
+R-Shop's own trampoline (`rshop-launcher-app/`) had the exact same
+square-icon-as-banner issue. Rather than fix it, the trampoline was
+removed entirely (2026-09-20): it existed purely for a home-row tile (no
+special launch args, unlike this one), and the plain `R-Shop` icon works
+identically otherwise, so a second launcher wasn't worth maintaining just
+for that. R-Shop now launches from its own icon in Projectivy's app list
+(not the home row, since R-Shop's own manifest lacks `LEANBACK_LAUNCHER`
+— see bug (1) below). Revisit only if a home-row tile for R-Shop
+specifically becomes worth building again.
 
 ## Provisioning workspace
 
