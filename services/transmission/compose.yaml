@@ -22,4 +22,5 @@ services:
       # a real rpc password) before first run.
       - ./settings.json:/config/settings.json
       - ${TRANSMISSION_DOWNLOAD_ROOT}:/downloads
+      - ${TRANSMISSION_ROMSETS_STAGING_ROOT}:/romsets-staging
     restart: unless-stopped

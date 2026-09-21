@@ -47,6 +47,15 @@ workflow to pick up — see [storage](../../design-notes/storage-layout.md) for
 why there's no separate `torrents/` Inbox root. Retain download data until
 both import verification and seeding policy allow removal.
 
+`TRANSMISSION_ROMSETS_STAGING_ROOT` (added 2026-09-20) mounts the romset
+Inbox (`ROMSETS_INBOX` in `paths.env.example`) directly into the container
+at `/romsets-staging`, so a romset torrent's **per-torrent destination** can
+be set to `/romsets-staging` in the WebUI at add-time, landing it straight
+in the real staging path instead of the default `/downloads` plus a manual
+copy step. This doesn't change default behavior — the global download
+directory is still `/downloads`; this only makes `/romsets-staging` a valid
+destination choice when adding a torrent.
+
 ## Still to verify before unattended use
 
 Confirm the [PIA/gluetun boundary](../pia/README.md) actually fails closed,
