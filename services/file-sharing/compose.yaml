@@ -18,8 +18,10 @@ services:
       # Default log level (1) doesn't record enough to diagnose an
       # ACCESS_DENIED at tree-connect (e.g. distinguishing a guest fallback
       # from a real permission problem) -- 3 logs auth/connection detail
-      # without being as noisy as full protocol tracing.
-      SAMBA_GLOBAL_CONFIG_loglevel: "log level = 3"
+      # without being as noisy as full protocol tracing. Env var NAME (after
+      # the prefix, with _SPACE_ standing in for the literal space) becomes
+      # the smb.conf key; the value is just the setting's value.
+      SAMBA_GLOBAL_CONFIG_log_SPACE_level: "3"
       # Neither Bonjour discovery (Apple) nor WSD (Windows) are relevant to
       # an Android/Fire TV client — disabled to reduce surface, not because
       # either is known to cause a problem.
