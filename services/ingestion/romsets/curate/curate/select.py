@@ -148,6 +148,7 @@ def select_top(
                     "canonical_filename": s["canonical_filename"],
                     "path": s.get("path"),
                     "sha1": s.get("sha1"),
+                    "so_id": s.get("so_id"),
                 }
                 for s in siblings
             ]

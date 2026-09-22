@@ -1,4 +1,5 @@
 import argparse
+import json
 import os
 from pathlib import Path
 from urllib.parse import urlsplit
@@ -9,11 +10,13 @@ from .inventory import build_inventory
 from .placeholders import build_placeholders
 from .platforms import retroarch_name
 from .playlist import build_playlist
+from .queue_download import queue_download
 from .rank import rank_candidates
 from .remote_scan import build_remote_inventory
 from .scoring import score_candidates
 from .screenscraper import scrape_platform
 from .select import select_top
+from .transmission_rpc import TransmissionClient
 
 CURATION_ROOT = Path(os.environ.get("CURATION_ROOT", "/curation"))
 ARCHIVE_ROOT = Path(os.environ.get("ARCHIVE_ROOT", "/archive"))
@@ -113,6 +116,27 @@ def cmd_deploy(args):
     )
 
 
+def cmd_queue_download(args):
+    top_path = platform_dir(args.platform) / "top-100.json"
+    top = json.loads(top_path.read_text())
+    client = TransmissionClient(
+        host=os.environ.get("TRANSMISSION_RPC_HOST", "localhost"),
+        port=int(os.environ.get("TRANSMISSION_RPC_PORT", "9091")),
+        username=os.environ["TRANSMISSION_RPC_USERNAME"],
+        password=os.environ["TRANSMISSION_RPC_PASSWORD"],
+    )
+    result = queue_download(top, client, args.download_dir)
+    gib = result["selected_bytes"] / (1024**3)
+    print(
+        f"torrent {result['torrent_id']} ({result['torrent_name']!r}) started -- "
+        f"{result['files_selected']}/{result['total_files_in_torrent']} files selected, "
+        f"{gib:.2f} GiB -> {args.download_dir}"
+    )
+    if result["missing_so_ids"]:
+        print(f"warning: {len(result['missing_so_ids'])} so_id(s) not found in the torrent's file list: "
+              f"{result['missing_so_ids']}")
+
+
 def cmd_remote_scan(args):
     dat_path = Path(args.dat) if args.dat else DATS_ROOT / f"{args.platform}.dat"
     base_url = args.base_url
@@ -189,6 +213,15 @@ def main():
     p = sub.add_parser("deploy")
     p.add_argument("--platform", required=True)
     p.set_defaults(func=cmd_deploy)
+
+    p = sub.add_parser("queue-download")
+    p.add_argument("--platform", required=True)
+    p.add_argument(
+        "--download-dir",
+        default="/romsets-staging",
+        help="Path as Transmission's own container sees it (its bind-mounted romset Inbox), not a curate-local path",
+    )
+    p.set_defaults(func=cmd_queue_download)
 
     p = sub.add_parser("remote-scan")
     p.add_argument("--platform", required=True)

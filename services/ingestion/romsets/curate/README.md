@@ -64,7 +64,39 @@ generates, joined back to our inventory by archive-tier path.
 | `score` | nothing external | `candidates.json` | `candidates.json` (scored, in place) |
 | `select` | nothing external | scored `candidates.json`, `overrides.json` | `top-100.json`, `top-100.csv`, `all-candidates.csv`, `unmatched-*.csv` |
 | `deploy` | nothing external | `top-100.json`, archive tier | copies into library tier |
+| `remote-scan` | nothing external | Minerva-Myrient-style listing page | `curation/<platform>/inventory.json` |
+| `queue-download` | Transmission RPC (disc platforms only) | `top-100.json` | adds/selects one torrent in Transmission |
 | `playlist` | nothing external | deployed library tier | `curation/<platform>/<RetroArch name>.lpl` |
+
+## Disc-based platforms (remote-scan / queue-download)
+
+For platforms whose full archive is too large to download wholesale
+(PSX, Dreamcast, ...) there's no local archive tier: `remote-scan` scans a
+Minerva/Myrient-style catalog's per-title pages directly (crc32/md5/sha1/
+size/region/a shared per-system torrent's file index), producing an
+inventory equivalent to the cartridge platforms' Igir-built one, without
+downloading any disc content. `scrape` then runs against zero-byte
+placeholder stubs (`placeholders` stage) instead of real ROM files --
+confirmed Skyscraper identifies/rates by filename alone. `select` still
+applies as normal; the one difference is each selected record may carry a
+`disc_files` list for multi-disc releases (all sibling discs, looked up
+from `inventory.json`, not the scraped/rated pool -- their own filenames/
+hashes are already known there, no ScreenScraper identification needed
+just to know they exist).
+
+`queue-download` is the final step: every title in one platform's catalog
+shares one torrent (one info-hash), so it adds that single torrent to
+Transmission **paused**, waits for its metadata (file list) to arrive from
+the swarm, then sets `files-wanted` to exactly the selected titles' file
+indices (`so_id`, plus every disc's `so_id` for multi-disc releases) before
+starting it -- never the whole multi-terabyte archive. Needs
+`TRANSMISSION_RPC_USERNAME`/`TRANSMISSION_RPC_PASSWORD` in `config.env`
+(from Transmission's own `settings.json` `rpc-username`/`rpc-password`);
+`--download-dir` defaults to `/romsets-staging`, the path as
+*Transmission's own container* sees it (its bind-mounted romset Inbox, see
+[services/transmission/README.md](../../../transmission/README.md)), not a
+`curate`-local path -- `curate` only talks to Transmission over RPC, it
+never touches torrent data directly.
 
 ## RetroArch playlist naming
 
