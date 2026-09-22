@@ -127,9 +127,54 @@ against that exact override (not assumed from the tuning-loop result alone).
 
 ## Reference documentation for per-game quirks
 
-<!-- Filled in from real, verified sources -- see git history/commit message
-     if this section looks thin; it's deliberately not padded with
-     unverified or fabricated links. -->
+Verified 2026-09-22 (fetched directly unless noted). Consult these before
+building a fixture or reaching for the tuning ladder on a difficult title
+— per-game answers already exist for a lot of this.
+
+**N64 (Mupen64Plus-Next / ParaLLEl):**
+
+- [docs.libretro.com/library/mupen64plus](https://docs.libretro.com/library/mupen64plus/)
+  — authoritative core-options reference: CPU core (dynamic recompiler /
+  cached interpreter / pure interpreter), RSP (HLE vs LLE via ParaLLEl-RSP),
+  graphics plugin choice (GLideN64 default, Angrylion, ParaLLEl-RDP),
+  texture packs, MSAA, framebuffer/depth options. No dedicated
+  ParaLLEl-N64-specific docs.libretro.com page exists — don't look for one.
+- [github.com/libretro/parallel-n64/issues](https://github.com/libretro/parallel-n64/issues)
+  — real per-config quirks, e.g. Angrylion RDP integration (#608),
+  Vulkan/parallel rendering errors (#649), `gfxplugin-accuracy` being an
+  HLE-only option that's a silent no-op under LLE.
+- [forums.libretro.com/t/mupen64plus-next-correct-plugins-for-accuracy/29147](https://forums.libretro.com/t/mupen64plus-next-correct-plugins-for-accuracy/29147)
+  — community discussion of accuracy-vs-speed plugin tradeoffs. Not
+  independently re-verified this pass; treat as a starting point, not gospel.
+- Explicitly **not useful, don't waste time on**: the official
+  mupen64plus GitHub wiki just redirects to mupen64plus.org, which has no
+  visible compatibility list; various old personal-fork wikis (ricrpi,
+  ttk2, Tim237 mupen64plus forks) claiming a "Game Compatibility List" are
+  abandoned, not authoritative; no stable/citable GLideN64
+  compatibility-list URL exists (past attempts lived in an editable Google
+  Doc linked from GitHub issues, not a stable page).
+
+**Dreamcast (Flycast):**
+
+- [docs.libretro.com/library/flycast](https://docs.libretro.com/library/flycast/)
+  — full core-options reference AND real per-game notes: e.g. Sonic
+  Adventure (PAL) needs VGA output mode, Unreal Tournament (USA) needs the
+  VGA cable type set to avoid crashing, known polygon-sorting artifacts.
+  Start here for any Dreamcast title acting up.
+- [github.com/TheArcadeStriker/flycast-wiki/wiki](https://github.com/TheArcadeStriker/flycast-wiki/wiki)
+  — actively maintained third-party wiki: settings, config files/CLI
+  params, troubleshooting, BIOS/Arcade ROM verification, NAOMI/Atomiswave
+  button mapping and VMU guides. Broadest current third-party reference.
+- [github.com/flyinghead/flycast](https://github.com/flyinghead/flycast)
+  (issues/discussions) — canonical upstream repo (current maintainer;
+  `libretro/flycast` is explicitly deprecated in favor of this one). Real
+  per-game reports live in its issue tracker.
+- [emulation.gametechwiki.com/index.php/Flycast](https://emulation.gametechwiki.com/index.php/Flycast)
+  and [.../Nintendo_64_emulators](https://emulation.gametechwiki.com/index.php/Nintendo_64_emulators)
+  — the r/emulation community wiki's per-system pages; general tuning
+  philosophy and emulator overviews. Site blocked automated fetch this
+  pass (bot-blocking, not evidence it's down) — open in a browser to
+  confirm current content before relying on it.
 
 ## Controller and UX checks (manual, not automatable)
 
