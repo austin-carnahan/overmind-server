@@ -95,9 +95,12 @@ def cmd_score(args):
 def cmd_select(args):
     identified_path = platform_dir(args.platform) / "identified.json"
     candidates_path = platform_dir(args.platform) / "candidates.json"
+    inventory_path = platform_dir(args.platform) / "inventory.json"
     overrides_path = CURATION_ROOT / "overrides.json"
     out_dir = platform_dir(args.platform)
-    top = select_top(identified_path, candidates_path, overrides_path, out_dir, args.platform, args.limit)
+    top = select_top(
+        identified_path, candidates_path, overrides_path, out_dir, args.platform, args.limit, inventory_path
+    )
     print(f"selected {len(top)} -> {out_dir / 'top-100.json'}")
 
 

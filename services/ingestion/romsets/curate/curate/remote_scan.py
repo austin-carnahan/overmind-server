@@ -22,7 +22,7 @@ from pathlib import Path
 import requests
 
 from .dat import load_dat_by_name
-from .titles import base_title, clean_title, is_junk_title
+from .titles import base_title, clean_title, disc_number, is_junk_title
 
 LISTING_LINK_RE = re.compile(r'<a href="/rom\?id=(\d+)"[^>]*>([^<]*)</a>')
 ROM_JSON_RE = re.compile(r"window\.rom\s*=\s*(\{.*?\});", re.DOTALL)
@@ -198,6 +198,10 @@ def build_remote_inventory(
     # 1G1R-equivalent: one record per base title, preferring earlier
     # ALLOWED_REGIONS entries (USA over World) -- same policy as
     # --prefer-region USA,WORLD used for the cartridge archive tiers.
+    # A multi-disc release's discs share a base title once tags are
+    # stripped (that's the point -- they're the same game), so the disc
+    # number is folded into the key too, or dedup would keep only one disc
+    # of e.g. a 4-disc RPG and silently drop the rest.
     def region_rank(record: dict) -> int:
         regions = record.get("region") or []
         for i, r in enumerate(ALLOWED_REGIONS):
@@ -205,9 +209,9 @@ def build_remote_inventory(
                 return i
         return len(ALLOWED_REGIONS)
 
-    best_by_title: dict[str, dict] = {}
+    best_by_title: dict[tuple[str, int | None], dict] = {}
     for record in raw_records:
-        key = base_title(record)
+        key = (base_title(record), disc_number(record.get("canonical_filename") or ""))
         existing = best_by_title.get(key)
         if existing is None or region_rank(record) < region_rank(existing):
             best_by_title[key] = record

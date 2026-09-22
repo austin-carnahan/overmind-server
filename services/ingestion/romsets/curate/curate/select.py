@@ -48,12 +48,15 @@ def _write_csv(path: Path, records: list[dict]):
         writer.writerows(records)
 
 
-def _disc_siblings(record: dict, identified: list[dict]) -> list[dict] | None:
+def _disc_siblings(record: dict, inventory: list[dict]) -> list[dict] | None:
     """For a multi-disc release (e.g. "Final Fantasy IX (USA) (Disc 1)"),
-    find every other disc of the same game in the full identified pool, so
-    a selection decision made on one disc's identity/rating still pulls in
-    every disc the game actually needs to be playable. Returns None for a
-    single-disc game (nothing to attach)."""
+    find every other disc of the same game so a selection decision made on
+    one disc's identity/rating still pulls in every disc the game actually
+    needs to be playable. Looked up against the full inventory (every
+    scanned/archived file), not the scraped+rated identified pool -- the
+    other discs' own filenames/hashes are already fully known there, no
+    ScreenScraper identification needed just to know they exist. Returns
+    None for a single-disc game (nothing to attach)."""
     filename = record.get("canonical_filename") or ""
     my_disc = disc_number(filename)
     if my_disc is None:
@@ -62,7 +65,7 @@ def _disc_siblings(record: dict, identified: list[dict]) -> list[dict] | None:
     base = base_title(record)
     siblings = [
         r
-        for r in identified
+        for r in inventory
         if r.get("platform") == record.get("platform")
         and base_title(r) == base
         and disc_number(r.get("canonical_filename") or "") is not None
@@ -91,9 +94,11 @@ def select_top(
     out_dir: Path,
     platform: str,
     limit: int = 100,
+    inventory_path: Path | None = None,
 ) -> list[dict]:
     identified = json.loads(identified_path.read_text())
     candidates = json.loads(candidates_path.read_text())
+    inventory = json.loads(inventory_path.read_text()) if inventory_path and inventory_path.exists() else identified
 
     overrides = load_overrides(overrides_path, platform)
     excluded = excluded_base_titles(overrides)
@@ -135,7 +140,7 @@ def select_top(
         top.append(record)
 
     for record in top:
-        siblings = _disc_siblings(record, identified)
+        siblings = _disc_siblings(record, inventory)
         if siblings:
             record["disc_files"] = [
                 {
