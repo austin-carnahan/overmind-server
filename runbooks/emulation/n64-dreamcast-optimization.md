@@ -156,19 +156,26 @@ building a fixture or reaching for the tuning ladder on a difficult title
 
 **Dreamcast (Flycast):**
 
-- **Core-choice decision (researched 2026-09-22, moderate confidence):**
-  default to standalone Flycast over the RetroArch core — see the
-  [design doc's revised Established Configuration Baseline](../../design-notes/n64_dreamcast_emulator_settings_handoff.md#sega-dreamcast)
-  for the full reasoning. Short version: `libretro/flycast` is upstream-
-  deprecated and lags current fixes; two open upstream issues
+- **Core-choice decision (revised 2026-09-22):** start with the RetroArch
+  Flycast core — it's already sideloaded, zero friction to test right now.
+  Escalate to standalone Flycast only on a concrete problem, not as a
+  default first step (standalone needs a new APK sourced and sideloaded,
+  a real cost not worth paying up front). See the
+  [design doc's Established Configuration Baseline](../../design-notes/n64_dreamcast_emulator_settings_handoff.md#sega-dreamcast)
+  for the full reasoning and escalation triggers. Research summary
+  (moderate confidence, not proven with device-specific numbers):
+  `libretro/flycast` is upstream-deprecated and lags current fixes; two
+  open upstream issues
   ([flyinghead/flycast#1007](https://github.com/flyinghead/flycast/issues/1007),
   [#1308](https://github.com/flyinghead/flycast/issues/1308)) document the
   RetroArch core rendering differently/worse than standalone at identical
-  settings; RetroArch's usual save-state/rewind advantage doesn't actually
-  hold for this core ([libretro/RetroArch#17779](https://github.com/libretro/RetroArch/issues/17779)
-  is a still-open request for it). No FPS numbers exist for this exact
-  device — verify empirically once standalone Flycast is actually
-  sideloaded and testable, don't just trust this citation.
+  settings — treat either of these as the trigger to escalate.
+  RetroArch's usual save-state/rewind advantage doesn't actually hold for
+  this core either way
+  ([libretro/RetroArch#17779](https://github.com/libretro/RetroArch/issues/17779)
+  is a still-open request for it), so that's not a reason to stay on the
+  RetroArch core if a real problem shows up. No FPS numbers exist for
+  this exact device — verify empirically once testing actually starts.
 - [docs.libretro.com/library/flycast](https://docs.libretro.com/library/flycast/)
   — full core-options reference AND real per-game notes: e.g. Sonic
   Adventure (PAL) needs VGA output mode, Unreal Tournament (USA) needs the

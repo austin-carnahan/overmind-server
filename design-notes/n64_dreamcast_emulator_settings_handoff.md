@@ -85,32 +85,35 @@ When a game fails a performance test, tune it in this order:
 
 ### Sega Dreamcast
 
-- **Default to standalone Flycast, not the RetroArch core** (revised
-  2026-09-22 from "compare and prefer if it materially outperforms" — real
-  research turned up a reasonably well-supported case for defaulting to
-  standalone rather than treating the two as equivalent starting points).
-  Moderate confidence, not proven with device-specific numbers:
-  - `libretro/flycast` (the core RetroArch ships) is itself marked
-    **deprecated** by upstream in favor of `flyinghead/flycast`, and
-    real-world packaging still lags behind current upstream in practice
-    (e.g. RetroPie's `lr-flycast` needed a separate `-dev` variant to track
-    current). Standalone can't lag itself — it ships tagged releases
-    directly from the upstream repo.
-  - Two open upstream issues document the RetroArch core rendering
-    visibly blurrier / differently than standalone at identical
-    resolution (flyinghead/flycast#1007, #1308).
-  - The usually-assumed RetroArch integration advantage (robust
-    save-state/rewind support) does **not** actually hold for this core
-    specifically — `libretro/RetroArch#17779` is a still-open feature
-    request asking for it.
+- **Start with the RetroArch Flycast core, escalate to standalone Flycast
+  on specific real problems** (revised 2026-09-22 — a practical override
+  of the research-based "default to standalone" recommendation below,
+  made deliberately: the RetroArch core is already sideloaded and
+  testable right now, while standalone Flycast needs a new APK sourced
+  and sideloaded first. Start with the zero-friction option; escalate only
+  if it actually earns it).
+  - Concrete escalation triggers, from the research (moderate confidence,
+    not proven with device-specific numbers):
+    - Rendering that looks visibly blurrier or otherwise different than
+      expected at a given resolution — two open upstream issues document
+      exactly this for the RetroArch core vs. standalone
+      (flyinghead/flycast#1007, #1308).
+    - A specific game with a known bug already fixed upstream in
+      `flyinghead/flycast` but not yet in what RetroArch ships —
+      `libretro/flycast` (the core RetroArch ships) is itself marked
+      **deprecated** by upstream, and real-world packaging still lags
+      behind current upstream in practice (e.g. RetroPie's `lr-flycast`
+      needed a separate `-dev` variant to track current).
+    - Needing robust save-state/rewind support specifically — don't
+      expect the RetroArch core to have this "for free" as a frontend
+      integration advantage; it doesn't (`libretro/RetroArch#17779` is a
+      still-open feature request asking for it), so this isn't actually a
+      reason to prefer the RetroArch core either.
   - No FPS/frame-time numbers exist anywhere for either option on this
     exact hardware (Fire TV Stick 4K Max / 2GB-RAM-class Android TV) — a
-    real evidence gap. Treat "standalone performs better" as a plausible,
-    not proven, expectation; validate empirically once both are actually
-    installed and tested per this doc's own Controlled Tuning Loop, rather
-    than trusting this write-up alone.
-  - Still requires sideloading the standalone Flycast APK, which isn't on
-    the device yet — see [runbooks/emulation/n64-dreamcast-optimization.md](../runbooks/emulation/n64-dreamcast-optimization.md).
+    real evidence gap either way. Validate empirically per this doc's own
+    Controlled Tuning Loop once real testing starts, rather than trusting
+    this write-up alone.
 - Renderer: Vulkan.
 - Threaded rendering: on only where testing confirms a benefit without instability.
 - Frame Skip: off by default and enabled only for specific demanding games.
@@ -319,12 +322,15 @@ For N64:
 5. Disable remaining enhancements.
 6. Test frame skip only if all earlier profiles fail.
 
-For Dreamcast (baseline flipped to standalone-first 2026-09-22, see the
-Established Configuration Baseline section above for why):
+For Dreamcast (baseline flipped back to RetroArch-core-first 2026-09-22 —
+zero-friction starting point, already sideloaded; see the Established
+Configuration Baseline section above for the concrete escalation
+triggers):
 
-1. Standalone Flycast baseline with Vulkan.
-2. RetroArch Flycast core with Vulkan (fallback, e.g. if a title needs
-   RetroArch-side integration standalone lacks).
+1. RetroArch Flycast core baseline with Vulkan.
+2. Standalone Flycast with Vulkan (escalate here on rendering defects,
+   a game with an upstream-only fix, or other concrete problems — not
+   as a default first step).
 3. Test threaded rendering where available.
 4. Reduce internal resolution or enhancements.
 5. Test frame skip only for the individual title.
