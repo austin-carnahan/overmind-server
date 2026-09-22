@@ -60,3 +60,9 @@ class TransmissionClient:
 
     def torrent_start(self, ids: list[int]) -> None:
         self._call("torrent-start", {"ids": ids})
+
+    def torrent_stop(self, ids: list[int]) -> None:
+        self._call("torrent-stop", {"ids": ids})
+
+    def torrent_remove(self, ids: list[int], delete_local_data: bool = False) -> None:
+        self._call("torrent-remove", {"ids": ids, "delete-local-data": delete_local_data})

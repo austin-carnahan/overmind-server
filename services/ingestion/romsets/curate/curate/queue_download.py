@@ -33,7 +33,7 @@ def queue_download(
     client: TransmissionClient,
     download_dir: str,
     poll_interval_seconds: float = 3.0,
-    max_wait_seconds: float = 120.0,
+    max_wait_seconds: float = 300.0,
 ) -> dict:
     if not top:
         raise ValueError("nothing to queue -- empty selection")
@@ -51,7 +51,14 @@ def queue_download(
 
     wanted_so_ids = _wanted_so_ids(top)
 
-    added = client.torrent_add(magnet, download_dir, paused=True)
+    # Transmission does no network activity at all -- no DHT, no trackers,
+    # no peers -- while a torrent is paused, so a magnet's file list can
+    # only ever arrive while it's running. Add unpaused, then stop it the
+    # instant metadata arrives, *before* touching file selection, so the
+    # default "everything wanted" window between metadata completion and
+    # our files-set call is as short as one RPC round trip rather than a
+    # full poll interval.
+    added = client.torrent_add(magnet, download_dir, paused=False)
     torrent_id = added["id"]
 
     waited = 0.0
@@ -59,6 +66,7 @@ def queue_download(
     while waited < max_wait_seconds:
         info = client.torrent_get([torrent_id], ["files", "metadataPercentComplete", "name"])[0]
         if info["metadataPercentComplete"] >= 1.0 and info["files"]:
+            client.torrent_stop([torrent_id])
             files = info["files"]
             name = info["name"]
             break
@@ -68,7 +76,7 @@ def queue_download(
     if files is None:
         raise TimeoutError(
             f"torrent metadata not fetched from the swarm after {max_wait_seconds}s "
-            f"(torrent id {torrent_id}, still paused -- check tracker/peer health, or just retry)"
+            f"(torrent id {torrent_id}, left running -- check tracker/peer health, or just retry)"
         )
 
     all_indices = set(range(len(files)))
