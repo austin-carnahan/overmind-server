@@ -5,6 +5,7 @@ from pathlib import Path
 from urllib.parse import urlsplit
 
 from .deploy import deploy_top
+from .deploy_disc import deploy_disc
 from .igdb import enrich_candidates
 from .inventory import build_inventory
 from .placeholders import build_placeholders
@@ -22,6 +23,7 @@ CURATION_ROOT = Path(os.environ.get("CURATION_ROOT", "/curation"))
 ARCHIVE_ROOT = Path(os.environ.get("ARCHIVE_ROOT", "/archive"))
 LIBRARY_ROOT = Path(os.environ.get("LIBRARY_ROOT", "/library"))
 DATS_ROOT = Path(os.environ.get("DATS_ROOT", "/dats"))
+INBOX_ROOT = Path(os.environ.get("INBOX_ROOT", "/inbox"))
 
 
 def platform_dir(platform: str) -> Path:
@@ -110,6 +112,16 @@ def cmd_select(args):
 def cmd_deploy(args):
     top_100_path = platform_dir(args.platform) / "top-100.json"
     result = deploy_top(top_100_path, ARCHIVE_ROOT / args.platform, LIBRARY_ROOT / args.platform)
+    print(
+        f"copied {len(result['copied'])}, removed {len(result['removed'])} stale file(s) "
+        f"-> {LIBRARY_ROOT / args.platform}"
+    )
+
+
+def cmd_deploy_disc(args):
+    top_100_path = platform_dir(args.platform) / "top-100.json"
+    source_dir = INBOX_ROOT / "Minerva_Myrient" / "Redump" / retroarch_name(args.platform)
+    result = deploy_disc(top_100_path, source_dir, LIBRARY_ROOT / args.platform)
     print(
         f"copied {len(result['copied'])}, removed {len(result['removed'])} stale file(s) "
         f"-> {LIBRARY_ROOT / args.platform}"
@@ -213,6 +225,10 @@ def main():
     p = sub.add_parser("deploy")
     p.add_argument("--platform", required=True)
     p.set_defaults(func=cmd_deploy)
+
+    p = sub.add_parser("deploy-disc")
+    p.add_argument("--platform", required=True)
+    p.set_defaults(func=cmd_deploy_disc)
 
     p = sub.add_parser("queue-download")
     p.add_argument("--platform", required=True)

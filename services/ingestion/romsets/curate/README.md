@@ -66,6 +66,7 @@ generates, joined back to our inventory by archive-tier path.
 | `deploy` | nothing external | `top-100.json`, archive tier | copies into library tier |
 | `remote-scan` | nothing external | Minerva-Myrient-style listing page | `curation/<platform>/inventory.json` |
 | `queue-download` | Transmission RPC (disc platforms only) | `top-100.json` | adds/selects one torrent in Transmission |
+| `deploy-disc` | nothing external (disc platforms only) | `top-100.json`, the romset Inbox | copies into library tier |
 | `playlist` | nothing external | deployed library tier | `curation/<platform>/<RetroArch name>.lpl` |
 
 ## Disc-based platforms (remote-scan / queue-download)
@@ -84,7 +85,7 @@ from `inventory.json`, not the scraped/rated pool -- their own filenames/
 hashes are already known there, no ScreenScraper identification needed
 just to know they exist).
 
-`queue-download` is the final step: every title in one platform's catalog
+`queue-download` adds the torrent: every title in one platform's catalog
 shares one torrent (one info-hash), so it adds that single torrent to
 Transmission **paused**, waits for its metadata (file list) to arrive from
 the swarm, then sets `files-wanted` to exactly the selected titles' file
@@ -97,6 +98,18 @@ starting it -- never the whole multi-terabyte archive. Needs
 [services/transmission/README.md](../../../transmission/README.md)), not a
 `curate`-local path -- `curate` only talks to Transmission over RPC, it
 never touches torrent data directly.
+
+`deploy-disc` is the actual final step, run once the torrent finishes:
+disc platforms have no archive tier (unlike cartridge platforms' `deploy`,
+which reads from one), so this promotes straight from the Inbox
+(`$INBOX_ROOT/Minerva_Myrient/Redump/<RetroArch canonical name>/`, e.g.
+`Sony - PlayStation/`) into the library tier -- same selected-title-plus-
+every-disc-sibling set `queue-download` used, sourced from `top-100.json`
+again rather than re-deriving it. Unlike `deploy`, a selected file missing
+from the Inbox is a hard error here, not a silent skip: `queue-download`
+already confirmed every `so_id` mapped to a real torrent file, so a
+missing file at this stage means something went wrong (torrent not
+actually finished, wrong `INBOX_ROOT` mount, ...), not an expected gap.
 
 ## RetroArch playlist naming
 
