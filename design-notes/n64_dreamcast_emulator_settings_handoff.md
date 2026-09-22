@@ -86,34 +86,44 @@ When a game fails a performance test, tune it in this order:
 ### Sega Dreamcast
 
 - **Start with the RetroArch Flycast core, escalate to standalone Flycast
-  on specific real problems** (revised 2026-09-22 — a practical override
-  of the research-based "default to standalone" recommendation below,
-  made deliberately: the RetroArch core is already sideloaded and
-  testable right now, while standalone Flycast needs a new APK sourced
-  and sideloaded first. Start with the zero-friction option; escalate only
-  if it actually earns it).
-  - Concrete escalation triggers, from the research (moderate confidence,
-    not proven with device-specific numbers):
+  on specific real problems** (revised 2026-09-22, then re-verified same
+  day — see correction below). The RetroArch core is already sideloaded
+  and testable right now; standalone Flycast needs a new APK sourced and
+  sideloaded first. Start with the zero-friction option; escalate only if
+  it actually earns it.
+  - **Correction (2026-09-22, same day): the original "RetroArch's core
+    is stale/deprecated" concern does not actually hold, re-verified with
+    fresh checks rather than trusted from the first research pass.**
+    `docs.libretro.com/library/flycast/` now attributes the core directly
+    to flyinghead and links to `flyinghead/flycast`, not the old
+    `libretro/flycast` fork; `flyinghead/flycast`'s own CI builds
+    libretro-target artifacts directly (`.github/workflows/c-cpp.yml`,
+    `-DLIBRETRO=ON`). `libretro/flycast` is real and deprecated (its own
+    README says so, confirmed, frozen since a 2026-07-06 last push as of
+    this check) but it is **not** what RetroArch's official core actually
+    builds from anymore — that concern was already solved before this
+    project ever looked at it. Also checked: no other Dreamcast-capable
+    libretro core exists as an alternative (Redream and Deecy are both
+    standalone-only apps, never shipped as libretro cores).
+  - Remaining concrete escalation triggers (not re-verified this pass,
+    carried over from the original research — moderate confidence,
+    treat as "check if still current" rather than settled):
     - Rendering that looks visibly blurrier or otherwise different than
-      expected at a given resolution — two open upstream issues document
-      exactly this for the RetroArch core vs. standalone
+      expected at a given resolution — two open upstream issues
+      documented this for the RetroArch core vs. standalone at the time
       (flyinghead/flycast#1007, #1308).
-    - A specific game with a known bug already fixed upstream in
-      `flyinghead/flycast` but not yet in what RetroArch ships —
-      `libretro/flycast` (the core RetroArch ships) is itself marked
-      **deprecated** by upstream, and real-world packaging still lags
-      behind current upstream in practice (e.g. RetroPie's `lr-flycast`
-      needed a separate `-dev` variant to track current).
     - Needing robust save-state/rewind support specifically — don't
-      expect the RetroArch core to have this "for free" as a frontend
-      integration advantage; it doesn't (`libretro/RetroArch#17779` is a
-      still-open feature request asking for it), so this isn't actually a
-      reason to prefer the RetroArch core either.
+      assume the RetroArch core has this "for free" as a frontend
+      integration advantage; at last check it didn't
+      (`libretro/RetroArch#17779` was a still-open feature request asking
+      for it).
   - No FPS/frame-time numbers exist anywhere for either option on this
     exact hardware (Fire TV Stick 4K Max / 2GB-RAM-class Android TV) — a
-    real evidence gap either way. Validate empirically per this doc's own
-    Controlled Tuning Loop once real testing starts, rather than trusting
-    this write-up alone.
+    real evidence gap either way. One remaining open question: confirm
+    which specific buildbot release/version RetroArch's Fire TV Stick
+    build actually ships — release-cadence lag is a normal, separate
+    question from "which repo," not yet checked. Validate empirically per
+    this doc's own Controlled Tuning Loop once real testing starts.
 - Renderer: Vulkan.
 - Threaded rendering: on only where testing confirms a benefit without instability.
 - Frame Skip: off by default and enabled only for specific demanding games.
