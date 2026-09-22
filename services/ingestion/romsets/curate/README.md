@@ -20,6 +20,21 @@ docker run --rm --env-file config.env \
   overmind-curate <subcommand> --platform genesis [options]
 ```
 
+**I/O-heavy stages (`deploy-disc`, and any large `scrape`/`inventory` run)
+should add `--blkio-weight 100 --cpu-shares 256`** to that `docker run`
+(default weight/shares are 500/1024) so they yield to overmind-01's other
+services under contention, confirmed necessary the hard way: two
+concurrent `deploy-disc` copies (~110GB combined) pushed load average to
+7.4 on this 4-core Pi and made Radarr's web UI unresponsive. Shell-level
+`nice`/`ionice` on the `docker run` command does **not** work for this —
+it doesn't propagate into the container's actual process, which Docker's
+own daemon spawns separately; the container-level flags are the only
+mechanism that actually works. Also: never run two heavy `curate`
+invocations concurrently on this host regardless — serialize them, one
+`docker run` at a time, matching [AGENTS.md's guidance](../../../../AGENTS.md)
+that heavy work belongs on the future mini-PC, not this Pi, and needs
+handling conservatively until that migration happens.
+
 `/var/lib/overmind/curation` holds the persistent cache (ScreenScraper/IGDB
 raw responses) and generated manifests — small, low-write state per the
 [storage layout](../../../../design-notes/storage-layout.md) convention, not
