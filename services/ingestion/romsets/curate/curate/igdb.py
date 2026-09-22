@@ -34,9 +34,17 @@ def _get_token(client_id: str, client_secret: str) -> str:
     return resp.json()["access_token"]
 
 
+def _escape_query_string(title: str) -> str:
+    """Escape for embedding in an Apicalypse double-quoted string literal.
+    Confirmed necessary against the real API: an unescaped title containing
+    a literal quote (e.g. 'Ivan "Ironman" Stewart's Super Off Road') closes
+    the query's string early and IGDB returns a 400 Syntax Error."""
+    return title.replace("\\", "\\\\").replace('"', '\\"')
+
+
 def _query(session: requests.Session, client_id: str, token: str, title: str) -> list[dict]:
     headers = {"Client-ID": client_id, "Authorization": f"Bearer {token}"}
-    body = f'search "{title}"; fields {FIELDS}; limit 10;'
+    body = f'search "{_escape_query_string(title)}"; fields {FIELDS}; limit 10;'
     resp = session.post(GAMES_URL, headers=headers, data=body, timeout=15)
     resp.raise_for_status()
     return resp.json()
