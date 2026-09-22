@@ -169,7 +169,7 @@ def main():
 
     p = sub.add_parser("rank")
     p.add_argument("--platform", required=True)
-    p.add_argument("--candidates", type=int, default=150)
+    p.add_argument("--candidates", type=int, default=300)
     p.set_defaults(func=cmd_rank)
 
     p = sub.add_parser("enrich-igdb")

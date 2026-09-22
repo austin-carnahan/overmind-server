@@ -107,6 +107,17 @@ after adding new archive-tier games only fetches what's new. Force a
 refresh of external data with `--refresh` on the relevant subcommand — this
 is a separate, explicit choice, never automatic.
 
+`rank --candidates` defaults to 300 (raised from 150 after PSX): a
+narrower pool cuts candidates by raw ScreenScraper rating *before*
+IGDB/dedup/override filtering ever runs, so a title can lose its shot at
+the top-100 purely for not making that first, cruder cut — confirmed
+directly, several well-regarded PSX titles (Xenogears, Tactics Ogre,
+Valkyrie Profile, Tomb Raider II, ...) were entirely absent from the
+150-candidate pool and only appeared once widened to 250. `enrich-igdb`
+and `score` scale with pool size but stay cheap (cached/rate-limited API
+calls only for genuinely new entries), so there's no real cost to
+defaulting wide.
+
 ## Credentials
 
 Copy `config.env.example` to `config.env` (gitignored, never commit it) and
@@ -132,7 +143,7 @@ not just execution.
 ```sh
 docker run --rm --env-file config.env -v ... overmind-curate inventory --platform genesis --dat /dats/genesis.dat
 docker run --rm --env-file config.env -v ... overmind-curate scrape --platform genesis
-docker run --rm --env-file config.env -v ... overmind-curate rank --platform genesis --candidates 150
+docker run --rm --env-file config.env -v ... overmind-curate rank --platform genesis --candidates 300
 docker run --rm --env-file config.env -v ... overmind-curate enrich-igdb --platform genesis
 docker run --rm --env-file config.env -v ... overmind-curate score --platform genesis
 docker run --rm --env-file config.env -v ... overmind-curate select --platform genesis --limit 100
