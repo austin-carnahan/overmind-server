@@ -17,6 +17,28 @@ import time
 from .transmission_rpc import TransmissionClient
 
 
+def _wait_for_status(
+    client: TransmissionClient, torrent_id: int, stopped: bool, timeout_seconds: float = 30.0
+) -> None:
+    """Transmission's torrent-stop/torrent-start RPC calls return success as
+    soon as the request is queued, not once the daemon has actually applied
+    it -- confirmed against the real service: a torrent-set immediately
+    after torrent-stop can still see the old (running) state, and the
+    matching torrent-start after that then has nothing to do, leaving the
+    torrent stuck stopped despite every call "succeeding". Poll until the
+    status actually reflects the request before moving on.
+    """
+    waited = 0.0
+    while waited < timeout_seconds:
+        info = client.torrent_get([torrent_id], ["status"])[0]
+        is_stopped = info["status"] == 0
+        if is_stopped == stopped:
+            return
+        time.sleep(1.0)
+        waited += 1.0
+    raise TimeoutError(f"torrent {torrent_id} did not reach {'stopped' if stopped else 'running'} state in time")
+
+
 def _wanted_so_ids(top: list[dict]) -> set[int]:
     wanted = set()
     for record in top:
@@ -67,6 +89,7 @@ def queue_download(
         info = client.torrent_get([torrent_id], ["files", "metadataPercentComplete", "name"])[0]
         if info["metadataPercentComplete"] >= 1.0 and info["files"]:
             client.torrent_stop([torrent_id])
+            _wait_for_status(client, torrent_id, stopped=True)
             files = info["files"]
             name = info["name"]
             break
@@ -86,6 +109,7 @@ def queue_download(
 
     client.torrent_set([torrent_id], files_wanted=files_wanted, files_unwanted=files_unwanted)
     client.torrent_start([torrent_id])
+    _wait_for_status(client, torrent_id, stopped=False)
 
     selected_bytes = sum(files[i]["length"] for i in files_wanted)
 
