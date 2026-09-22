@@ -21,10 +21,18 @@ destination and tool are selected below, but `scripts/backup` and
   notes. Romsets moved from excluded to included when the masters/curated
   split was dropped in favor of one DAT-validated tier — there's no longer a
   preserved original to re-derive it from, so this backup is now the only
-  recovery path if it's damaged.
+  recovery path if it's damaged. Also included despite living outside
+  Substrate/Library, as a named exception to the cache-exclusion rule below:
+  `/var/lib/overmind/curation/<platform>/identified.json` and
+  `cache/skyscraper-resources/` (see
+  [curate/README.md](../services/ingestion/romsets/curate/README.md)) — the
+  output of hours of rate-limited ScreenScraper API calls, not a
+  proven-rebuildable index.
 - **Excluded as reproducible, not backed up:** Library movies/TV (re-obtainable
   via Radarr/Sonarr/Transmission), and any service cache/vector index/other
-  state already treated as a proven-rebuildable index elsewhere in this repo.
+  state already treated as a proven-rebuildable index elsewhere in this repo
+  — `curate`'s own `inventory.json`/`candidates.json`/`top-100.*` fall here,
+  cheaply regenerated from `identified.json` above.
 - **Still pending:** bucket and scoped key creation, `restic` repository
   initialization, a separate durable backup of the `restic` repository password
   itself (losing it makes every snapshot unreadable), the actual prune/retention

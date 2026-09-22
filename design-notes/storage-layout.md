@@ -73,6 +73,15 @@ Substrate/Library can be irreplaceable. Treat indexes as disposable only when al
 valuable contents are reproducible. Project-local metadata/caches can stay where
 the project's native tooling expects them.
 
+Concrete example: `/var/lib/overmind/curation/<platform>/identified.json` and
+`cache/skyscraper-resources/` (see
+[curate/README.md](../services/ingestion/romsets/curate/README.md)) look like
+disposable cache by location, but are the output of hours of rate-limited
+third-party API calls — not reproducible in seconds like the rest of that
+service's derived files. Same durability posture as `romsets-archive/`
+above, just kept at its own service-default path rather than under
+`/mnt/library`, per this doc's "no imposed service-state hierarchy" rule.
+
 ## Logical paths and physical disks
 
 - microSD: Ubuntu, host configuration/identity, recovery tools, deployed checkout.

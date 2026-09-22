@@ -25,6 +25,19 @@ raw responses) and generated manifests — small, low-write state per the
 [storage layout](../../../../design-notes/storage-layout.md) convention, not
 Library content.
 
+**`<platform>/identified.json` and `cache/skyscraper-resources/` are
+archive-tier-durable — never pruned, never treated as disposable scratch.**
+They're the output of `scrape`, the one genuinely expensive/slow stage
+(rate-limited against a real third-party API, taking anywhere from minutes
+to hours depending on platform size); everything downstream (`rank`,
+`enrich-igdb`, `score`, `select`) is cheap to regenerate from them in
+seconds. Same durability posture as `/mnt/library/romsets-archive` itself —
+re-running `scrape` without `identified.json`/the resource cache already
+present means redoing real API work, not a quick rebuild, so don't delete
+or exclude either path from backups on the assumption they're "just cache."
+`inventory.json`/`candidates.json`/`top-100.*` are genuinely cheap
+derivatives and don't need this treatment.
+
 ## ScreenScraper access goes through Skyscraper
 
 The `scrape` stage shells out to [Skyscraper](https://github.com/Gemba/skyscraper)
