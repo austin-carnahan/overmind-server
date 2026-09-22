@@ -85,8 +85,32 @@ When a game fails a performance test, tune it in this order:
 
 ### Sega Dreamcast
 
-- Compare the RetroArch Flycast core with standalone Flycast.
-- Prefer standalone Flycast when it materially outperforms the RetroArch core or fixes compatibility problems.
+- **Default to standalone Flycast, not the RetroArch core** (revised
+  2026-09-22 from "compare and prefer if it materially outperforms" — real
+  research turned up a reasonably well-supported case for defaulting to
+  standalone rather than treating the two as equivalent starting points).
+  Moderate confidence, not proven with device-specific numbers:
+  - `libretro/flycast` (the core RetroArch ships) is itself marked
+    **deprecated** by upstream in favor of `flyinghead/flycast`, and
+    real-world packaging still lags behind current upstream in practice
+    (e.g. RetroPie's `lr-flycast` needed a separate `-dev` variant to track
+    current). Standalone can't lag itself — it ships tagged releases
+    directly from the upstream repo.
+  - Two open upstream issues document the RetroArch core rendering
+    visibly blurrier / differently than standalone at identical
+    resolution (flyinghead/flycast#1007, #1308).
+  - The usually-assumed RetroArch integration advantage (robust
+    save-state/rewind support) does **not** actually hold for this core
+    specifically — `libretro/RetroArch#17779` is a still-open feature
+    request asking for it.
+  - No FPS/frame-time numbers exist anywhere for either option on this
+    exact hardware (Fire TV Stick 4K Max / 2GB-RAM-class Android TV) — a
+    real evidence gap. Treat "standalone performs better" as a plausible,
+    not proven, expectation; validate empirically once both are actually
+    installed and tested per this doc's own Controlled Tuning Loop, rather
+    than trusting this write-up alone.
+  - Still requires sideloading the standalone Flycast APK, which isn't on
+    the device yet — see [runbooks/emulation/n64-dreamcast-optimization.md](../runbooks/emulation/n64-dreamcast-optimization.md).
 - Renderer: Vulkan.
 - Threaded rendering: on only where testing confirms a benefit without instability.
 - Frame Skip: off by default and enabled only for specific demanding games.
@@ -295,10 +319,12 @@ For N64:
 5. Disable remaining enhancements.
 6. Test frame skip only if all earlier profiles fail.
 
-For Dreamcast:
+For Dreamcast (baseline flipped to standalone-first 2026-09-22, see the
+Established Configuration Baseline section above for why):
 
-1. RetroArch Flycast baseline with Vulkan.
-2. Standalone Flycast with Vulkan.
+1. Standalone Flycast baseline with Vulkan.
+2. RetroArch Flycast core with Vulkan (fallback, e.g. if a title needs
+   RetroArch-side integration standalone lacks).
 3. Test threaded rendering where available.
 4. Reduce internal resolution or enhancements.
 5. Test frame skip only for the individual title.

@@ -156,6 +156,19 @@ building a fixture or reaching for the tuning ladder on a difficult title
 
 **Dreamcast (Flycast):**
 
+- **Core-choice decision (researched 2026-09-22, moderate confidence):**
+  default to standalone Flycast over the RetroArch core — see the
+  [design doc's revised Established Configuration Baseline](../../design-notes/n64_dreamcast_emulator_settings_handoff.md#sega-dreamcast)
+  for the full reasoning. Short version: `libretro/flycast` is upstream-
+  deprecated and lags current fixes; two open upstream issues
+  ([flyinghead/flycast#1007](https://github.com/flyinghead/flycast/issues/1007),
+  [#1308](https://github.com/flyinghead/flycast/issues/1308)) document the
+  RetroArch core rendering differently/worse than standalone at identical
+  settings; RetroArch's usual save-state/rewind advantage doesn't actually
+  hold for this core ([libretro/RetroArch#17779](https://github.com/libretro/RetroArch/issues/17779)
+  is a still-open request for it). No FPS numbers exist for this exact
+  device — verify empirically once standalone Flycast is actually
+  sideloaded and testable, don't just trust this citation.
 - [docs.libretro.com/library/flycast](https://docs.libretro.com/library/flycast/)
   — full core-options reference AND real per-game notes: e.g. Sonic
   Adventure (PAL) needs VGA output mode, Unreal Tournament (USA) needs the
