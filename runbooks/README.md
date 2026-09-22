@@ -14,6 +14,7 @@
   [alternate laptop host](clients/laptop-host.md), [optional DNS host](clients/optional-dns-host.md)
 - Romset notes: [DATs](romsets/dats.md), [Igir](romsets/igir.md),
   [scraping](romsets/scraper.md), [travel sync](romsets/travel-sync.md)
+- [N64 and Dreamcast optimization](emulation/n64-dreamcast-optimization.md)
 
 Each implemented procedure must state prerequisites, steps, verification, and
 rollback. Document actual host findings rather than substituting example paths
