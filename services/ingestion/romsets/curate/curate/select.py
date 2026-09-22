@@ -7,7 +7,7 @@ from pathlib import Path
 
 from .overrides import excluded_base_titles, forced_base_titles, load_overrides, resolve_forced_records
 from .scoring import bayesian_score, to_100
-from .titles import base_title
+from .titles import base_title, disc_number, is_junk_title
 
 REPORT_FIELDS = [
     "rank",
@@ -26,6 +26,7 @@ REPORT_FIELDS = [
     "screenscraper_id",
     "forced_include",
     "override",
+    "disc_count",
 ]
 
 
@@ -45,6 +46,30 @@ def _write_csv(path: Path, records: list[dict]):
         writer = csv.DictWriter(f, fieldnames=REPORT_FIELDS, extrasaction="ignore")
         writer.writeheader()
         writer.writerows(records)
+
+
+def _disc_siblings(record: dict, identified: list[dict]) -> list[dict] | None:
+    """For a multi-disc release (e.g. "Final Fantasy IX (USA) (Disc 1)"),
+    find every other disc of the same game in the full identified pool, so
+    a selection decision made on one disc's identity/rating still pulls in
+    every disc the game actually needs to be playable. Returns None for a
+    single-disc game (nothing to attach)."""
+    filename = record.get("canonical_filename") or ""
+    my_disc = disc_number(filename)
+    if my_disc is None:
+        return None
+
+    base = base_title(record)
+    siblings = [
+        r
+        for r in identified
+        if r.get("platform") == record.get("platform")
+        and base_title(r) == base
+        and disc_number(r.get("canonical_filename") or "") is not None
+    ]
+    if len(siblings) <= 1:
+        return None
+    return sorted(siblings, key=lambda r: disc_number(r["canonical_filename"]))
 
 
 def _score_forced_record(record: dict, prior: float) -> dict:
@@ -79,23 +104,49 @@ def select_top(
     forced_records = [_score_forced_record(r, prior) for r in forced_records]
     forced_bases = {base_title(r) for r in forced_records}
 
-    candidates = [c for c in candidates if base_title(c) not in excluded and base_title(c) not in forced_bases]
+    candidates = [
+        c
+        for c in candidates
+        if not is_junk_title(c.get("canonical_filename") or "")
+        and base_title(c) not in excluded
+        and base_title(c) not in forced_bases
+    ]
     candidates.sort(key=_sort_key)
     for i, record in enumerate(candidates, start=1):
         record["pool_rank"] = i  # position among all candidates, before dedup
 
     # Forced titles always make the list; fill remaining slots from the
-    # normally-ranked, deduped pool.
+    # normally-ranked, deduped pool. Dedup on both base title and IGDB id --
+    # some duplicate editions (e.g. a "Bonus Disc" release) use different
+    # enough title text that only a shared IGDB match catches them.
     top = list(forced_records)
     seen_base_titles = set(forced_bases)
+    seen_igdb_ids = {r["igdb_id"] for r in forced_records if r.get("igdb_id")}
     for record in candidates:
         if len(top) >= limit:
             break
         base = base_title(record)
-        if base in seen_base_titles:
+        igdb_id = record.get("igdb_id")
+        if base in seen_base_titles or (igdb_id and igdb_id in seen_igdb_ids):
             continue
         seen_base_titles.add(base)
+        if igdb_id:
+            seen_igdb_ids.add(igdb_id)
         top.append(record)
+
+    for record in top:
+        siblings = _disc_siblings(record, identified)
+        if siblings:
+            record["disc_files"] = [
+                {
+                    "disc_number": disc_number(s["canonical_filename"]),
+                    "canonical_filename": s["canonical_filename"],
+                    "path": s.get("path"),
+                    "sha1": s.get("sha1"),
+                }
+                for s in siblings
+            ]
+            record["disc_count"] = len(siblings)
 
     top.sort(key=_sort_key)
     for i, record in enumerate(top, start=1):

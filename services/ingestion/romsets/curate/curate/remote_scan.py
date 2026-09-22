@@ -22,19 +22,10 @@ from pathlib import Path
 import requests
 
 from .dat import load_dat_by_name
-from .titles import base_title, clean_title
+from .titles import base_title, clean_title, is_junk_title
 
 LISTING_LINK_RE = re.compile(r'<a href="/rom\?id=(\d+)"[^>]*>([^<]*)</a>')
 ROM_JSON_RE = re.compile(r"window\.rom\s*=\s*(\{.*?\});", re.DOTALL)
-
-# Same class of junk No-Intro/Redump metadata carries for cartridge DATs --
-# Igir's --only-retail/--no-unlicensed excludes these by DAT category; this
-# site doesn't expose a category field, so exclude by filename tag instead,
-# same heuristic already documented as a known gap in igir.md.
-JUNK_TAG_RE = re.compile(
-    r"\((?:Beta|Demo|Proto(?:type)?|Sample|Program|Unl|Pirate|Aftermarket|Bad ?Dump)\b[^)]*\)",
-    re.IGNORECASE,
-)
 
 # Exclusionary, matching --filter-region USA,WORLD used for the cartridge
 # archive tiers. Preference order for 1G1R dedup among survivors.
@@ -42,7 +33,7 @@ ALLOWED_REGIONS = ["USA", "World"]
 
 
 def _is_junk(file_name: str) -> bool:
-    return bool(JUNK_TAG_RE.search(file_name))
+    return is_junk_title(file_name)
 
 
 def _get_with_retry(
