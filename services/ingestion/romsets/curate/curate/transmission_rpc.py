@@ -17,14 +17,14 @@ class TransmissionClient:
         self.session = requests.Session()
         self._session_id = None
 
-    def _call(self, method: str, arguments: dict) -> dict:
+    def _call(self, method: str, arguments: dict, timeout: float = 120) -> dict:
         headers = {"X-Transmission-Session-Id": self._session_id} if self._session_id else {}
         resp = self.session.post(
             self.url,
             json={"method": method, "arguments": arguments},
             headers=headers,
             auth=self.auth,
-            timeout=30,
+            timeout=timeout,
         )
         if resp.status_code == 409:
             self._session_id = resp.headers["X-Transmission-Session-Id"]
@@ -33,7 +33,7 @@ class TransmissionClient:
                 json={"method": method, "arguments": arguments},
                 headers={"X-Transmission-Session-Id": self._session_id},
                 auth=self.auth,
-                timeout=30,
+                timeout=timeout,
             )
         resp.raise_for_status()
         data = resp.json()
