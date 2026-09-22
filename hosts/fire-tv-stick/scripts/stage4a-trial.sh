@@ -63,4 +63,13 @@ for t in 15 30 60 120 300; do
   prev=$t
 done
 
-echo "== Trial complete: $TRIAL =="
+case "$TRIAL" in
+  generic)
+    $ADB shell am force-stop com.mixplorer
+    ;;
+  retroarch)
+    $ADB shell am force-stop com.retroarch.ra32
+    ;;
+esac
+
+echo "== Trial complete: $TRIAL (launched app cleaned up) =="
