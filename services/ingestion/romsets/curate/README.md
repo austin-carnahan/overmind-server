@@ -82,6 +82,7 @@ generates, joined back to our inventory by archive-tier path.
 | `remote-scan` | nothing external | Minerva-Myrient-style listing page | `curation/<platform>/inventory.json` |
 | `queue-download` | Transmission RPC (disc platforms only) | `top-100.json` | adds/selects one torrent in Transmission |
 | `deploy-disc` | nothing external (disc platforms only) | `top-100.json`, the romset Inbox | copies into library tier |
+| `convert-chd` | `chdman` (disc platforms only) | deployed library tier (ZIPs) | in-place CHD/M3U library, `curation/<platform>/chd-convert-log.json` |
 | `playlist` | nothing external | deployed library tier | `curation/<platform>/<RetroArch name>.lpl` |
 
 ## Disc-based platforms (remote-scan / queue-download)
@@ -125,6 +126,36 @@ from the Inbox is a hard error here, not a silent skip: `queue-download`
 already confirmed every `so_id` mapped to a real torrent file, so a
 missing file at this stage means something went wrong (torrent not
 actually finished, wrong `INBOX_ROOT` mount, ...), not an expected gap.
+
+`convert-chd` is optional, run whenever the M3U/CHD disc-swapping
+experience is wanted (a plain single disc launched directly and swapped
+mid-game via RetroArch's Disc Control → Disc Image Append already works
+against the raw ZIPs `deploy-disc` leaves behind — confirmed against a
+real multi-disc PS1 title -- CHD is only needed for the nicer "launch one
+`.m3u`, cycle discs by index" experience). Converts **in place**: reads
+the flat `.zip` files `deploy-disc` left in the library tier and replaces
+them one disc at a time, per-disc pipeline: hash the zip → test its
+integrity → extract to an isolated scratch dir → find the `.cue` → verify
+every file it references exists (handles PSX's single-BIN and
+Dreamcast's multi-BIN/track layouts identically) → `chdman createcd` →
+`chdman verify` → atomically promote the verified `.chd` into the
+library → only then delete the source `.zip`. A failed disc leaves its
+source `.zip` untouched and logs the failure to
+`curation/<platform>/chd-convert-log.json`; it never stops the rest of
+the batch. Multi-disc games land in their own subfolder with an `.m3u`
+listing the discs in order; single-disc games are just a flat `.chd`.
+Output names are normalized (`Final Fantasy IX (USA) (Disc 1) (Rev 1)` →
+`Final Fantasy IX (USA) (Disc 1).chd`) — keeps the title and region tag,
+drops everything else, matching the "no name cleanup at deploy time"
+gap identified when checking `playlist.py`'s labels (see that stage's
+own note below). `chdman` (from Ubuntu's `mame-tools` package) needs to
+be on the image; nothing else external.
+
+Per this project's Pi-load-management convention (see the `deploy-disc`
+note above): `chdman createcd` is real CPU-bound transcoding-class work. `convert-chd` already processes one disc fully
+before starting the next (never parallel), but still add
+`--blkio-weight 100 --cpu-shares 256` to the `docker run` and never run
+it alongside another heavy `curate` job.
 
 ## RetroArch playlist naming
 

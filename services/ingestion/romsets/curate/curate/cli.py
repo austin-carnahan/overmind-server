@@ -4,6 +4,7 @@ import os
 from pathlib import Path
 from urllib.parse import urlsplit
 
+from .chd_convert import convert_platform
 from .deploy import deploy_top
 from .deploy_disc import deploy_disc
 from .igdb import enrich_candidates
@@ -128,6 +129,17 @@ def cmd_deploy_disc(args):
     )
 
 
+def cmd_convert_chd(args):
+    library_dir = LIBRARY_ROOT / args.platform
+    log_path = platform_dir(args.platform) / "chd-convert-log.json"
+    result = convert_platform(library_dir, log_path)
+    print(f"{result['succeeded']}/{result['total']} disc(s) converted -> {library_dir} (log: {log_path})")
+    if result["failed"]:
+        print(f"{len(result['failed'])} failure(s), zip(s) preserved:")
+        for r in result["failed"]:
+            print(f"  {r.source_zip.name}: {r.error}")
+
+
 def cmd_queue_download(args):
     top_path = platform_dir(args.platform) / "top-100.json"
     top = json.loads(top_path.read_text())
@@ -229,6 +241,10 @@ def main():
     p = sub.add_parser("deploy-disc")
     p.add_argument("--platform", required=True)
     p.set_defaults(func=cmd_deploy_disc)
+
+    p = sub.add_parser("convert-chd")
+    p.add_argument("--platform", required=True)
+    p.set_defaults(func=cmd_convert_chd)
 
     p = sub.add_parser("queue-download")
     p.add_argument("--platform", required=True)

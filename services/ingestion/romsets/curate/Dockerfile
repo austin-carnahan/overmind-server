@@ -21,6 +21,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     ca-certificates \
     python3 \
     python3-pip \
+    mame-tools \
   && rm -rf /var/lib/apt/lists/*
 
 # update_skyscraper.sh expects a non-root sudo-capable user to exist, per
