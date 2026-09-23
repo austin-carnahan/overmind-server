@@ -20,16 +20,22 @@ docker run --rm --env-file config.env \
   overmind-curate <subcommand> --platform genesis [options]
 ```
 
-**I/O-heavy stages (`deploy-disc`, and any large `scrape`/`inventory` run)
-should add `--blkio-weight 100 --cpu-shares 256`** to that `docker run`
-(default weight/shares are 500/1024) so they yield to overmind-01's other
+**I/O-heavy stages (`deploy-disc`, `convert-chd`, and any large
+`scrape`/`inventory` run) should add `--cpu-shares 256`** to that
+`docker run` (default is 1024) so they yield to overmind-01's other
 services under contention, confirmed necessary the hard way: two
 concurrent `deploy-disc` copies (~110GB combined) pushed load average to
 7.4 on this 4-core Pi and made Radarr's web UI unresponsive. Shell-level
 `nice`/`ionice` on the `docker run` command does **not** work for this —
 it doesn't propagate into the container's actual process, which Docker's
 own daemon spawns separately; the container-level flags are the only
-mechanism that actually works. Also: never run two heavy `curate`
+mechanism that actually works. `--blkio-weight` is the equivalent lever
+for disk I/O specifically, but **confirmed unusable on this host** as
+currently configured -- `docker run --blkio-weight ...` fails outright
+("no such file or directory" on `io.weight`, the cgroup v2 io controller
+isn't delegated/enabled here) -- don't reach for it until that's fixed
+at the host level; `--cpu-shares` alone is what's actually available
+today. Also: never run two heavy `curate`
 invocations concurrently on this host regardless — serialize them, one
 `docker run` at a time, matching [AGENTS.md's guidance](../../../../AGENTS.md)
 that heavy work belongs on the future mini-PC, not this Pi, and needs
@@ -152,10 +158,10 @@ own note below). `chdman` (from Ubuntu's `mame-tools` package) needs to
 be on the image; nothing else external.
 
 Per this project's Pi-load-management convention (see the `deploy-disc`
-note above): `chdman createcd` is real CPU-bound transcoding-class work. `convert-chd` already processes one disc fully
-before starting the next (never parallel), but still add
-`--blkio-weight 100 --cpu-shares 256` to the `docker run` and never run
-it alongside another heavy `curate` job.
+note above): `chdman createcd` is real CPU-bound transcoding-class work.
+`convert-chd` already processes one disc fully before starting the next
+(never parallel), but still add `--cpu-shares 256` to the `docker run`
+and never run it alongside another heavy `curate` job.
 
 ## RetroArch playlist naming
 
