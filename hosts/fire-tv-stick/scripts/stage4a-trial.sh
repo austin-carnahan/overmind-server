@@ -11,7 +11,7 @@ set -euo pipefail
 
 TRIAL="${1:?usage: stage4a-trial.sh <control|generic|retroarch> <output-dir>}"
 OUT_DIR="${2:?usage: stage4a-trial.sh <control|generic|retroarch> <output-dir>}"
-DEVICE_SERIAL="${DEVICE_SERIAL:-192.168.68.62:5555}"
+DEVICE_SERIAL="${DEVICE_SERIAL:-100.108.121.2:5555}"
 ADB="adb -s $DEVICE_SERIAL"
 
 mkdir -p "$OUT_DIR"

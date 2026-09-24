@@ -12,7 +12,7 @@
 
 set -euo pipefail
 
-DEVICE_SERIAL="${DEVICE_SERIAL:-192.168.68.62:5555}"
+DEVICE_SERIAL="${DEVICE_SERIAL:-100.108.121.2:5555}"
 ADB="adb -s $DEVICE_SERIAL"
 
 # Reviewed 2026-09-22 against the real device's actual installed

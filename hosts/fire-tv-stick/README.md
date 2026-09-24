@@ -21,8 +21,9 @@ per Phase 1's "capture a device baseline" step, before any modification.
 | Android release / SDK | 11 / 30 |
 | CPU ABI list | `armeabi-v7a,armeabi` — **32-bit only, confirmed on this real unit**, matching the plan's platform constraint (Section 3). No `arm64-v8a` in the list at all. |
 | Wi-Fi MAC | `fc:0f:76:0c:7a:3e` |
-| LAN IP (at capture time) | `192.168.68.62` — DHCP, not yet reserved; confirm before relying on it long-term |
-| ADB | Reachable over `192.168.68.62:5555`, authorized |
+| LAN IP (at capture time) | `192.168.68.62` — DHCP, never reserved; confirmed unreliable in practice (went unreachable, real IP had drifted) — **use the Tailscale IP below for ADB, not this one** |
+| Tailscale IP | `100.108.121.2` (`austins-fire-tv`) — stable regardless of local DHCP/network changes, including when the device travels off the home network. This is what `DEVICE_SERIAL` in `scripts/emulation-mode-prepare.sh`/`stage4a-trial.sh` now defaults to. |
+| ADB | Reachable over `100.108.121.2:5555` once Tailscale is up and the device is awake; each new connection path (LAN IP vs Tailscale IP) needs its own one-time on-screen authorization approval, even from an already-trusted client. |
 
 ### USB ROM cache volume
 
