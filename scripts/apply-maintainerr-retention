@@ -1,0 +1,235 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+# Apply the versioned Maintainerr retention policy from a configured host.
+# The API has no application authentication; this script deliberately defaults
+# to its loopback address and rejects remote targets unless explicitly allowed.
+
+usage() {
+  cat <<'EOF'
+Usage: scripts/apply-maintainerr-retention [--apply] [--url URL] [--allow-remote]
+
+Without --apply, resolve and print the planned policy without changing
+Maintainerr. Run on the host that can reach Maintainerr's loopback API:
+
+  /opt/overmind/scripts/apply-maintainerr-retention --apply
+
+Environment:
+  MAINTAINERR_URL  Override the default http://127.0.0.1:6246 API base URL.
+EOF
+}
+
+apply=false
+allow_remote=false
+api_base="${MAINTAINERR_URL:-http://127.0.0.1:6246}"
+
+while (($#)); do
+  case "$1" in
+    --apply)
+      apply=true
+      ;;
+    --url)
+      shift
+      api_base="${1:-}"
+      ;;
+    --allow-remote)
+      allow_remote=true
+      ;;
+    -h|--help)
+      usage
+      exit 0
+      ;;
+    *)
+      usage >&2
+      exit 2
+      ;;
+  esac
+  shift
+done
+
+case "$api_base" in
+  http://127.0.0.1:6246|http://localhost:6246)
+    ;;
+  *)
+    if [[ "$allow_remote" != true ]]; then
+      printf '%s\n' 'Refusing a non-loopback Maintainerr URL; use --allow-remote deliberately.' >&2
+      exit 2
+    fi
+    ;;
+esac
+
+repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+policy="$repo_root/services/maintainerr/retention-policy-v1.json"
+
+if [[ ! -f "$policy" ]]; then
+  printf 'Missing policy file: %s\n' "$policy" >&2
+  exit 1
+fi
+
+if [[ "$apply" == true ]]; then
+  mode="apply"
+else
+  mode="plan"
+fi
+
+python3 - "$api_base" "$policy" "$mode" <<'PY'
+import json
+import sys
+from urllib.error import HTTPError, URLError
+from urllib.request import Request, urlopen
+
+api_base, policy_path, mode = sys.argv[1:]
+api_base = api_base.rstrip('/')
+
+with open(policy_path, encoding='utf-8') as source:
+    policy = json.load(source)
+
+ACTION = {
+    'equals': 2,
+    'before_days': 5,
+    'count_equals': 14,
+    'exists': 18,
+}
+
+def request(path, method='GET', payload=None):
+    body = None if payload is None else json.dumps(payload).encode()
+    req = Request(
+        api_base + path,
+        data=body,
+        method=method,
+        headers={'Content-Type': 'application/json'} if body else {},
+    )
+    try:
+        with urlopen(req, timeout=15) as response:
+            return json.load(response)
+    except HTTPError as error:
+        raise SystemExit(f'Maintainerr API {method} {path} failed: HTTP {error.code}')
+    except URLError as error:
+        raise SystemExit(f'Maintainerr API {method} {path} failed: {error.reason}')
+
+constants = request('/api/rules/constants')
+libraries = request('/api/media-server/libraries')
+groups = request('/api/rules')
+
+apps = {app['name']: app for app in constants['applications']}
+
+def property_tuple(application, name, human_name=None):
+    app = apps.get(application)
+    if app is None:
+        raise SystemExit(f'Maintainerr does not expose the {application} rule source.')
+    matches = [prop for prop in app['props'] if prop['name'] == name]
+    if human_name is not None:
+        matches = [prop for prop in matches if prop.get('humanName') == human_name]
+    if len(matches) != 1:
+        raise SystemExit(
+        f'Maintainerr does not expose exactly one {application}.{name} field.'
+        )
+    return [app['id'], matches[0]['id']]
+
+def library_id(media_type):
+    matches = [library for library in libraries if library.get('type') == media_type]
+    if len(matches) != 1:
+        raise SystemExit(
+            f'Expected exactly one {media_type} library, found {len(matches)}.'
+        )
+    return matches[0]['id']
+
+def servarr_setting_id(kind):
+    # Settings responses include credentials. Keep them in-process and extract
+    # only the selected connection ID; never print or persist the response.
+    settings = request(f'/api/settings/{kind}')
+    if not isinstance(settings, list) or len(settings) != 1:
+        raise SystemExit(f'Expected exactly one configured {kind.title()} connection.')
+    setting_id = settings[0].get('id')
+    if not isinstance(setting_id, int):
+        raise SystemExit(f'{kind.title()} has no usable numeric connection ID.')
+    return setting_id
+
+def rule_from(condition, operator):
+    action_name = condition['action']
+    if action_name not in ACTION:
+        raise SystemExit(f'Unsupported policy action: {action_name}')
+    rule = {
+        'operator': operator,
+        'firstVal': property_tuple(
+            condition['application'],
+            condition['property'],
+            condition.get('human_name'),
+        ),
+        'action': ACTION[action_name],
+        'section': 0,
+    }
+    if action_name == 'before_days':
+        rule['customVal'] = {
+            'ruleTypeId': 0,
+            'value': str(int(condition['value']) * 86400),
+        }
+    elif action_name == 'count_equals':
+        rule['customVal'] = {'ruleTypeId': 0, 'value': str(int(condition['value']))}
+    elif action_name == 'equals':
+        value = condition['value']
+        if not isinstance(value, bool):
+            raise SystemExit('The policy only supports boolean equals values.')
+        rule['customVal'] = {'ruleTypeId': 3, 'value': '1' if value else '0'}
+    return rule
+
+existing_by_name = {group.get('name'): group for group in groups}
+for group in policy['groups']:
+    setting_id = servarr_setting_id(group['servarr'])
+    rules = [
+        rule_from(condition, None if index == 0 else 0)
+        for index, condition in enumerate(group['conditions'])
+    ]
+    payload = {
+        'name': group['name'],
+        'description': group['description'],
+        'libraryId': library_id(group['library_type']),
+        'arrAction': 0,
+        'dataType': group['data_type'],
+        'isActive': True,
+        'useRules': True,
+        'listExclusions': False,
+        'forceSeerr': False,
+        'rules': rules,
+        'notifications': [],
+        'ruleHandlerCronSchedule': None,
+        'collection': {
+            'libraryId': library_id(group['library_type']),
+            'title': group['collection_title'],
+            'description': group['description'],
+            'type': group['data_type'],
+            'isActive': True,
+            'arrAction': 0,
+            'visibleOnRecommended': False,
+            'visibleOnHome': True,
+            'deleteAfterDays': policy['grace_period_days'],
+            'manualCollection': False,
+            'keepLogsForMonths': 6,
+            'overlayEnabled': False,
+            f"{group['servarr']}SettingsId": setting_id,
+        },
+        f"{group['servarr']}SettingsId": setting_id,
+    }
+    existing = existing_by_name.get(group['name'])
+    if existing is None:
+        for legacy_name in group.get('legacy_names', []):
+            existing = existing_by_name.get(legacy_name)
+            if existing is not None:
+                break
+    if existing and isinstance(existing.get('id'), int):
+        payload['id'] = existing['id']
+        verb, path = 'PUT', '/api/rules'
+    else:
+        verb, path = 'POST', '/api/rules'
+
+    summary = (
+        f"{verb} {group['name']}: {group['library_type']} library, "
+        f"{len(rules)} conditions, {policy['grace_period_days']}-day Leaving Soon grace, "
+        f"whole-title delete through {group['servarr'].title()}."
+    )
+    if mode == 'apply':
+        request(path, verb, payload)
+        print(f'APPLIED {summary}')
+    else:
+        print(f'PLAN    {summary}')
+PY

@@ -1,0 +1,81 @@
+{
+  "schema_version": 1,
+  "maintainerr_version": "3.13.0",
+  "grace_period_days": 14,
+  "groups": [
+    {
+      "name": "Leaving Soon — Movies",
+      "legacy_names": [
+        "Overmind retention — movies"
+      ],
+      "description": "Watched movies inactive for 30 days, unless any Jellyfin user favorited them. Kept in Leaving Soon for 14 days before Radarr deletes the whole movie.",
+      "library_type": "movie",
+      "data_type": "movie",
+      "servarr": "radarr",
+      "collection_title": "Leaving Soon — Movies",
+      "conditions": [
+        {
+          "application": "Jellyfin",
+          "property": "isWatched",
+          "action": "equals",
+          "value": true
+        },
+        {
+          "application": "Jellyfin",
+          "property": "lastViewedAt",
+          "action": "before_days",
+          "value": 30
+        },
+        {
+          "application": "Jellyfin",
+          "property": "favoritedBy",
+          "action": "count_equals",
+          "value": 0
+        }
+      ]
+    },
+    {
+      "name": "Leaving Soon — TV",
+      "legacy_names": [
+        "Overmind retention — shows"
+      ],
+      "description": "Ended, unmonitored shows fully watched by at least one user and inactive for 30 days, unless any Jellyfin user favorited them. Kept in Leaving Soon for 14 days before Sonarr deletes the whole show.",
+      "library_type": "show",
+      "data_type": "show",
+      "servarr": "sonarr",
+      "collection_title": "Leaving Soon — TV",
+      "conditions": [
+        {
+          "application": "Jellyfin",
+          "property": "sw_allEpisodesSeenBy",
+          "action": "exists"
+        },
+        {
+          "application": "Jellyfin",
+          "property": "sw_lastWatched",
+          "action": "before_days",
+          "value": 30
+        },
+        {
+          "application": "Jellyfin",
+          "property": "sw_favoritedBy",
+          "action": "count_equals",
+          "value": 0
+        },
+        {
+          "application": "Sonarr",
+          "property": "ended",
+          "action": "equals",
+          "value": true
+        },
+        {
+          "application": "Sonarr",
+          "property": "monitored",
+          "human_name": "Is monitored",
+          "action": "equals",
+          "value": false
+        }
+      ]
+    }
+  ]
+}

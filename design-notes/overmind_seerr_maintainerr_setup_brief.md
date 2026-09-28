@@ -76,25 +76,30 @@ Maintainerr evaluates rules using Jellyfin viewing state, Seerr request informat
 
 A direct media-library mount is not required for normal Radarr/Sonarr-managed cleanup; add one only if later using Maintainerr's leftover-folder cleanup features.
 
-### Initial retention policy
+### Retention policy v1
 
 ```text
-Watched requested media
-→ eligible after ~45–60 days without use
+Movie: watched at least once + inactive for 30 days + no Jellyfin favorites
+→ Leaving Soon — Movies for 14 days
+→ whole-movie deletion through Radarr
 
-Requested but never watched
-→ eligible after ~90 days
-
-Recently watched / actively used
-→ protected
-
-Cleanup candidate
-→ "Leaving Soon"
-→ 14-day grace period
-→ delete through Radarr/Sonarr
+Show: ended + unmonitored + fully watched by at least one Jellyfin user
+      + inactive for 30 days + no Jellyfin favorites
+→ Leaving Soon — TV for 14 days
+→ whole-show deletion through Sonarr
 ```
 
-Tune the values after observing actual SSD usage.
+The Jellyfin favorite heart is the normal keep-forever mechanism. A favorite
+from any user prevents collection membership and deletion; un-favoriting makes
+the title eligible again only if all other conditions hold. Never-watched media,
+monitored series, unfinished series, and manually imported files stay outside
+automatic retention.
+
+Use whole-title `Delete` actions, not file-level cleanup. Radarr/Sonarr then
+remove their managed files and title folders, so this policy needs no writable
+library mount in Maintainerr. The two separate collections reflect Jellyfin's
+separate movie and TV libraries while keeping the same visible Leaving Soon
+behavior and grace period.
 
 ### Access / security
 
@@ -110,9 +115,11 @@ Maintainerr currently has no built-in login. Keep its management UI reachable on
 
 1. **Deploy Seerr** and verify Jellyfin user integration plus movie/TV requests into Radarr/Sonarr.
 2. **Deploy Maintainerr** and verify Jellyfin, Seerr, Radarr, and Sonarr connections.
-3. **Create a non-destructive test retention rule** and inspect its matches.
-4. **Enable a Leaving Soon collection** with a generous grace period.
-5. **Enable deletion only after validating the rule output** and confirming removal flows through Radarr/Sonarr correctly.
+3. **Apply the versioned retention policy** from
+   [`services/maintainerr/retention-policy-v1.json`](../services/maintainerr/retention-policy-v1.json).
+4. **Verify both Leaving Soon collections** and their 14-day grace setting.
+5. **Confirm whole-title removal behavior** through Radarr/Sonarr before
+   changing policy thresholds or actions.
 
 ## Desired Result
 

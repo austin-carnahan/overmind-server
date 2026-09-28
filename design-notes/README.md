@@ -53,9 +53,10 @@ not restate what the label already means.
   strategies" question in
   [runbooks/romsets/igir.md](../runbooks/romsets/igir.md#curation-strategies-archive--library).
 - [Seerr & Maintainerr setup brief](overmind_seerr_maintainerr_setup_brief.md) —
-  adopted architecture for the request/discovery and retention/cleanup
-  layers on top of Jellyfin/Radarr/Sonarr; both tools verified real before
-  adoption. PROPOSED (not yet deployed) — see
+  request/discovery and retention/cleanup layers on top of Jellyfin/Radarr/Sonarr.
+  Maintainerr is deployed and its v1 policy uses a 30-day inactivity threshold,
+  Jellyfin favorites as the keep-forever control, and a 14-day Leaving Soon
+  grace period — see
   [services/seerr](../services/seerr/README.md) and
   [services/maintainerr](../services/maintainerr/README.md).
 

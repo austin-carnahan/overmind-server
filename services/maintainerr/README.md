@@ -1,8 +1,10 @@
 # Maintainerr
 
-**Status:** PROPOSED — see [status legend](../../design-notes/README.md#status-legend);
-[compose.yaml](compose.yaml) below, not yet deployed. Part of the
-[Seerr + Maintainerr design brief](../../design-notes/overmind_seerr_maintainerr_setup_brief.md).
+**Status:** PARTIAL — Maintainerr 3.13.0 is deployed on `overmind-01` with
+its private state at `/var/lib/overmind/maintainerr/data`. The retention policy
+is defined in [retention-policy-v1.json](retention-policy-v1.json) and applied
+from the deployed checkout. See [status legend](../../design-notes/README.md#status-legend)
+and the [Seerr + Maintainerr design brief](../../design-notes/overmind_seerr_maintainerr_setup_brief.md).
 
 ## Selected implementation
 
@@ -11,7 +13,8 @@ verified real before adopting it: 2,200+ stars, described by its own README
 as "looks and smells like Seerr, does the opposite" (a companion project, not
 affiliated infrastructure), confirmed `linux/amd64` + `arm64`.
 
-Pinned `3.13.0` + digest — resolve a fresh digest before actually deploying.
+Pinned `3.13.0` + digest. Before upgrading, test the image and resolve a fresh
+digest deliberately.
 Data lives at `/var/lib/overmind/maintainerr/data`, SSD-backed. Runs as
 `user: 1000:1000` directly (this image's own convention, not PUID/PGID env
 vars) — matches `austin`'s UID.
@@ -31,24 +34,43 @@ without the extra app-auth layer every *other* service in this project has.
 Revisit with an authenticated reverse proxy only if that stops being
 sufficient — don't add one preemptively.
 
-## Setup (in Maintainerr's own WebUI, not stored in compose)
+## Setup and policy application
 
 - **Connect** Jellyfin, [Seerr](../seerr/README.md), Radarr, and Sonarr, each
   with their own API key. Use a **separate Jellyfin API key** from Seerr's,
   not a shared one.
-- **Start with a non-destructive test rule** and inspect its matches before
-  enabling any actual deletion — per the design brief's own integration
-  order, don't skip straight to automated removal.
+- Create service connections using separate scoped API keys. They remain only
+  in Maintainerr's private state, never this repository.
+- Apply the committed policy from the host checkout:
 
-### Initial retention policy (starting defaults, tune after observing real usage)
+  ```sh
+  /opt/overmind/scripts/apply-maintainerr-retention
+  /opt/overmind/scripts/apply-maintainerr-retention --apply
+  ```
+
+  The first command resolves the policy without changing the service. The
+  second upserts its two rule groups. It talks only to Maintainerr's loopback
+  API by default and does not print service credentials.
+
+### Retention policy v1
 
 ```text
-Watched requested media    → eligible after ~45-60 days without use
-Requested but never watched → eligible after ~90 days
-Recently watched / active   → protected
-Cleanup candidate → "Leaving Soon" → 14-day grace period → delete via Radarr/Sonarr
+Movie: watched at least once + inactive for 30 days + no Jellyfin favorites
+  → Leaving Soon — Movies for 14 days → whole-movie delete through Radarr
+
+Show: ended + unmonitored + fully watched by at least one Jellyfin user
+      + inactive for 30 days + no Jellyfin favorites
+  → Leaving Soon — TV for 14 days → whole-show delete through Sonarr
 ```
 
-A direct media-library mount (commented out in [compose.yaml](compose.yaml))
-is not required for normal Radarr/Sonarr-managed cleanup — only add it if
-later using Maintainerr's leftover-folder cleanup feature specifically.
+The Jellyfin heart is the normal keep-forever control: a favorite from any
+Jellyfin profile prevents the title from entering either collection or being
+deleted. Removing the favorite makes it eligible again only when every other
+condition also matches. Manual Maintainerr exclusions remain available for
+exceptions.
+
+Both actions use Maintainerr's whole-title `Delete` action, so Radarr/Sonarr
+remove the media, their record, and the title directory. A direct library mount
+(commented out in [compose.yaml](compose.yaml)) is not required and must not be
+added for this policy. Manually imported media is outside the policy because it
+is not Arr-managed.
