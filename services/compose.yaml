@@ -30,6 +30,11 @@ include:
   # Document conversion service (design: Doclet Service — Implementation
   # Design V3.md).
   - path: doclet/compose.yaml
+  # On-demand sleep/wake for otherwise-always-on services, starting with
+  # doclet. Must come before caddy isn't required (Compose doesn't care
+  # about include order for startup), but caddy's Caddyfile does depend
+  # on this being reachable at the container name `containernursery`.
+  - path: containernursery/compose.yaml
   # Host-local reverse proxy for readable home.arpa names (design plan:
   # 2026-09-15-home-dns-reverse-proxy-plan.md, Stage 2). Overmind proxies
   # only what Overmind hosts.

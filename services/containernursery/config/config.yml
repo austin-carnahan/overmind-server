@@ -1,0 +1,32 @@
+# ContainerNursery routing table. One entry per sleep-managed service.
+# To add another service to this pattern later:
+#   1. Add a `proxyHosts` entry below (domain/containerName/proxyHost/
+#      proxyPort must match that service's own Caddy vhost and compose
+#      service name).
+#   2. Change that service's Caddyfile block from
+#      `reverse_proxy <service>:<port>` to `reverse_proxy containernursery:80`.
+#   3. Restart caddy and containernursery. No other changes needed —
+#      this is the whole extension mechanism.
+#
+# Config is read by ContainerNursery itself (auto-reloads on change,
+# per upstream docs) -- restarting the container after an edit is a
+# safe fallback, not strictly required.
+proxyListeningPort: 80
+proxyHosts:
+  - domain: doclet.home.arpa
+    containerName: doclet
+    displayName: Doclet (document conversion)
+    proxyHost: doclet
+    proxyPort: 5001
+    # Rarely used and heavy when idle (persistent ~600MB-3GB resident,
+    # occasional CPU bursts on first request after boot) -- see
+    # design-notes/ for the resource investigation that led here.
+    # 15 minutes: long enough that a real back-and-forth testing session
+    # doesn't repeatedly sleep/wake, short enough to actually reclaim
+    # the resource most of the time it's not in use.
+    timeoutSeconds: 900
+    # Safety net: don't stop on timeout if doclet is still visibly busy
+    # (e.g. finishing a conversion job started just before the timeout
+    # fired). 5% of one core is comfortably below idle baseline and
+    # comfortably above genuine idle noise.
+    stopOnTimeoutIfCpuUsageBelow: 5

@@ -55,6 +55,11 @@ http://inference.home.arpa {
 	reverse_proxy host.docker.internal:8500
 }
 
+# Routed through ContainerNursery, not straight to doclet -- lets doclet
+# sleep when unused instead of always-on (services/containernursery/).
+# The Host header this vhost forwards (doclet.home.arpa) is what
+# ContainerNursery's own config.yml matches against to pick the right
+# backend, same as this block's own domain match does for Caddy.
 http://doclet.home.arpa {
-	reverse_proxy doclet:5001
+	reverse_proxy containernursery:80
 }

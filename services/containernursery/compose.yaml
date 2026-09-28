@@ -1,0 +1,40 @@
+# ContainerNursery: wakes a sleeping container on the first proxied
+# request, stops it again after a configured idle period. Deployed to
+# put doclet (docling-serve) to sleep when unused -- see
+# services/doclet/README.md and design-notes/ for the resource
+# investigation that motivated this. config/config.yml is the actual
+# routing table and is designed to grow: add more proxyHosts entries
+# there to bring additional services into this same pattern, no changes
+# needed here.
+#
+# Verified: ghcr.io/itsecholot/containernursery publishes a real
+# multi-arch (amd64 + arm64) manifest list for 1.9.0 -- confirmed
+# directly against the GHCR manifest, not assumed. Pinned by tag AND
+# the manifest-list digest together; resolve a fresh digest before
+# actually redeploying to a newer tag.
+#
+# No host port published -- only Caddy needs to reach this, over the
+# shared services_default network by container name, same as every
+# other service it fronts today.
+#
+# Docker socket mount is a real, deliberate privilege grant, not a
+# formality: this is the first service in this repo with access to the
+# host's Docker socket, which is effectively root-equivalent control
+# over every container on this host (start/stop, arbitrary bind mounts,
+# etc.), not scoped to just the containers it's meant to manage. Accept
+# this because ContainerNursery's whole job requires it and its scope
+# (start/stop named containers) is narrow even though the underlying
+# grant is broad -- see this service's README before adding it to any
+# host you'd consider less trusted than this one.
+services:
+  containernursery:
+    image: ghcr.io/itsecholot/containernursery:1.9.0@sha256:f7272f107494a2d4af6d30d2982a110ee2c5e89d88267690be18b2ce95bb7d25
+    container_name: containernursery
+    environment:
+      CN_LOG_LEVEL: info
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
+      - ./config:/usr/src/app/config
+    security_opt:
+      - no-new-privileges:true
+    restart: unless-stopped
