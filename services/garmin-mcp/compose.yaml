@@ -33,7 +33,8 @@ services:
       - ./secrets/garmin_password.txt:/run/secrets/garmin_password:ro
     # Loopback-only, same pattern as paperclip/doclet -- only a same-host
     # process (the native OpenClaw Gateway, once wired up) needs to reach
-    # this, not the wider network.
+    # this, not the wider network. Host port 8001, not 8000 -- cloudflare-
+    # solver already owns 8000 on this host (confirmed via `ss -tlnp`).
     ports:
-      - "127.0.0.1:8000:8000"
+      - "127.0.0.1:8001:8000"
     restart: unless-stopped

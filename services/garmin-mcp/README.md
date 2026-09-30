@@ -65,16 +65,17 @@ misconfiguration.
 
 ## Network exposure
 
-Bound to `127.0.0.1:8000` only — same pattern as `paperclip`/`doclet`. Only a
-same-host process is meant to reach this (the native OpenClaw Gateway, once
-the fitness agent is wired up to it as an MCP tool source) — not published
-more broadly.
+Bound to `127.0.0.1:8001` only (host port — `cloudflare-solver` already owns
+8000 on this host) — same pattern as `paperclip`/`doclet`. Only a same-host
+process is meant to reach this (the native OpenClaw Gateway, once the
+fitness agent is wired up to it as an MCP tool source) — not published more
+broadly.
 
 ## Verification
 
 Once running:
 ```sh
-curl -s http://127.0.0.1:8000/healthz
+curl -s http://127.0.0.1:8001/healthz
 ```
 Real Phase 1 verification (per the design note) is retrieving body
 weight/composition, recent activities, daily calories/expenditure, sleep,
