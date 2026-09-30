@@ -1,0 +1,39 @@
+# Taxuspt/garmin_mcp -- verified 2026-09-29 (design-notes/
+# overmind-health-fitness-system-v1.md): real, 1,260 stars, actively
+# maintained, the only one of several candidate Garmin MCP servers with
+# genuine community traction. No published image exists, so this is a
+# deliberate exception to this repo's usual "pin a published image by tag +
+# digest" convention -- built directly from a pinned upstream commit instead
+# of vendoring the source into this repo. Re-pin the commit deliberately,
+# don't float on a branch.
+#
+# Garmin auth is the single riskiest dependency here (see that design note's
+# Garmin Authentication section -- a real March 2026 Cloudflare/bot-detection
+# change broke this entire unofficial ecosystem at once). Token persistence
+# below is what keeps a restart from needing re-auth; it does not protect
+# against Garmin breaking the underlying API again.
+services:
+  garmin-mcp:
+    build:
+      context: https://github.com/Taxuspt/garmin_mcp.git#cfc5d799ab0f165e837f1188a1d093c65838aaf7
+    container_name: garmin-mcp
+    env_file:
+      - ./.env
+    environment:
+      GARMIN_EMAIL_FILE: /run/secrets/garmin_email
+      GARMIN_PASSWORD_FILE: /run/secrets/garmin_password
+      GARMIN_MCP_TRANSPORT: streamable-http
+      GARMIN_MCP_HOST: "0.0.0.0"
+      GARMIN_MCP_PORT: "8000"
+      GARMIN_FIT_DOWNLOAD_DIR: /data/fit
+    volumes:
+      - /var/lib/overmind/garmin-mcp/garminconnect:/root/.garminconnect
+      - /var/lib/overmind/garmin-mcp/fit:/data/fit
+      - ./secrets/garmin_email.txt:/run/secrets/garmin_email:ro
+      - ./secrets/garmin_password.txt:/run/secrets/garmin_password:ro
+    # Loopback-only, same pattern as paperclip/doclet -- only a same-host
+    # process (the native OpenClaw Gateway, once wired up) needs to reach
+    # this, not the wider network.
+    ports:
+      - "127.0.0.1:8000:8000"
+    restart: unless-stopped

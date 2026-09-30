@@ -35,6 +35,10 @@ include:
   # about include order for startup), but caddy's Caddyfile does depend
   # on this being reachable at the container name `containernursery`.
   - path: containernursery/compose.yaml
+  # Phase 1 of the health/fitness system (design:
+  # overmind-health-fitness-system-v1.md). Loopback-only; the native
+  # OpenClaw Gateway reaches it directly, nothing else needs to.
+  - path: garmin-mcp/compose.yaml
   # Host-local reverse proxy for readable home.arpa names (design plan:
   # 2026-09-15-home-dns-reverse-proxy-plan.md, Stage 2). Overmind proxies
   # only what Overmind hosts.
