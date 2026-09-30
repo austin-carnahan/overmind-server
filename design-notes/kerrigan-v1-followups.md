@@ -175,3 +175,74 @@ permissions → plugin availability. Given Kerrigan's operator role, `secrets`,
 `gateway`, `cron`, and `exec`/`process` are the ones worth auditing against
 `tools.deny` deliberately — most everything else (media gen, browser,
 x_search) is low-risk to leave default.
+
+## OpenClaw operational lessons (from building Soma, 2026-09-29/30)
+
+General lessons from standing up a second agent (Soma, the health/fitness
+coach — see
+[overmind-health-fitness-system-v1.md](overmind-health-fitness-system-v1.md)),
+not specific to that project. Apply these to any future OpenClaw config work.
+
+### Config changes need a real Gateway restart — the single biggest time-sink
+
+`openclaw config set`, `openclaw mcp add`, `openclaw mcp tools`, `openclaw
+mcp reload`, etc. run as one-off CLI invocations that only affect *their own
+transient runtime* — they do **not** reach the actual persistent Gateway
+(`openclaw-gateway.service`), regardless of a "change will apply without
+restarting the gateway" success message. This is documented
+(`docs/tools/mcp.md`): *"A Gateway or agent running elsewhere needs its own
+reload, config publish, or restart."* We lost real time chasing what looked
+like a tool-catalog-size bug that was very likely just this. **After any
+config change, `sudo systemctl restart openclaw-gateway.service` and confirm
+a fresh PID before trusting the change is live.**
+
+### The `openclaw agent --agent <id> --message <text>` CLI test path is unreliable
+
+Hit both a `codex` app-server timeout (an unrelated, unconfigured harness)
+and a Gateway websocket timeout, neither reflecting the actual thing being
+tested. **Verify session/tool-catalog behavior through the real dashboard**,
+not this CLI shortcut — it cost us a false "0 tools" reading that a real
+chat session immediately contradicted once we stopped trusting the CLI path.
+
+### MCP per-agent tool scoping: deny doesn't get overridden by a more specific `alsoAllow`
+
+To restrict an MCP server's tools to one agent, **deny it on the other
+agents specifically** (`agents.entries.main.tools.deny: ["garmin__*"]`), not
+globally + re-allow. A global `tools.deny` could not be overridden by a
+per-agent `tools.alsoAllow` for the same names in our testing — deny wins
+across scopes. MCP tool names are canonically `<safe-server>__<safe-tool>`
+(verified against `docs.openclaw.ai`), safe to glob with `server__*`.
+
+### Rootless Podman sandbox backend on a `--system` account needs four real setup steps
+
+Chosen over Docker-group membership deliberately — Docker socket access is
+root-equivalent, which would have undone the whole point of keeping
+`openclaw` unprivileged. Podman's backend is built into OpenClaw
+(`sandbox.backend: "podman"`), reuses `sandbox.docker.*` config, and
+genuinely never touches `/var/run/docker.sock` (verified against
+`docs/gateway/sandboxing/podman-backend.md`). But a `useradd --system`
+account doesn't get what an interactive `adduser` account gets for free:
+
+1. `sudo apt-get install podman catatonit` — `catatonit` specifically must be
+   on the **host**, not just baked into the sandbox image; Podman creates
+   sandboxes with `--init` and won't work around a missing host helper.
+2. `sudo usermod --add-subuids 100000-165535 --add-subgids 100000-165535
+   openclaw` — system accounts don't get subuid/subgid ranges allocated
+   automatically the way `adduser`-created accounts do; rootless Podman's
+   user-namespace remapping fails without this (`no subuid ranges found`).
+3. `sudo loginctl enable-linger openclaw` — rootless Podman's systemd
+   cgroup delegation needs a real logind session; a `sudo -u` impersonation
+   alone doesn't provide one (`requires interactive authentication` /
+   `dbus: couldn't determine address of session bus` on build).
+4. Build the sandbox image **as the target user specifically**
+   (`sudo -u openclaw -i podman build ...`) — rootless Podman's image store
+   is per-user, not shared with root or other accounts.
+
+Verify the *effective*, per-session config with OpenClaw's own diagnostic
+rather than reasoning about merged config by hand:
+`openclaw sandbox explain --agent <id> --session agent:<id>:<key>` — shows
+`runtime: direct` vs `runtime: sandboxed`, the real backend, and actual
+workspace mounts. Confirmed empirically (not just from docs): MCP tool calls
+stay Gateway-side and remain reachable even from a sandboxed session with
+`network: "none"` — sandboxing isolates shell/file/process execution, not
+MCP/plugin calls.

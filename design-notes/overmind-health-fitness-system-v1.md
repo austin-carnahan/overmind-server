@@ -2,7 +2,10 @@
 
 ## Status
 
-Initial design / exploration note.
+PARTIAL — Phase 1 (Garmin read access) is live and verified. See
+[Phase 1 Implementation Log](#phase-1-implementation-log) below for what's
+actually running, what broke, and what we learned. The rest of this doc
+(Phases 2-6) remains an initial design/exploration note.
 
 This project should remain **composition-first**: use existing Garmin, nutrition, MCP, database, and dashboard tools wherever possible, and add custom code only where an actual gap appears.
 
@@ -13,6 +16,89 @@ The initial goal is not to build a complete health platform. It is to establish 
 3. record nutrition conversationally with minimal friction;
 4. combine intake, expenditure, and weight trends in one useful view;
 5. expose the system to a persistent fitness/nutrition agent on Overmind.
+
+---
+
+## Phase 1 Implementation Log
+
+Real state as of 2026-09-30, not a plan — what's actually deployed, verified,
+and the debugging trail worth not repeating.
+
+### What's running
+
+- **Garmin MCP** (`services/garmin-mcp/`) — Taxuspt/garmin_mcp, built from a
+  pinned upstream commit, running on `overmind-01`, authenticated (real
+  interactive login completed, OAuth tokens persisted at
+  `/var/lib/overmind/garmin-mcp/garminconnect`, survived a container
+  recreation already), bound to `127.0.0.1:8001`.
+- **Soma** — the health/fitness coach agent, a second OpenClaw agent
+  (`agentId: soma`) alongside Kerrigan (`main`) on the same native Gateway.
+  Model `openai/gpt-6-sol`, identity name "Soma".
+- **Garmin MCP tool catalog curated to 46 tools** (of 153 available) via
+  `openclaw mcp tools garmin --include ...`: body/health metrics, activity
+  and performance trends, workout read/create/schedule, and Garmin's own
+  built-in nutrition tools (distinct from the separate nutrition-mcp planned
+  for Phase 3 — enabled because we were already editing this server's tool
+  list, not a Phase 3 substitute). Full list and rationale in git history of
+  this file / session transcript; re-derive from
+  `openclaw mcp probe garmin` if this drifts.
+- **Verified end-to-end**: a real chat with Soma correctly retrieved actual
+  step-count and activity data (September 2026 activity history), confirming
+  the full chain — Gateway → MCP → Garmin Connect → back to the model —
+  genuinely works.
+- **Soma runs sandboxed for non-main sessions** (rootless Podman backend,
+  `scope: session`, `workspaceAccess: ro`) — see
+  [kerrigan-v1-followups.md](kerrigan-v1-followups.md) for the general
+  OpenClaw/sandbox setup details, which aren't specific to this project.
+  Verified: a real non-main session successfully created a Podman sandbox
+  and *still* retrieved real Garmin data through it (MCP calls are
+  Gateway-side, not sandboxed, by design — confirmed empirically, not just
+  from docs).
+
+### The "0 MCP tools" debugging trail — what it actually was, and wasn't
+
+Real sequence, since it's easy to draw the wrong conclusion from the
+intermediate steps:
+
+1. Registered `garmin` as an MCP server (`openclaw mcp add`, streamable-http,
+   all 153 tools). `mcp doctor`/`mcp probe` both confirmed a healthy
+   connection with all 153 tools reachable.
+2. Every real agent turn — through the CLI test harness *and* the actual
+   dashboard — reported **zero** `garmin__*` tools, for both agents,
+   regardless of `tools.allow`/`deny`/`alsoAllow` configuration.
+3. Found a real, closed-but-unconfirmed-fixed upstream issue
+   (`openclaw/openclaw#114154`) describing the identical symptom against an
+   earlier version (2026.7.1-2): healthy probe/doctor, zero tools in real
+   sessions, no workaround found by the original reporter after ruling out
+   the same things we did.
+4. **The actual, most likely root cause, found afterward**: `openclaw mcp
+   reload` and plain `config set`/`mcp tools` CLI invocations only affect
+   *that one-off CLI process's own transient runtime* — they do **not**
+   reach the actual persistent Gateway (`openclaw-gateway.service`). Every
+   config change made via ad-hoc CLI calls was invisible to the live
+   service until we did a real `sudo systemctl restart
+   openclaw-gateway.service`. This is documented behavior
+   (`docs/tools/mcp.md`: *"A Gateway or agent running elsewhere needs its
+   own reload, config publish, or restart"*), not a bug — we just didn't
+   internalize it until this cost real debugging time.
+5. We narrowed the tool catalog to 3 tools *and* did a real restart in the
+   same pass, which worked — but that conflated two variables. **We never
+   went back and re-tested the original 153-tool catalog with a proper
+   restart.** So: the leading hypothesis is that the Gateway-restart gotcha
+   alone fully explains what happened, and catalog size was never actually
+   the problem — but this is not proven. Treat "large catalogs might fail"
+   as retired-but-not-disproven, not confirmed-safe. If a future large
+   catalog addition mysteriously shows zero tools again, restart the
+   Gateway properly *before* concluding it's a size problem.
+
+### Concrete operational rule going forward
+
+**Any config change made via `openclaw config set`, `openclaw mcp add`,
+`openclaw mcp tools`, `openclaw mcp configure`, etc. needs `sudo systemctl
+restart openclaw-gateway.service` before trusting it's live** — regardless
+of what the CLI's own "change will apply without restarting the gateway"
+message claims. Verify with a fresh PID (`ps aux | grep openclaw-gateway`)
+before testing anything downstream of the change.
 
 ---
 
