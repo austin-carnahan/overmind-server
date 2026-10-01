@@ -100,6 +100,31 @@ of what the CLI's own "change will apply without restarting the gateway"
 message claims. Verify with a fresh PID (`ps aux | grep openclaw-gateway`)
 before testing anything downstream of the change.
 
+### Sandboxed sessions cannot use Garmin (or any user-configured MCP server)
+
+Confirmed 2026-09-30/10-01: with Soma on OpenClaw's Codex harness, **any**
+sandboxed session — dashboard or mobile, it doesn't matter which — loses
+access to Garmin MCP entirely. This isn't a config bug: the Codex app-server
+process that owns MCP connections runs on the Gateway host, outside the
+sandbox container, so OpenClaw disables user MCP servers for sandboxed Codex
+turns unconditionally rather than let a "sandboxed" session reach host-level
+MCP access through the back door. No tool-policy allowlist fixes this; the
+tools are not offered to the model at all for that turn.
+
+The only way to give a conversation real Garmin access is to take it out of
+sandboxing entirely, per-session, via `sessions.patch` with `sandboxMode:
+"off"` (`openclaw gateway call sessions.patch --params
+'{"key":"<session key>","sandboxMode":"off"}'`). Applied this to Soma's
+persistent Android session (`agent:soma:node-27eb2826b877`) so mobile chat
+has the same Garmin access as the main session. Any other sandboxed Soma
+session — a fresh dashboard chat, a channel session, a subagent — still
+correctly loses Garmin access, and that's expected, not a regression.
+
+If sandboxed Soma subagents or channel sessions ever need Garmin access,
+the fix isn't disabling sandboxing globally — it's a different agent
+runtime/harness, or a future OpenClaw-supported sandbox-to-MCP execution
+path. Not solved here; just recorded.
+
 ---
 
 # 1. Product Vision

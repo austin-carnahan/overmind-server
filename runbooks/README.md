@@ -15,6 +15,11 @@
 - Romset notes: [DATs](romsets/dats.md), [Igir](romsets/igir.md),
   [scraping](romsets/scraper.md), [travel sync](romsets/travel-sync.md)
 - [N64 and Dreamcast optimization](emulation/n64-dreamcast-optimization.md)
+- OpenClaw on Overmind: [index](openclaw/README.md),
+  [deployment and gateway](openclaw/deployment-and-gateway.md),
+  [agents and model routing](openclaw/agents-and-model-routing.md),
+  [sandboxing and trust](openclaw/sandboxing-and-trust.md),
+  [diagnostics and quirks](openclaw/diagnostics-and-quirks.md)
 
 Each implemented procedure must state prerequisites, steps, verification, and
 rollback. Document actual host findings rather than substituting example paths
