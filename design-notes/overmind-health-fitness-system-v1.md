@@ -125,6 +125,54 @@ the fix isn't disabling sandboxing globally — it's a different agent
 runtime/harness, or a future OpenClaw-supported sandbox-to-MCP execution
 path. Not solved here; just recorded.
 
+### V1 nutrition + workout pass — Garmin device limitations found (2026-10-01)
+
+Built out recipe persistence (`recipes/<name>.yaml` in Soma's workspace,
+canonical over Garmin custom foods), expanded the Garmin MCP catalog with
+9 more tools (custom-food CRUD, `upsert_and_log`, nutrition daily
+settings), and tested food logging, goal read/write, and workout creation
+end-to-end against Austin's real Garmin account and Forerunner 265S.
+
+Food logging (catalog search, conversational-meal estimation, the
+recipe→custom-food→log pipeline, and partial portions) all worked
+correctly on the first or second pass. Goal read/write also worked
+cleanly — note Garmin stores calorie and macro targets independently; it
+does **not** auto-reconcile them (a 2,200 kcal target coexisted with
+180g/220g/75g macros that multiply out to 2,275 kcal, with no warning or
+normalization).
+
+Workout creation surfaced one real device-specific limitation and one
+real capability (initially misread as a limitation), both isolated with
+discriminating tests (same structure, varying one variable at a time)
+rather than assumed from the first failure:
+
+- **`walking`-sport-type structured workouts are "incompatible" for Send
+  to Device on a Forerunner 265S.** They create and read back fine through
+  the MCP, but Garmin Connect won't push them to the watch — consistent
+  with `walking` not even being offered in Garmin Connect's own manual
+  workout builder on this device. Confirmed by creating matched running
+  and strength workouts, which were both Send-to-Device compatible.
+- **Scheduling and sending to the watch are two separate, unrelated Garmin
+  Connect actions.** Initial testing only checked whether scheduling
+  changed Send-to-Device compatibility (it doesn't) and concluded
+  scheduling had no visible effect at all — that was wrong. A follow-up
+  test confirmed `schedule_workout` genuinely adds the workout to Garmin
+  Connect's **Calendar** view, visible to the user there. A single workout
+  can also be scheduled to multiple independent dates by calling
+  `schedule_workout` again with the same workout id — each call creates
+  its own scheduled-entry id while reusing the same workout, confirmed by
+  scheduling one workout to two separate dates and verifying both entries
+  existed independently. What scheduling does **not** do is push the
+  workout to the watch — that's still a separate, manual Send to Device
+  step in Garmin Connect, with no corresponding MCP tool.
+
+Both findings are recorded in Soma's own `AGENTS.md`: avoid `walking`
+workouts, and present scheduling and Send to Device as the two separate
+real actions they are, rather than conflating or dismissing either. Worth
+re-testing if upstream Garmin Connect/device firmware changes, since this
+is Garmin/device behavior, not an MCP limitation — the MCP faithfully
+creates and reports what was asked for in both cases.
+
 ---
 
 # 1. Product Vision
