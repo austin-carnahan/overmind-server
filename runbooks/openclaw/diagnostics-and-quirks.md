@@ -129,7 +129,44 @@ the human has explicitly authorized the specific action in conversation — no
 interactive approval prompt appears for the human to click through. If a
 command that should work gets refused with something like "denied by auto
 mode classifier," that's the signal — the fix is having the human run the
-command directly, not retrying through another tool or encoding.
+command directly, not retrying through another tool or encoding. Seen twice:
+once for a sandbox-loosening `sessions.patch`, once for enabling
+`tools.elevated.enabled`.
+
+### Switching agent runtime breaks existing conversation history
+
+A session's stored transcript is tied to the harness it was built under.
+Forcing `agentRuntime.id: "openclaw"` on a model that was previously running
+the Codex harness makes any session with pre-existing history fail outright
+on its next turn — `ChatGPT Responses stream terminated`,
+`failureKind: "provider-failure"`, exhausts all 3 retries, every time.
+Confirmed on both `main` sessions and both Android sessions for Kerrigan and
+Soma. `openclaw sessions compact <key>` does not fix this (returns "Already
+compacted" if compaction already ran once). A **brand-new** session on the
+new runtime works perfectly from the first turn.
+
+The only fix found: reset/recreate the session rather than trying to carry
+old history forward. For the fixed `main` key (can't be deleted):
+`openclaw gateway call sessions.reset --params '{"key":"agent:<id>:main"}'`.
+For any other key: `openclaw sessions delete <key> --agent <id> --yes`
+(recreated fresh on next message). This loses raw conversation history —
+not memory files, recipes, or workspace state, which live separately and
+are unaffected. Confirm with the user before doing this to a conversation
+they've actually been using; it's not reversible.
+
+### Codex harness and OpenClaw's built-in runtime enforce host-exec privilege differently
+
+A scoped sudoers grant (e.g. read-only Docker access) that worked fine for
+an agent running the Codex harness can fail after switching that agent to
+OpenClaw's built-in runtime, with an error like "elevated execution is
+unavailable in this runtime." The built-in runtime's own `exec` tool routes
+anything needing privilege escalation through OpenClaw's own
+`tools.elevated` gate (`tools.elevated.enabled`, default `false`), which the
+Codex harness's native exec path apparently didn't enforce the same way.
+Don't assume a sudoers grant "just works" the same across a runtime switch —
+re-test real privileged operations explicitly, not just file read/MCP/basic
+exec, and expect to need `agents.entries.<id>.tools.elevated.enabled: true`
+(plus whatever `allowFrom` scoping is appropriate) to restore it.
 
 ## Change log
 
@@ -160,4 +197,24 @@ Android-specific cause). Applied the same per-chat sandboxMode:"off"
 opt-out to Soma's Android session (agent:soma:node-27eb2826b877); verified
 real Garmin search_foods call succeeds there now, and that an unrelated
 sandboxed Soma session still correctly lacks Garmin access.
+
+2026-10-02 — Migrated Kerrigan and Soma off the Codex harness
+Root-caused the session-key-based trust model's awkwardness to a real gap:
+Codex's native spawn_agent delegation bypassed OpenClaw's sandbox/audit
+system entirely (zero session trace, confirmed empirically), independent
+of any sessions_spawn-level config. Fix: forced agentRuntime.id:"openclaw"
+for sol/luna/astra; built two dedicated always-sandboxed worker identities
+(kerrigan-worker, soma-worker) with requireAgentId+allowAgents forcing all
+delegation to them; set both resident agents' sandbox.mode to "off",
+replacing per-chat opt-outs entirely. Verified with disposable test agents
+first, then both real agents: runtime confirmed, MCP/host access confirmed
+from Home and a brand-new never-opted-in topic (the original complaint,
+now resolved), worker isolation confirmed with real write/read probes.
+Scoped Garmin properly (tools.deny on main/kerrigan-worker) after finding
+it had never actually been agent-restricted. Found and accepted two real
+regressions: existing conversation history doesn't survive the runtime
+switch (reset via sessions.reset/sessions delete, approved by the user);
+Kerrigan's Docker sudoers grant needs tools.elevated.enabled re-granted
+(open, blocked by Claude Code's own permission classifier, needs the human
+to apply it directly). Removed disposable test agents after migration.
 ```

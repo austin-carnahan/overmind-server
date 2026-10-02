@@ -74,6 +74,10 @@ agents.defaults.models["openai/gpt-6-luna"].params.thinking    = "low"
 agents.defaults.models["openai/gpt-6-sol"].params.thinking     = "medium"
 agents.defaults.models["openai/gpt-6-astra"].params.thinking   = "high"
 
+agents.defaults.models["openai/gpt-6-sol"].agentRuntime.id     = "openclaw"
+agents.defaults.models["openai/gpt-6-luna"].agentRuntime.id    = "openclaw"
+agents.defaults.models["openai/gpt-6-astra"].agentRuntime.id   = "openclaw"
+
 agents.entries.<id>.thinkingDefault                            = UNSET (deliberately)
 agents.defaults.thinkingDefault                                 = UNSET
 ```
@@ -82,6 +86,18 @@ Rationale: Sol (mid-tier, built for coding/agentic work) as the shared
 primary/parent model; Luna (high-volume, low-complexity) for routine
 subagents and utility calls; Astra (flagship) reserved for explicit
 escalation on exceptional difficulty.
+
+**All three forced onto OpenClaw's built-in runtime**, not the Codex
+harness both resident agents originally ran on. This is a 2026-10-02
+architecture change, not the original default — see
+[Sandboxing and Trust](sandboxing-and-trust.md) for the full reasoning
+(Codex's native `spawn_agent` delegation bypassed our sandbox/audit
+entirely) and the real migration regressions found (existing conversation
+history doesn't survive the runtime switch; a Docker/elevated-exec
+permission broke and needs re-granting). Confirmed via OpenClaw's own docs
+that this keeps the exact same model and the exact same ChatGPT/Codex
+subscription auth — `agentRuntime.id: "openclaw"` only changes which
+runtime executes the turn, not which account or model answers it.
 
 ### Resolution order — the critical gotcha
 
