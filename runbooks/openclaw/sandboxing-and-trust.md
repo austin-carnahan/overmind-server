@@ -108,17 +108,16 @@ with real write/read probes against the real reference binds.
   conversation history — not memory files, recipes, or other workspace
   state, which are untouched. Confirm with the user before resetting a
   conversation they've actually been using.
-- **Docker/sudo-scoped host admin access broke.** Kerrigan's scoped
-  Docker-read sudoers grant worked under the Codex harness but fails on
-  the built-in runtime with "elevated execution is unavailable in this
-  runtime" — the built-in runtime's own `exec` tool routes anything
+- **Docker/sudo-scoped host admin access broke, then was fixed.** Kerrigan's
+  scoped Docker-read sudoers grant worked under the Codex harness but
+  failed on the built-in runtime with "elevated execution is unavailable in
+  this runtime" — the built-in runtime's own `exec` tool routes anything
   needing privilege escalation through OpenClaw's `tools.elevated` gate
   (default: disabled), which the Codex harness's own native exec apparently
-  didn't enforce the same way. **Open as of 2026-10-02** — needs
-  `agents.entries.main.tools.elevated.enabled: true` (plus checking
-  `allowFrom` requirements) to restore. Not yet applied; this exact change
-  got blocked by Claude Code's own auto-mode safety classifier (flagged as
-  a "Permission Grant") and needs the human to apply it directly.
+  didn't enforce the same way. **Resolved 2026-10-05**: set
+  `agents.entries.main.tools.elevated.enabled: true`. Confirmed with a real
+  `sudo docker ps -a` call — succeeded, `garmin-mcp` listed correctly. No
+  further `allowFrom` scoping was needed in this single-operator setup.
 
 ## Sandboxing backend
 
