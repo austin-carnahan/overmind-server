@@ -217,4 +217,24 @@ switch (reset via sessions.reset/sessions delete, approved by the user);
 Kerrigan's Docker sudoers grant needs tools.elevated.enabled re-granted
 (open, blocked by Claude Code's own permission classifier, needs the human
 to apply it directly). Removed disposable test agents after migration.
+
+2026-10-07 — Reverted kerrigan-worker/soma-worker, back to plain defaults
+The 2026-10-02 worker-identity architecture worked but was more than the
+resident agents actually needed — explicit decision to remove it and
+accept that delegated-work isolation is unsolved for now (own future
+project), prioritizing "different conversations with the same agent
+differ in context, not capability" over worker isolation. Deleted
+kerrigan-worker/soma-worker (config + leftover workspace directories —
+`agents delete` doesn't always clean those up, rm -rf needed too);
+removed subagents.requireAgentId/allowAgents from both agents. Kept the
+two things that were genuinely Codex-migration fixes, not worker-identity
+scaffolding: agentRuntime.id:"openclaw" and tools.elevated.enabled.
+Separately root-caused "Worker turn session key does not match its
+placement" properly this time (had previously only disabled the
+triggering automation, which was explicitly called out as not an
+acceptable fix): a stale persisted placement record from an earlier
+interrupted run, unrelated to sandbox.mode. `sessions.reset` on the
+affected cron session key clears it; verified by manually running both
+affected automations end-to-end to completion. Restored
+skills.workshop.autonomous.mode to "auto".
 ```
