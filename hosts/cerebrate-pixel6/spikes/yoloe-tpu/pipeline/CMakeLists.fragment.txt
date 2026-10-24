@@ -1,0 +1,9 @@
+# Added to the litert-gpu-transformers bench CMakeLists (same LiteRT 2.3 SDK
+# setup as litert_e2e). The TPU stage compiles against the TFLite 2.16.1 AAR
+# headers only; libtensorflowlite_jni.so is loaded at run time (dlopen
+# RTLD_LOCAL), so it never meets LiteRT's headers or symbols.
+set(TFLITE216_HEADERS "<tflite_aar>/headers")
+add_library(tpu_stage STATIC tpu_stage.cc)
+target_include_directories(tpu_stage BEFORE PRIVATE ${TFLITE216_HEADERS})
+add_executable(yoloe_pipeline pipeline.cc)
+target_link_libraries(yoloe_pipeline tpu_stage litert_cc_api absl::raw_hash_set absl::hash android log dl)

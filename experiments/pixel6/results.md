@@ -690,3 +690,36 @@ classes exceed fp16's exact integer range — and even at fp32 it produced
 non-integer indices on ~5% of anchors where low scores tie (none reached a
 detection).
 
+## 2026-10-24 — YOLOE-v8s TPU + GPU pipeline: fastest validated full-vocabulary configuration
+
+Code: [yoloe-tpu](../../hosts/cerebrate-pixel6/spikes/yoloe-tpu/README.md)
+(`yoloe_head_gpu.py`, `pipeline/`). Goal (final hybrid spike): beat the
+108 ms GPU-only `fast` variant without losing any detection or label and
+without reducing the 4,585-class vocabulary.
+
+**Head fix.** The fp16 head's NaN class indices came from onnx2tf's
+float-index argmax. Rebuilt the head with litert-torch: native argmax with
+int32 indices on the logits (sigmoid on the winner only); stage 1 vs the
+validated fp32 head: identical class on every anchor scoring ≥ 0.25 (88
+low-score ties differ); stage 2 cosine 1.000000. Fully on the GPU (117/117)
+at both precisions — no CPU fallback, no full-score readback.
+
+**Integrated pipeline, one process, synchronized** (`yoloe_pipeline`: TPU
+stage = image → TPU input, backbone + neck at fp16 relaxation, features out;
+GPU stage = features → GPU buffers, head, locked output reads; 8 photos, 32
+timed iterations; one-time load: TPU compile 3.8 s, GPU compile 0.7 s;
+free memory −490 MB at peak, 3.0 GB left):
+
+| Configuration | TPU stage | GPU stage | **Total** | Matched (of 132) | Box IoU min | Score max diff | Mask IoU min / mean |
+| --- | --- | --- | --- | --- | --- | --- | --- |
+| GPU only fp32 (`default`) | — | 186 ms | 186 ms | 132 | 1.0000 | 0.0000 | 1.000 / 1.000 |
+| GPU only fp16 + fp32 acc. (`fast`) | — | 108 ms | 108 ms | 132 (+1 extra) | 0.965 | 0.0063 | 0.969 / 0.996 |
+| TPU fp16 backbone + GPU fp32 head | 16.5 ms | 109.0 ms | 124.9 ms | 132 | 0.993 | 0.0034 | 0.990 / 0.9995 |
+| **TPU fp16 backbone + GPU fp16+fp32-acc head** | **16.4 ms** | **62.8 ms** | **79.0 ms** | **132 (no extras)** | **0.965** | **0.0031** | **0.969 / 0.996** |
+
+The fastest configuration is **1.37× faster than GPU-only `fast` and 2.4×
+faster than `default`**, with every reference detection and label kept and
+one fewer spurious detection than GPU-only `fast`. The head — mostly the
+4,585-class projection — is still ~80% of the time. Step 3 (tiled top-1
+selection) was conditional on not beating 108 ms and was not run.
+

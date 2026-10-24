@@ -108,6 +108,26 @@ class and box IoU, plus a label-agnostic count; mask IoU).
   154 MB score tensor is read back, 327 ms). At fp16 the float-index argmax
   overflows (NaN): 4,585 classes exceed what fp16 represents exactly.
 
+## TPU + GPU pipeline (fastest validated configuration)
+
+- [`yoloe_head_gpu.py`](yoloe_head_gpu.py) — the head alone for the GPU via
+  litert-torch, taking the TPU backbone's NHWC feature maps: class selection
+  on the logits with a **native argmax (int32 indices — exact at any GPU
+  precision)** and the sigmoid applied to the winning logit only. All 117
+  ops on the GPU at fp32 and at fp16 + fp32 accumulation; no CPU fallback,
+  no full-score readback. (onnx2tf's int64 `ARG_MAX` is rejected by the
+  GPU; its float-index replacement overflows at fp16.)
+- [`pipeline/`](pipeline/) — `yoloe_pipeline`, both stages synchronized in
+  one process: [`tpu_stage.cc`](pipeline/tpu_stage.cc) runs the backbone on
+  the Edge TPU through the TFLite 2.16.1 C API + NNAPI delegate (fp16
+  relaxation), loaded privately with `dlopen(RTLD_LOCAL)` because LiteRT 2.3
+  exports the same `TfLite*` names (the TFLite library has no dynamic
+  relocations against them, so its internal calls stay bound to itself);
+  [`pipeline.cc`](pipeline/pipeline.cc) runs the head on the GPU through
+  LiteRT 2.3 and times the TPU stage (image in, backbone, features out), the
+  GPU stage (features in, head, synchronized output reads) and the total.
+  Build: [`CMakeLists.fragment.txt`](pipeline/CMakeLists.fragment.txt).
+
 ## Device runs ([`yoloe_run.sh`](yoloe_run.sh))
 
 Hand-launched `cerebrate-graph` worker per (model, backend) on a spare port,

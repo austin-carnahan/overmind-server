@@ -1071,4 +1071,16 @@ conditions in Section 4.4).
   4,585-class projection is now the bottleneck (125 ms on the GPU).
   Reusable lesson: the TPU takes a CNN trunk whole at fp16; keep large
   output projections off it.
+- **2026-10-24** — **YOLOE-v8s TPU + GPU pipeline: 79 ms, no detection
+  lost.** The fp16 head's class-index problem (onnx2tf's float-index argmax
+  overflowing) is fixed by a litert-torch head with a native int32 argmax on
+  the logits, fully on the GPU. In one synchronized process, the TPU runs
+  the backbone + neck at fp16 relaxation (16.4 ms including transfers) and
+  the GPU the head at fp16 + fp32 accumulation (62.8 ms): **79.0 ms total**
+  vs 108 ms for GPU-only `fast` (1.37×) and 186 ms for `default`, matching
+  all 132 reference detections with the same labels and no extras. The two
+  runtimes share the process by loading TFLite 2.16 privately
+  (`dlopen(RTLD_LOCAL)`). Recommended as YOLOE-v8s's experimental `fast`
+  configuration; production promotion needs a worker that hosts this
+  two-runtime pipeline and a TPU-contention check against `cerebrate-infer`.
 
