@@ -102,6 +102,92 @@ reliably crashes the USB controller without it under real write load.
   WantedBy=timers.target
   ```
 
+- **`pixel-vm-watchdog.timer`** (added 2026-10-24) relaunches the Pixel's
+  Debian VM if Android kills it. Prompted by a real outage: an Edge TPU
+  compile exhausted the phone's memory and the low-memory killer took the
+  Terminal app — the VM, MLServer and both reverse tunnels — for ~7 minutes
+  until a manual relaunch ([lane notes](../../design-notes/Cerebrate%20Pixel%206%20%E2%80%94%20Segmentation%20and%20Labeling%20Lane.md)).
+  Every 60s it probes MLServer through the tunnel; after 3 consecutive
+  failures it asks the phone (over the same adb pairing) whether the VM
+  process `crosvm` exists, and only if it doesn't, runs the documented
+  relaunch (`am start ... .new2.ui.MainActivity`), at most once per 5
+  minutes. A running-but-unreachable VM is left alone — that's the network
+  case the tunnels already heal (see the Wi-Fi row above). Pause it with
+  `sudo systemctl stop pixel-vm-watchdog.timer` (e.g. while deliberately
+  stopping the VM). Installed manually, like the timer above:
+
+  ```bash
+  # /usr/local/bin/pixel-vm-watchdog
+  #!/bin/bash
+  # pixel-vm-watchdog -- relaunch cerebrate-pixel6's Debian VM if Android killed it.
+  # Probes MLServer through its reverse tunnel; after THRESHOLD consecutive
+  # failures, checks over adb whether the VM process (crosvm) exists, and only
+  # if it doesn't, relaunches the Terminal app (the documented recovery). A VM
+  # that is running but unreachable is a network problem the tunnels heal
+  # themselves; it is left alone. COOLDOWN_S between relaunches.
+  set -u
+  ADB="/usr/bin/adb -s 192.168.68.60:5555"
+  PROBE_URL=${PROBE_URL:-http://127.0.0.1:8500/v2/health/live}
+  STATE_DIR=${STATE_DIR:-/run/pixel-vm-watchdog}
+  THRESHOLD=3
+  COOLDOWN_S=300
+
+  if curl -s -m 5 -f -o /dev/null "$PROBE_URL"; then
+      echo 0 > "$STATE_DIR/failures"
+      exit 0
+  fi
+  n=$(( $(cat "$STATE_DIR/failures" 2>/dev/null || echo 0) + 1 ))
+  echo "$n" > "$STATE_DIR/failures"
+  echo "MLServer probe failed ($n consecutive)"
+  [ "$n" -lt "$THRESHOLD" ] && exit 0
+
+  if [ "$($ADB get-state 2>/dev/null)" != "device" ]; then
+      echo "adb not connected to the Pixel; can't check the VM"
+      exit 0
+  fi
+  if $ADB shell pidof crosvm > /dev/null 2>&1; then
+      echo "VM process is running; treating it as a network/tunnel problem, not relaunching"
+      exit 0
+  fi
+  now=$(date +%s); last=$(cat "$STATE_DIR/last-relaunch" 2>/dev/null || echo 0)
+  if [ $((now - last)) -lt "$COOLDOWN_S" ]; then
+      echo "VM not running, but relaunched $((now - last)) s ago; waiting for it to boot"
+      exit 0
+  fi
+  echo "VM not running: relaunching the Terminal app"
+  $ADB shell am start -n com.android.virtualization.terminal/.new2.ui.MainActivity
+  echo "$now" > "$STATE_DIR/last-relaunch"
+  ```
+
+  ```ini
+  # /etc/systemd/system/pixel-vm-watchdog.service
+  [Unit]
+  Description=Relaunch cerebrate-pixel6's Debian VM if Android killed it
+  After=network-online.target
+  Wants=network-online.target
+
+  [Service]
+  Type=oneshot
+  User=austin
+  RuntimeDirectory=pixel-vm-watchdog
+  RuntimeDirectoryPreserve=yes
+  ExecStart=/usr/local/bin/pixel-vm-watchdog
+  ```
+
+  ```ini
+  # /etc/systemd/system/pixel-vm-watchdog.timer
+  [Unit]
+  Description=Check cerebrate-pixel6's Debian VM every minute
+
+  [Timer]
+  OnBootSec=2min
+  OnUnitActiveSec=60s
+  AccuracySec=5s
+
+  [Install]
+  WantedBy=timers.target
+  ```
+
 - SSD mounted (ext4, `noatime`, `nofail`) at `/mnt/disks/ssd1` — numbered
   rather than matching the filesystem's own `overmind-ssd` label, since a
   number scales to a second/third disk more simply than a label match would.
