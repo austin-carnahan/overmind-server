@@ -34,6 +34,14 @@
 //
 //   START\nworker: gguf\nmodel: /data/local/tmp/foo.gguf\nmmproj: /data/local/tmp/foo-mmproj.gguf\n\n
 //
+// The Segmentation and Labeling Lane (Step 1) added three identical slots,
+// "graph1".."graph3" (cerebrate-graph, ports 8769-8771), with no protocol
+// change: one model per process means a pipeline needing several graphs
+// resident at once (detector + SAM encoder + SAM decoder) needs several
+// processes. Backend validation moved from a hardcoded cpu|gpu check to a
+// per-slot allowed list, and the readiness wait became per-slot, since large
+// ONNX models and NNAPI compilation can take far longer than 15s to load.
+//
 // Deliberately NOT built: arbitrary command execution, arbitrary binary
 // paths, arbitrary ports, orphan-worker adoption after a supervisor
 // restart, or automatic respawn-on-crash (see cerebrate-supervisor's
@@ -59,12 +67,17 @@
 
 enum WorkerState { STOPPED, RUNNING, EXITED };
 
+// cerebrate-graph's execution providers (see cerebrate-graph.cc).
+#define kGraphBackends "cpu,nnapi,nnapi16,xnnpack,webgpu"
+
 struct WorkerSlot {
   const char* name;         // protocol identifier, e.g. "infer"
   const char* binary_path;  // fixed, not client-supplied
   int fixed_port;           // fixed, not client-supplied
-  int needs_backend;        // cerebrate-generate takes cpu|gpu; cerebrate-infer doesn't
+  int needs_backend;        // cerebrate-generate/cerebrate-graph take a backend; others don't
   int needs_mmproj;         // cerebrate-gguf takes a second GGUF (multimodal projector)
+  const char* backends;     // comma-separated allowed backends when needs_backend
+  int ready_timeout_ms;     // how long START waits for the worker's port to answer
 
   // Runtime state
   WorkerState state;
@@ -76,9 +89,12 @@ struct WorkerSlot {
 };
 
 static WorkerSlot g_slots[] = {
-  {"infer", STAGING_DIR "/cerebrate-infer", 8765, 0, 0, STOPPED, 0, "", "", "", 0},
-  {"generate", STAGING_DIR "/cerebrate-generate", 8766, 1, 0, STOPPED, 0, "", "", "", 0},
-  {"gguf", STAGING_DIR "/cerebrate-gguf", 8768, 0, 1, STOPPED, 0, "", "", "", 0},
+  {"infer", STAGING_DIR "/cerebrate-infer", 8765, 0, 0, NULL, 15000, STOPPED, 0, "", "", "", 0},
+  {"generate", STAGING_DIR "/cerebrate-generate", 8766, 1, 0, "cpu,gpu", 15000, STOPPED, 0, "", "", "", 0},
+  {"gguf", STAGING_DIR "/cerebrate-gguf", 8768, 0, 1, NULL, 15000, STOPPED, 0, "", "", "", 0},
+  {"graph1", STAGING_DIR "/cerebrate-graph", 8769, 1, 0, kGraphBackends, 120000, STOPPED, 0, "", "", "", 0},
+  {"graph2", STAGING_DIR "/cerebrate-graph", 8770, 1, 0, kGraphBackends, 120000, STOPPED, 0, "", "", "", 0},
+  {"graph3", STAGING_DIR "/cerebrate-graph", 8771, 1, 0, kGraphBackends, 120000, STOPPED, 0, "", "", "", 0},
 };
 static const int kNumSlots = sizeof(g_slots) / sizeof(g_slots[0]);
 
@@ -126,6 +142,21 @@ static int model_path_is_approved(const char* path) {
   return 1;
 }
 
+// Exact match against one entry of the slot's comma-separated list.
+static int backend_is_allowed(const WorkerSlot* s, const char* backend) {
+  if (s->backends == NULL || backend[0] == '\0') return 0;
+  size_t len = strlen(backend);
+  const char* p = s->backends;
+  while (*p) {
+    const char* comma = strchr(p, ',');
+    size_t entry_len = comma ? (size_t)(comma - p) : strlen(p);
+    if (entry_len == len && strncmp(p, backend, len) == 0) return 1;
+    if (!comma) break;
+    p = comma + 1;
+  }
+  return 0;
+}
+
 static int connect_probe(int port, int timeout_ms) {
   int fd = socket(AF_INET, SOCK_STREAM, 0);
   if (fd < 0) return 0;
@@ -141,7 +172,7 @@ static int connect_probe(int port, int timeout_ms) {
 }
 
 static void wait_for_ready(WorkerSlot* s, char* out, size_t out_len) {
-  const int kTotalMs = 15000, kStepMs = 200;
+  const int kTotalMs = s->ready_timeout_ms, kStepMs = 200;
   int waited = 0;
   while (waited < kTotalMs) {
     // A worker that fails fast (bad model path, etc.) shows up as EXITED
@@ -179,8 +210,8 @@ static void start_worker(const char* worker, const char* model, const char* back
     snprintf(out, out_len, "ERROR: model path not approved: %s\n", model);
     return;
   }
-  if (s->needs_backend && strcmp(backend, "cpu") != 0 && strcmp(backend, "gpu") != 0) {
-    snprintf(out, out_len, "ERROR: worker %s requires backend cpu or gpu\n", worker);
+  if (s->needs_backend && !backend_is_allowed(s, backend)) {
+    snprintf(out, out_len, "ERROR: worker %s requires backend one of %s\n", worker, s->backends);
     return;
   }
   if (s->needs_mmproj) {
@@ -432,7 +463,12 @@ int main(int argc, char** argv) {
     return 1;
   }
   listen(srv, 4);
-  fprintf(stderr, "READY cerebrate-supervisor port=%d workers=infer,generate,gguf\n", CONTROL_PORT);
+  char worker_names[128] = "";
+  for (int i = 0; i < kNumSlots; i++) {
+    if (i > 0) strncat(worker_names, ",", sizeof(worker_names) - strlen(worker_names) - 1);
+    strncat(worker_names, g_slots[i].name, sizeof(worker_names) - strlen(worker_names) - 1);
+  }
+  fprintf(stderr, "READY cerebrate-supervisor port=%d workers=%s\n", CONTROL_PORT, worker_names);
 
   while (1) {
     int client = accept(srv, NULL, NULL);
@@ -447,7 +483,7 @@ int main(int argc, char** argv) {
     char cmd[16], worker[32], model[256], backend[8], mmproj[256];
     read_request(client, cmd, worker, model, backend, mmproj);
 
-    char response[1024];
+    char response[2048];  // LIST: one status line per slot, six slots
     if (cmd[0] == '\0') {
       snprintf(response, sizeof(response), "ERROR: empty request\n");
     } else {

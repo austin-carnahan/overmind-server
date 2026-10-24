@@ -281,3 +281,34 @@ two-value `backend` enum. Reuses every existing mechanism unchanged: flat-
 file validation, idempotent START/STOP, config-conflict detection (now
 comparing `mmproj` too when the slot needs it), crash detection, and the
 pre-flight orphan-port check.
+
+## Segmentation and Labeling Lane Step 1: `graph1`–`graph3` slots (2026-10-23)
+
+**Written and tested on the Mac; not yet deployed to the device.** Three
+identical slots for [`cerebrate-graph`](../cerebrate-graph/README.md), the
+general-purpose ONNX Runtime worker, on fixed ports **8769, 8770, 8771**. One
+model per process stays the rule (catalog v4 Section 8), so a pipeline that
+needs a detector, a SAM encoder, and a SAM decoder resident at once uses three
+slots. No wire-protocol change.
+
+Two internal generalizations came with it:
+
+- **Per-slot backend lists.** The hardcoded `cpu|gpu` check became an
+  allowed list on each slot: `generate` keeps `cpu,gpu`; the graph slots
+  accept `cpu,nnapi,nnapi16,xnnpack,webgpu`.
+- **Per-slot readiness timeout.** `START` waits up to 120 s for a graph slot
+  (large ONNX models and NNAPI compilation load slowly) and 15 s for the
+  existing slots, unchanged. The supervisor is single-threaded, so other
+  commands queue behind a slow graph `START`.
+
+The `LIST` response buffer grew to 2 KB for six status lines.
+
+Tested on the Mac with a scratch copy pointing `STAGING_DIR` at a local
+directory and running the macOS build of `cerebrate-graph`: bad backend
+(rejected, listing the allowed set), path outside staging (rejected), two
+graph slots started concurrently with different backends, idempotent
+`START`, configuration conflict, `generate` still rejecting graph backends,
+`LIST`, crash detection (`kill -9` → `EXITED exit_code=-9`), `STOP`.
+
+Deploying it means swapping the supervisor binary with production workers
+running, using the drain procedure in [Deploy](#deploy) above.

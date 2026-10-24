@@ -45,6 +45,12 @@ not restate what the label already means.
   Execution via NNAPI/TFLite, stateful Session Execution via LiteRT-LM).
   Feasibility spike done: native runtime, model, and backend gates all
   passed. Five-phase implementation not yet started.
+- [Cerebrate Pixel 6 — Segmentation and Labeling Lane](Cerebrate%20Pixel%206%20%E2%80%94%20Segmentation%20and%20Labeling%20Lane.md) —
+  labeled segmentation layers for the Design Studio's GIMP worker, computed
+  on the Pixel 6: YOLOE prompt-free detection, SAM-family mask refinement,
+  acceleration matched to each model's architecture (CNNs on the TPU as int8,
+  transformers on the GPU as float, CPU fallback). PROPOSED; Step 1
+  (general-purpose ONNX graph worker) in progress.
 - [Romset curation pipeline](romset-curation-pipeline.md) — archive tier →
   library tier curation design: ScreenScraper hash identification across the
   full archive, ranked candidates enriched with a second IGDB rating, and a

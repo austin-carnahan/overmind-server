@@ -602,3 +602,33 @@ correct: fresh PID, correct refcount, no crash) or to `max_num_tokens`
 sizing (the first two hypotheses tried, both real gaps but not the
 actual cause). Fixed by configuring an explicit top-p/top-k/temperature
 sampler instead of trusting the C API's undocumented default.
+
+## Segmentation and Labeling Lane Step 1 — generic `cerebrate-graph` adapter (2026-10-23)
+
+**Written and tested against a local MLServer 1.7.1 on the Mac; not yet
+deployed to the guest.** [`models/cerebrate-graph/`](models/cerebrate-graph/)
+holds a generic tensor-passthrough runtime for
+[`cerebrate-graph`](../cerebrate-graph/README.md): each V2 request input
+becomes one named tensor for the worker, each worker output becomes one V2
+output, with the same names, shapes, and dtypes. Model-specific pre- and
+post-processing stays out of it, so one adapter serves any ONNX model the
+worker can load. Timing comes back in the response's `parameters`
+(`request_id`, `inference_us`, `handle_us`).
+
+- `cerebrate_graph_runtime.py` — the MLServer runtime. Lifecycle,
+  per-slot refcount file (`/tmp/cerebrate-graph-<slot>.refcount`), gateway
+  discovery, and readiness handling follow the `cerebrate-infer` adapter. On
+  `load()` it also sends a DESCRIBE and refuses readiness unless the worker on
+  that port serves the configured model with the configured backend.
+- `cerebrate_graph_protocol.py` — the wire protocol, pure numpy, shared with
+  the direct test client. MLServer puts the model folder on `sys.path` while
+  importing the runtime, so the sibling import works.
+- `model-settings.json` — the canary, `graph-canary`: the regenerated
+  MobileNet ONNX on slot `graph3`, CPU backend. Loads at MLServer startup
+  like the other models.
+
+Tested locally with the real supervisor logic (scratch build) and the macOS
+worker running RF-DETR Seg Nano: V2 outputs bit-exact against the reference,
+a bad input name returns HTTP 400 with the worker's message, a killed worker
+fails the next request and a repository `load` restarts it with a fresh PID,
+`unload` stops the worker and returns the refcount to 0.

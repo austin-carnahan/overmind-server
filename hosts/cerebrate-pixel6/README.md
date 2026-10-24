@@ -97,6 +97,16 @@ full production path with genuinely correct, incrementally-arriving
 tokens. **All 9 of 9 Multi-Runtime Execution Plane success criteria are
 now met.**
 
+**Segmentation and Labeling Lane, Step 1 in progress (2026-10-23)**:
+[`cerebrate-graph`](cerebrate-graph/README.md), a general-purpose ONNX
+Runtime worker (any named tensors in, every output back), is built and
+verified on the device by manual launch: MobileNet reaches the TPU through
+ORT NNAPI bit-exact, RF-DETR Seg Nano runs correctly on CPU in ~483 ms, and
+the TPU rejects RF-DETR in fp32 (and the vendor compiler crashes on it in
+fp16). Supervisor slots `graph1`–`graph3` (ports 8769–8771) and a generic
+MLServer adapter are tested on the Mac but not yet deployed. See the
+[lane plan](../../design-notes/Cerebrate%20Pixel%206%20%E2%80%94%20Segmentation%20and%20Labeling%20Lane.md).
+
 A factory-reset Pixel 6, converted into a dedicated always-on inference node
 for the home network. Second member of the "cerebrate" fleet/class (small
 auxiliary compute nodes) — see the naming-convention section of the
