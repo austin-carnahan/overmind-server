@@ -229,7 +229,7 @@ evidence showing what actually ran on the accelerator.
 | --- | --- | --- | --- | --- | --- | --- | --- |
 | YOLOE-v8 seg prompt-free | Detect + label | Pure CNN | ~12–45M params, by variant | **TPU** | int8, ORT NNAPI | int8, TFLite NNAPI | CPU fp32 |
 | YOLOE-11 seg prompt-free | Detect + label | CNN + one attention block (C2PSA) | ~10–35M params | TPU, if C2PSA is accepted | int8, ORT NNAPI | GPU, float `.tflite` | CPU fp32 |
-| EdgeSAM encoder | Mask refinement | Pure CNN | Small (size to confirm) | **TPU** | int8, ORT NNAPI | GPU, float `.tflite` | CPU |
+| EdgeSAM encoder | Mask refinement | Pure CNN (RepViT-M1) | 5.5M params, 22 MB fp32 | **TPU** | **TPU fp16-relaxed (tanh GELU) + GPU fp32 neck: 130 + 16 ms, worst mask IoU 0.944 (measured)** | GPU fp32, exact: 267 ms (measured) | CPU (1.73 s) |
 | SAM 2.1 Tiny encoder | Mask refinement | Transformer (Hiera) | 134 MB fp32 / 67 MB fp16 | **GPU** | LiteRT GPU, prepared | CPU fp32 | — |
 | SAM 2.1 / EdgeSAM decoders | Box → mask | Mixed; dynamic shapes | ~21 MB fp32 | **CPU** | CPU | LiteRT GPU, if converted | — |
 | RF-DETR Seg Nano | Fixed-class detector; GPU test case | Transformer | 123 MB fp32 | GPU | LiteRT GPU, prepared | CPU (483 ms, measured) | — |
@@ -1105,4 +1105,16 @@ conditions in Section 4.4).
   of inference, so the transport work (uint8 input, fewer outputs) comes
   before real use. Next TPU candidates: EdgeSAM's RepViT encoder, then
   MI-GAN.
+- **2026-10-24** — **EdgeSAM-3x encoder reaches the TPU.** No published
+  LiteRT/TPU conversion, and the authors' ONNX swaps the trained bicubic
+  upsample for bilinear (worst mask IoU 0.805 vs the original), so we export
+  our own with an exact bicubic construction. Exact GELU has no NNAPI op:
+  tanh GELU as a single chain (written any other way, the TPU compiler can
+  time out — op order alone decides). The TPU rejects the neck's LayerNorm,
+  so the fastest validated configuration is the YOLOE pattern: **backbone
+  + fuse on the TPU (410/410 ops, 130 ms) → neck on the GPU at fp32
+  (16 ms)**, worst mask IoU 0.944, mean 0.9983 on the 132 YOLOE box prompts —
+  on par with GPU fp16+fp32 acc. (169 ms, 0.920 / 0.9983) and better than
+  the authors' ONNX; GPU fp32 is exact at 267 ms. Costs: a 43 s TPU compile
+  per load, and the approximation (most of the flipped pixels).
 

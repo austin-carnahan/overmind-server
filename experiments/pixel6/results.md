@@ -769,3 +769,29 @@ a lost worker, and MLServer then refused every request before the adapter
 could restart it. JSON REST costs ~2.0 s per request at these tensor sizes
 (vs 74 ms inference): the transport work is the next lever.
 
+## 2026-10-24 — EdgeSAM-3x image encoder on the Edge TPU (rev `e0564124`)
+
+Code: [edgesam-tpu](../../hosts/cerebrate-pixel6/spikes/edgesam-tpu/README.md).
+Eight photos, YOLOE-v8s's 132 detections as box prompts; device embeddings
+decoded by the original decoder, masks vs the original (bicubic) model.
+No published LiteRT/TPU conversion; the authors' ONNX is a bilinear variant
+(vs the original: worst mask IoU 0.805, mean 0.9926), so we export our own
+with an exact bicubic construction.
+
+| Encoder path | Latency (sync. e2e) | Worst mask IoU | Mean IoU | Flipped px | Verdict |
+| --- | --- | --- | --- | --- | --- |
+| CPU fp32 | 1.73 s | 0.9999 | 1.00000 | 14 | exact |
+| GPU fp32 (835/835 ops) | 267 ms | 1.0000 | 1.00000 | 1 | **exact** |
+| GPU fp16 + fp32 acc. | 169 ms | 0.9199 | 0.99834 | 6,454 | near |
+| TPU fp16-relaxed, tanh GELU; neck on CPU | 196 ms | 0.9441 | 0.99829 | 7,441 | near |
+| **TPU (410/410 ops) → GPU fp32 neck** | **130 + 16 ms** | 0.9441 | 0.99830 | 7,393 | near, fastest |
+
+TPU compile 43 s per load (2.2 GB free memory minimum; GPU compile 0.7 s);
+temperatures TPU ≤ 49 °C, big cores ≤ 57 °C. Found on the way: exact GELU
+has no NNAPI op (rewritten as tanh GELU — its own cost at fp32: worst IoU
+0.983, 6,116 px — or a near-exact erf polynomial whose 114-op fragment
+timed out compiling); the TPU rejects the neck's LayerNorm; and a **TPU
+compiler defect**: the same eight ops (1×1 conv + tanh GELU at
+128×128×192) compile in 0.66 s or time out at the ~60 s deadline depending
+only on op order.
+

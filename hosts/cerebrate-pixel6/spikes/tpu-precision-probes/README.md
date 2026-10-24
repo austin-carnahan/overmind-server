@@ -34,6 +34,16 @@ pixels).
 Compile cost scales mildly: 0.23 s (2 layers), 0.42 s (8), 1.36 s (24
 layers, 72 ops, 3.6 MB); free memory never below 3.4 GB.
 
+**Added by the EdgeSAM encoder** ([edgesam-tpu](../edgesam-tpu/README.md),
+fp16 relaxation): ABS, DIV, EXP, MEAN over 256×256 (no overflow), stride-2
+depthwise conv, 5×5 depthwise conv, DEPTH_TO_SPACE, STRIDED_SLICE +
+CONCATENATION all run on the TPU; a LayerNorm (MEAN over the channel axis,
+RSQRT) does not. **The compiler has a ~60 s deadline, and op order can
+blow it**: a 1×1 conv + tanh GELU at 128×128×192 compiles in 0.66 s with
+the linear term first and times out with x², x³ first (same ops, any
+weights). Write elementwise formulas as single dependency chains. At
+1024×1024 inputs compile time grows with graph size (430 ops ≈ 43 s).
+
 ## Scripts
 
 - [`tpu_probe_models.py`](tpu_probe_models.py) — conv and attention blocks in
