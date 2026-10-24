@@ -68,6 +68,11 @@ Python ints (it arrives as tensors and branches), and inputs/outputs cloned
   [`esam3_prep_wide.py`](esam3_prep_wide.py),
   [`esam3_grounding_accuracy.py`](esam3_grounding_accuracy.py) (kept set,
   score/box differences, mask IoU, flipped pixels).
+- Phone-native chain: [`esam3_e2e_accuracy.py`](esam3_e2e_accuracy.py)
+  (vision GPU → text CPU → grounding GPU outputs vs the original model, raw
+  and after the processor's own post-processing).
+- First-layer caching: [`esam3_cache_check.py`](esam3_cache_check.py)
+  (prompt-independence on the original model; the block alone for timing).
 - Bisects on the device, in order: [`esam3_bisect.py`](esam3_bisect.py)
   (encoder vs decoder layers), [`esam3_bisect2.py`](esam3_bisect2.py)
   (decoder layer 0), [`esam3_bisect3.py`](esam3_bisect3.py) and
