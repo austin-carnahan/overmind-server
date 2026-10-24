@@ -259,9 +259,33 @@ Arcade games are especially sensitive to orientation, unusual refresh rates, and
 
 PlayStation is the strongest target for modernized 3D rendering on this device, but 2D games and games with pre-rendered backgrounds should use different profiles.
 
-### Default 3D Profile
+### Core decision (revised 2026-09-25): PCSX-ReARMed, not SwanStation
 
-- Core: SwanStation.
+Real on-device testing on the Fire TV Stick 4K Max found two separate, compounding SwanStation problems, not one:
+
+1. **CHD codec incompatibility.** The library's CHDs (built by `chdman createcd` with automatic codec selection) mix `cdlz` (CD LZMA, ~41% of hunks on the tested title) and `cdzl` (CD Deflate, ~59%). SwanStation could not decode the LZMA-compressed hunks fast enough in real time, causing severe audio choppiness/speed drift and visual slowdown across multiple titles (CTR, Spider-Man, Tony Hawk's Pro Skater 2, X-COM: UFO Defense). Confirmed via a controlled test: extracting the disc data straight back out of the existing CHD (proving the data itself survived conversion intact), an uncompressed rebuild, and a `cdzl`-only rebuild all played cleanly on SwanStation — isolating LZMA decode cost, not the CHD format, not the conversion process, and not the enhancement settings, as the cause.
+2. **Independent rendering artifacts.** SwanStation separately showed rendering glitches (blank/white placeholder text in menus) on titles unrelated to the codec issue (Powerslave, Chrono Cross), present even at default core settings, and could not sustain 2x internal resolution acceptably on Tony Hawk 2.
+
+PCSX-ReARMed was then tested directly against the **existing, unmodified, mixed-codec CHD library** (no reconversion) and played every affected title cleanly, including with its own Enhanced Resolution option enabled, and did not reproduce SwanStation's rendering artifacts. This avoided a full library CHD reconversion (245 PSX + Dreamcast discs, ~16-17 hours of sequential Pi time) that would only have addressed problem 1, not problem 2.
+
+**PCSX-ReARMed is now the default PS1 core.** SwanStation remains available as a per-title fallback (see below); Beetle PSX HW stays the second fallback.
+
+### Recommended Baseline (PCSX-ReARMed)
+
+- Dynamic Recompiler: Enabled.
+- Enhanced Resolution: Enabled.
+- Enhanced Resolution Speed Hack: Disabled initially; enable only if a specific title needs it.
+- Frameskip: Disabled.
+- PSX CPU Clock: Default — do not overclock the emulated CPU as a general setting; it's a per-title compatibility risk, not a smoothness knob.
+- BIOS: real PS1 BIOS, not HLE.
+- Audio latency: 128ms default; increase only if a specific title demonstrates a real problem.
+- Rewind and Run-Ahead: Disabled.
+- Video driver: whichever RetroArch-wide driver is otherwise stable — PCSX-ReARMed's NEON renderer doesn't depend on SwanStation's Vulkan hardware-renderer path.
+
+### SwanStation Fallback Profile (per-title only)
+
+Kept for titles where PCSX-ReARMed underperforms or where PGXP-style geometry correction matters more than raw performance. Do not make this the default again without a repeat of the measured A/B evidence above.
+
 - Renderer: Vulkan where stable.
 - Internal resolution: begin at 2x; test 3x and higher only through the automated ladder.
 - Geometry correction: test PGXP-style geometry or vertex correction features exposed by the installed core.
@@ -287,7 +311,7 @@ PlayStation is the strongest target for modernized 3D rendering on this device, 
 - Widescreen hack with culling correction where available.
 - 1080p versus 4K Fire TV output.
 
-If SwanStation enhancement options or performance are insufficient for a specific title, compare Beetle PSX HW as an experimental alternate. Do not replace the established SwanStation default globally without measured evidence.
+If neither PCSX-ReARMed nor the SwanStation fallback is sufficient for a specific title, compare Beetle PSX HW as a third-tier experimental alternate. Do not change the established PCSX-ReARMed default globally without a repeat of the measured A/B evidence in the core-decision section above.
 
 ## Nintendo 64
 

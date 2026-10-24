@@ -130,7 +130,13 @@ Prefer mature RetroArch cores with good compatibility and low overhead.
 
 ### 4.2 PlayStation 1
 
-**Preferred direction:** SwanStation
+**Preferred direction:** PCSX-ReARMed (revised 2026-09-25 — see
+[fire_tv_emulator_visual_enhancement_design.md](fire_tv_emulator_visual_enhancement_design.md)'s
+PSX core-decision section for the measured A/B evidence: SwanStation couldn't
+decode this library's LZMA-compressed CHD hunks in real time and separately
+had unrelated rendering artifacts on other titles; PCSX-ReARMed played the
+same unmodified library cleanly with no reconversion needed. SwanStation
+remains a per-title fallback.)
 
 Priorities:
 
@@ -365,6 +371,6 @@ The local tier remains valuable for offline travel, low-latency older systems, l
 
 ## 13. Current decision summary
 
-> **RetroArch primary; SwanStation for PS1; ParaLLEl/Mupen64Plus-Next for N64; standalone Flycast where it materially improves Dreamcast; Vulkan where stable; no rewind, run-ahead, or heavy shaders; conservative audio/video settings; USB ROM cache; Overmind as canonical storage; separate save synchronization.**
+> **RetroArch primary; PCSX-ReARMed for PS1 (SwanStation per-title fallback); ParaLLEl/Mupen64Plus-Next for N64; standalone Flycast where it materially improves Dreamcast; Vulkan where stable; no rewind, run-ahead, or heavy shaders; conservative audio/video settings; USB ROM cache; Overmind as canonical storage; separate save synchronization.**
 
 The Fire Stick should behave like a reliable console appliance, not a benchmark project.

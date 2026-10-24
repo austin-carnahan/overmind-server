@@ -482,7 +482,7 @@ Known baseline decisions already established include:
 - Run-Ahead **OFF**;
 - avoid heavy shaders;
 - performance-first presentation;
-- PS1: SwanStation-oriented setup;
+- PS1: PCSX-ReARMed-oriented setup (revised 2026-09-25, SwanStation demoted to per-title fallback — see [fire_tv_emulator_visual_enhancement_design.md](fire_tv_emulator_visual_enhancement_design.md));
 - N64: ParaLLEl / Mupen64Plus-Next-oriented setup;
 - N64 target roughly 480p where stable, 240p fallback;
 - Dreamcast: standalone Flycast is acceptable/preferred when it materially outperforms the RetroArch path;
