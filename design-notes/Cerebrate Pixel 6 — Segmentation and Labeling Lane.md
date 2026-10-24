@@ -830,3 +830,15 @@ conditions in Section 4.4).
   IoU ≈ 0.98, ~1.8× faster), an accepted compromise for workflows that favor
   speed. Pure FP16 is not offered. When these models are cataloged and
   served, both variants are registered under those names.
+- **2026-10-24** — **Published DINOv2 and RF-DETR evaluated on the Pixel 6.**
+  DINOv2-S/14 @ 448 (published, FP16 weights): correct at FP32 compute
+  (253 ms vs 1.99 s CPU; only its FP16-weight error, rel L2 0.08%); FP16 and
+  FP16+FP32-accumulation both fail badly (rel L2 ~11–12%, worst token cosine
+  ~0.56) — the card's Pixel 8a claim doesn't hold here. RF-DETR-Seg-Nano
+  (published, two graphs + host step): correct at FP32 compute (~354 ms) and
+  equally good at FP16+FP32 accumulation (~205 ms) — all 25 detections
+  matched, same classes, worst mask IoU ≥ 0.983 — while pure FP16 loses a
+  detection (~196 ms). Precision behavior differs by model: SAM accepts the
+  mixed mode at a small cost, RF-DETR accepts it at no measurable cost,
+  DINOv2 not at all; pure FP16 fails all three on the G1. Next: Depth Anything
+  V2 Small and MI-GAN.

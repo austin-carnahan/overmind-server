@@ -157,3 +157,46 @@ eight box prompts, pure fp16 does not hold for either encoder.
 (prepared encoder + constants-as-inputs box decoder; exact), and **`fast`**:
 the same graphs at FP16 with FP32 accumulation (encoder 0.77 s, decoder 57 ms;
 worst mask IoU ≈ 0.98). Pure FP16 is not offered.
+
+## 2026-10-24 — Published DINOv2-S/14 (`litert-community/DINOv2-ViT-S14-LiteRT`, rev `f3be8d98`)
+
+Code: [published-litert-eval](../../hosts/cerebrate-pixel6/spikes/published-litert-eval/README.md).
+448×448, patch tokens `[1024, 384]`, eight photos, against the original timm
+model (`vit_small_patch14_dinov2.lvd142m` at 448). Desktop LiteRT CPU: erf file
+rel L2 0.08%, tanh file 0.46% (GELU approximation). All on GPU (864/864 tanh,
+768/768 erf).
+
+| File | Config | E2E | Worst token cosine | Max abs | Rel L2 | Similarity ranking | Verdict |
+| --- | --- | --- | --- | --- | --- | --- | --- |
+| erf | CPU | 1.99 s | 0.99999 | 0.043 | 0.08% | 8/8 | fp16-weight error |
+| **erf** | **GPU fp32 compute** | **253 ms** (~7.8×) | 0.99999 | 0.043 | 0.08% | 8/8 | **correct (fp16 weights)** |
+| erf | GPU fp16 + fp32 acc. | 144 ms | 0.578 | 11.3 | 11.1% | 8/8 | precision failure |
+| erf | GPU fp16 (default) | 119 ms | 0.557 | 9.3 | 12.0% | 7/8 | precision failure |
+| tanh | CPU | 1.98 s | 0.99992 | 0.19 | 0.46% | 8/8 | GELU-approx error |
+| tanh | GPU fp32 compute | 253 ms | 0.99992 | 0.19 | 0.46% | 8/8 | correct (approx GELU) |
+| tanh | GPU fp16 + fp32 acc. | 140 ms | 0.581 | 11.3 | 11.1% | 8/8 | precision failure |
+| tanh | GPU fp16 (default) | 120 ms | 0.548 | 9.5 | 12.2% | 7/8 | precision failure |
+
+Unlike SAM, FP32 accumulation doesn't rescue FP16 here. The card's "device
+fp16 vs desktop fp32: corr 0.996" (Pixel 8a) does not hold on this Pixel 6.
+For comparison, our prepared DINOv2-small at 224 (FP32 weights) is exact at
+68.6 ms with FP16 at 3.1% error.
+
+## 2026-10-24 — Published RF-DETR-Seg-Nano (`litert-community/RF-DETR-Seg-Nano-LiteRT`, rev `8fee237c`)
+
+Code: [published-litert-eval](../../hosts/cerebrate-pixel6/spikes/published-litert-eval/README.md).
+Graph A (1293/1293 on GPU) → host step on its device outputs → graph B
+(884/884 on GPU); eight photos, 25 detections from Roboflow's original
+`rfdetr` 1.9.3 model. E2E = graph A + graph B (host step: a few ms).
+
+| Config | Graph A | Graph B | Total | Matched | Same class | Worst box IoU | Worst mask IoU | Mean mask IoU | Verdict |
+| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |
+| Desktop LiteRT CPU | — | — | — | 25/25 (+1 extra) | 25 | 0.956 | 0.983 | 0.996 | fp16-weight error |
+| CPU | 1.22 s | 274 ms | ~1.5 s | 25/25 (+1) | 25 | 0.956 | 0.983 | 0.998 | fp16-weight error |
+| **GPU fp32 compute** | 239 ms | 114 ms | **~354 ms** | 25/25 (+1) | 25 | 0.956 | 0.983 | 0.998 | **correct (fp16 weights)** |
+| **GPU fp16 + fp32 acc.** | 136 ms | 69 ms | **~205 ms** | 25/25 (+1) | 25 | 0.984 | 0.988 | 0.998 | **correct (fp16 weights)** |
+| GPU fp16 (default) | 128 ms | 68 ms | ~196 ms | 24/25 | 24 | 0.544 | 0.548 | 0.988 | precision failure |
+
+For reference, ONNX Runtime ran the original fp32 RF-DETR on this phone's CPU
+in 483 ms (2026-10-23). Here FP16+FP32 accumulation is as good as FP32
+compute; pure FP16 loses one detection and badly displaces another.
