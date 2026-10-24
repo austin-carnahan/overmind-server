@@ -46,7 +46,10 @@ Workspace: `/home/openclaw/.openclaw/agents/buckminster/workspace`
 
 **This is the first agent scoped to only its own tools.** It uses
 `tools.profile: "minimal"` plus `alsoAllow: ["group:fs", "group:memory",
-"view_image", "gimp_gimp_*"]`, so it has no shell and no web tools. Its
+"view_image", "gimp_gimp_*", "file_fetch", "exec"]`. It has no web tools. Its
+`exec` is in `mode: "allowlist"`, with one Gateway approvals entry
+(`design-checkpoint`), so it can take its own design checkpoints but has no
+general shell. Its
 design tools run on a paired worker node, not on Overmind. GIMP comes from
 the `macbook-m1` node, and Kerrigan and Soma deny `gimp_gimp_*`. It uses
 `sandbox.mode: "off"` to match the other agents. See

@@ -1,9 +1,19 @@
 # Design Studio checkpoint store
 
-**Status:** PARTIAL. Spike D of the
+**Status:** PARTIAL. Spikes D and E of the
 [Mac GIMP worker milestone](../../design-notes/agentic-design-studio-mac-worker-milestone-v0.1.md)
-was verified on 2026-10-23: one checkpoint committed and every failure test
-rejected. Commits are run by the operator; Buckminster cannot call them yet.
+were verified on 2026-10-23. Buckminster runs its own checkpoints (it
+committed `0002`). Restoring a checkpoint onto a worker that has lost its
+files is **not built yet**; see the environment report's Spike E caveats.
+
+**Agent access.** Buckminster's exec tool is limited by an allowlist to this
+one program (`agents.entries.buckminster.tools.exec.mode: "allowlist"` plus a
+Gateway approvals entry for
+`/opt/overmind/services/design-studio/design-checkpoint`). Because an agent
+chooses the arguments, the tool validates every input that decides where it
+reads or writes: the store path is fixed, project and staging ids are
+format-checked, and worker paths must be under `/Users/dev/DesignStudio/workspaces/`.
+Treat any new argument the same way.
 
 Overmind is the authority for design projects. A worker (currently the
 `macbook-m1` OpenClaw node running GIMP) edits a working copy. Only a
@@ -44,10 +54,12 @@ SSD.
 
 ## Publishing a checkpoint
 
-1. On the worker, put `document.xcf`, `preview.png`, and the output of
-   `worker-reopen-check document.xcf` (saved as `worker-validation.json`) in
-   an outbox folder under `~/DesignStudio/workspaces/<project>/outbox/<n>/`.
-   That is the only tree `file.fetch` may read.
+1. On the worker, put `document.xcf` and `preview.png` in an outbox folder
+   under `~/DesignStudio/workspaces/<project>/outbox/<n>/`. That is the only
+   tree `file.fetch` may read. Optionally add `worker-validation.json` (the
+   output of `worker-reopen-check document.xcf`). It needs a shell on the
+   worker, so only the operator can produce it. Agent-run checkpoints omit
+   it and rely on Overmind's checks.
 2. On Overmind:
 
    ```bash
@@ -69,7 +81,7 @@ SSD.
 | Required files present; manifest schema and project match | Incomplete packages |
 | Files match the manifest at verify time **and again at commit time** | Changes made after verification |
 | Structural XCF parse without GIMP: header, canvas, layer names, kinds, offsets, opacity, and every tile pointer inside the file with the expected tile count | Malformed or truncated XCFs, even when their hashes are honest |
-| `worker-validation.json` layer order matches the parse, and its `xcf_sha256` matches the manifest | A reopen check run on a different file |
+| If present: `worker-validation.json` layer order matches the parse, and its `xcf_sha256` matches the manifest | A reopen check run on a different file |
 | `preview.png` fully decodes (chunk CRCs, zlib, exact pixel byte count) at canvas size | Broken previews |
 | `parent_checkpoint_id` equals HEAD under the project lock | Two writers both building on the same HEAD |
 

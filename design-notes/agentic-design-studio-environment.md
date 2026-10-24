@@ -358,6 +358,66 @@ throughout:
 fetch, but cannot yet stage or commit, because it has no shell. Spike E
 decides how the agent requests a publish.
 
+## Spike E results, 2026-10-23
+
+**Gate E: passed, with three caveats (below).** Buckminster ran every step
+from Overmind.
+
+**Agent-run checkpoints (exec allowlist).**
+
+- `agents.entries.buckminster.tools.exec = {host: "gateway", mode:
+  "allowlist"}`, plus `exec` in `alsoAllow`.
+- A Gateway approvals entry for `buckminster` with one pattern:
+  `/opt/overmind/services/design-studio/design-checkpoint`.
+- Effective policy: Buckminster is `allowlist`/`ask off`. Kerrigan and Soma
+  are unchanged (`full`).
+- Verified: `design-checkpoint status` runs. `id`, a chained
+  `design-checkpoint …; id`, and `ls` are all refused with `exec denied:
+  allowlist miss`.
+- Hardened the tool for agent use, because its arguments are now an attack
+  surface: fixed store path, validated project and staging ids, and worker
+  paths limited to `/Users/dev/DesignStudio/workspaces/`.
+- Made `worker-validation.json` optional. The agent has no worker shell to
+  run `gimp-console`, and Mac shell access stays off. When the file is
+  present it is still bound to the XCF by hash.
+
+**Steps:**
+
+| Step | Result |
+| --- | --- |
+| Close the document | PDB route **failed**: the bridge can't convert an integer to `GimpDisplay`. Buckminster reported it honestly and updated its runbook. The operator quit GIMP (discarding changes) instead, which gave the milestone's "fresh GIMP process". |
+| Worker offline, status | With the node stopped, Buckminster reported HEAD `0001-fedc42` from a live `design-checkpoint status`, said the GIMP tools were unavailable, and flagged the earlier unsaved state as unknowable. |
+| Reconnect, resume | Buckminster started GIMP itself (`gimp_launch` gui). It opened the Mac copy only after `file_fetch` showed its sha256 matched 0001's manifest, inspected it with the export/fetch/view loop, recoloured the rug (`#b65d43`), and changed the label. It then staged, verified, and committed **`0002-3f2f0f`** (parent `0001-fedc42`) itself. Independently re-checked: 0001's files are byte-identical and both checkpoints are read-only. Cost: 49 calls, about 150 s, about 1.29M tokens (1.27M of them cache reads). |
+| Mid-edit interruption | The node host was killed while GIMP ran a 120 px baked blur. Buckminster reported "the blur's outcome is unknown" and did not retry, save, or checkpoint. After reconnecting it inspected first, found the bridge unreachable, and did not relaunch or redo anything. |
+
+**Caveats.**
+
+1. **No restore to a worker that has lost its files.** The resume used the
+   Mac's own copy, proven identical by hash. Pushing a committed checkpoint
+   back to the Mac needs a transport. `file.write` (create-only, sha256)
+   works, but `openclaw nodes invoke` passes params as one argv string,
+   which Linux caps at 128 KB, so the CLI can't carry an XCF. Options:
+   - the published `@openclaw/gateway-client` (requires a paired operator
+     device; package 2026.8.1 vs Gateway 2026.9.6);
+   - pairing Overmind itself as a node, so Buckminster can `file_fetch`
+     from it and `file_write` (`sourceMediaId`) to the Mac;
+   - a read-only SMB share mounted on the Mac.
+
+   Undecided.
+2. **The interruption test simulated a node-host crash, not a network
+   drop.** Killing the node host also killed GIMP, because on macOS
+   `gimp_launch` spawns GIMP as an attached child (`subprocess.Popen` with
+   no `start_new_session`; Windows does detach). The unsaved scratch layer
+   was lost; checkpoints and the working copy were not. Until this is fixed
+   upstream, start GIMP independently of the node (the user, or the
+   `gimp-agent-mcp shortcut` launcher). A true network-drop test still
+   needs doing.
+3. **Upstream bugs in GIMP Agent MCP 0.5.0, to report:**
+   - `op_close_image` uses `image.delete()`, which fails while a window is
+     open.
+   - The PDB argument converter has no `GimpDisplay` case.
+   - `gimp_launch` doesn't detach GIMP on POSIX.
+
 ## Risks
 
 - The Mac's local exec defaults are broad until finding 2's denies are in
