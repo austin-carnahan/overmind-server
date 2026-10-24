@@ -30,7 +30,7 @@ cerebrate-graph <model.onnx> <backend> <port>
 | `nnapi` | NNAPI with `NNAPI_FLAG_CPU_DISABLED`: NNAPI's slow reference CPU device is off; nodes NNAPI can't take still run on ORT's CPU provider |
 | `nnapi16` | `nnapi` plus `NNAPI_FLAG_USE_FP16` |
 | `xnnpack` | XNNPACK, with the session's own pool at 1 thread per ORT's guidance |
-| `webgpu` | WebGPU (Dawn on Vulkan, the Mali GPU) — compiled into the stock 1.30.0 Android AAR |
+| `webgpu` | WebGPU (Dawn on Vulkan, the Mali GPU) — compiled into the stock 1.30.0 Android AAR. **Blocked on this device:** its MatMul/Conv kernels crash the GPU ([webgpu-op-bisect](../spikes/webgpu-op-bisect/README.md)) |
 
 Characterization-only environment variables (for hand launches, not the
 supervisor): `CEREBRATE_GRAPH_VERBOSE=1` (ORT node placement),
@@ -185,7 +185,7 @@ adapter does (312×312, ImageNet mean/std). Outputs: `dets` 1×100×4, `labels`
 | `xnnpack` | correct, no crash (the known crash was on a quantized graph) | 1,334 ms — slower, likely because nodes XNNPACK doesn't take run on the single-threaded session pool |
 | `nnapi` | refuses to load: ORT would hand NNAPI 879/1,021 nodes in 77 partitions, but the `google-edgetpu` driver reports `Ops supported = 0, not supported = 19` — **the TPU takes no fp32 work** | — |
 | `nnapi16` | refuses to load: the driver now reports `Ops supported = 19, not supported = 0`, but **the vendor Darwinn compiler subprocess crashes** inside `libdarwinn_hal.so` (tombstone) and compilation fails. The NNAPI service itself survived; production `cerebrate-infer` verified unaffected right after (class 795, ~1 ms). | — |
-| `webgpu` | loads (Dawn initializes on the Mali, Vulkan), then the first run fails with `[Device] is lost` about 11 s in. The worker survives and returns a clean `ERROR`. No GPU driver message in logcat explains the loss. | — |
+| `webgpu` | loads (Dawn initializes on the Mali, Vulkan), then the first run fails with `[Device] is lost` about 11 s in. The worker survives and returns a clean `ERROR`. No GPU driver message in logcat explains the loss. Later traced to ORT WebGPU's MatMul/Conv kernels ([webgpu-op-bisect](../spikes/webgpu-op-bisect/README.md)). | — |
 
 For comparison, the macOS build on the M1: `cpu` 293 ms, `webgpu` (Metal)
 131 ms, both matching the reference.
