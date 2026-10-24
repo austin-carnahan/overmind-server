@@ -101,8 +101,8 @@ accelerator can't produce buffer requirements and **never writes the bound
 output buffer at all** (sentinel intact, with host-memory and native OpenCL
 buffers alike) — the zeros were this harness's zero-initialized buffer, not a
 readback of GPU results. **Float models work:** float MobileNet is correct on
-the GPU (cosine 0.99996, 8.3 ms vs 31.6 ms CPU), and so is a prepared
-DINOv2-small (cosine 1.000000 at fp32, 5 ms vs ~330 ms CPU). The "readback
-bug" label above is superseded by "the GPU accelerator can't bind uint8 I/O
-tensors". Full write-up, canary, and the 2.3.0 build:
+the GPU (cosine 0.99996), and so is a prepared DINOv2-small (cosine 1.000000
+at fp32; 68.6 ms end to end vs 344 ms CPU). The "readback bug" label above is
+superseded by "the GPU accelerator can't bind this model's uint8 I/O tensors"
+(other uint8 models untested). Full write-up, canary, and the 2.3.0 build:
 [litert-gpu-transformers](../litert-gpu-transformers/README.md).

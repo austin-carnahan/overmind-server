@@ -72,7 +72,8 @@ step frozen, so every op is GPU-eligible) fails delegate initialization:
 unsupported `BROADCAST_TO` / `GATHER_ND` in the unfrozen graph. The delegate
 creates no kernels and the model falls back to CPU (318 ms). It is a 4-D,
 CNN-oriented delegate. Transformers go through LiteRT 2.3.0's `CompiledModel`
-GPU path instead, which runs a prepared DINOv2-small correctly in 5 ms — see
+GPU path instead, which runs a prepared DINOv2-small correctly (68.6 ms end
+to end at fp32 vs 344 ms CPU) — see
 [litert-gpu-transformers](../litert-gpu-transformers/README.md), which also
-narrows this README's mention of `CompiledModel`'s "all-zero" output to uint8
-I/O models only.
+narrows this README's mention of `CompiledModel`'s "all-zero" output to the
+tested uint8-I/O quantized model.

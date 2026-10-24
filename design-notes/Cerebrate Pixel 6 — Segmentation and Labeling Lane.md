@@ -24,6 +24,14 @@ reliable correctness checks behind one consistent service interface
 (Section 5.1) — a pattern that transfers to a more powerful Overmind worker
 later.
 
+> **Key lesson (Step 2A): a compiler/runtime incompatibility doesn't
+> necessarily mean a model architecture is unsupported. Sometimes a relatively
+> small, mathematically equivalent graph rewrite can unlock the entire model.**
+> Folding DINOv2's LayerScale into adjacent weights turned a numerically wrong
+> GPU result (cosine 0.026) into an exact one (cosine 1.000000) and unlocked
+> the LiteRT GPU path. Section 4.6 proposes how to make such rewrites a
+> standard, packaged step for every new model.
+
 ## 2. Placement decisions
 
 - **The Pixel 6 is the compute node for this lane.** It runs the models behind
@@ -60,7 +68,7 @@ as native Android-host processes, which hold the rest of the memory.
 | ORT + WebGPU (Dawn → Vulkan, Mali GPU) | **Blocked: its MatMul and Conv kernels crash the GPU** (`VK_ERROR_DEVICE_LOST`); element-wise, LayerNorm and Softmax kernels are correct. Every real model tested failed; all pass on the Mac's Metal | [webgpu-op-bisect](../hosts/cerebrate-pixel6/spikes/webgpu-op-bisect/README.md) |
 | Classic TFLite GPU delegate (OpenCL) | **Correct** — the first verified-correct vision inference on this GPU. Float MobileNet: 11.6 ms fp32 (cosine 1.0), 7.8 ms fp16, vs 28.3 ms CPU | [tflite-gpu-delegate](../hosts/cerebrate-pixel6/spikes/tflite-gpu-delegate/README.md) |
 | LiteRT-LM GPU (OpenCL) | **Correct generation** (SmolLM2-135M) — the GPU and its OpenCL stack do compute correctly on this device | [model catalog](../models/catalog.yaml) (`pixel6_litertlm_gpu: passed`) |
-| LiteRT `CompiledModel` GPU (2.3.0) | **Correct for float models**: prepared DINOv2-small in 5.0 ms at fp32 (cosine 1.0) vs ~330 ms CPU. For **uint8-I/O** models it never writes the output (the earlier "all-zero" result). Computes `[N,C] × [C]` broadcast multiplies wrongly — worked around in model preparation (Section 4.5) | [litert-gpu-transformers](../hosts/cerebrate-pixel6/spikes/litert-gpu-transformers/README.md) |
+| LiteRT `CompiledModel` GPU (2.3.0) | **Correct for float models**: prepared DINOv2-small in 68.6 ms end to end at fp32 (cosine 1.0, task-level ranking identical) vs 344 ms CPU — about 5×; 37.8 ms at fp16, which loses accuracy. For the tested **uint8-I/O** quantized MobileNet it never writes the output (the earlier "all-zero" result). Computes `[N,C] × [C]` broadcast multiplies wrongly — worked around in model preparation (Section 4.5) | [litert-gpu-transformers](../hosts/cerebrate-pixel6/spikes/litert-gpu-transformers/README.md) |
 | LiteRT NPU | Does not load on Tensor G1 | inference node notes |
 | GPU via NNAPI | Not available: NNAPI lists only `google-edgetpu` and `nnapi-reference` | inference node notes |
 
@@ -73,10 +81,11 @@ Section 6.2).
 On the GPU, Step 2A established a working transformer path. The OpenCL stack
 is sound (LiteRT-LM generates correctly; the classic TFLite GPU delegate runs
 float MobileNet correctly). **LiteRT 2.3.0's `CompiledModel` GPU path runs a
-prepared DINOv2-small correctly at ~65× CPU speed**, after model preparation
+prepared DINOv2-small correctly, about 5× faster than CPU end to end at fp32**, after model preparation
 removes two things it gets wrong or can't take (Section 4.5). Its old
-"all-zero output" failure turned out to be specific to uint8 I/O tensors,
-which the GPU accelerator never writes; float models — which converted
+"all-zero output" failure turned out to be the GPU accelerator never writing
+the uint8 I/O tensors of the tested quantized MobileNet (other uint8 models
+are untested); float models — which converted
 transformers are — work. The classic delegate rejects transformer graphs (it
 expects 4-D image tensors) but remains useful for CNNs, and ORT WebGPU stays
 blocked (MatMul/Conv kernels crash the Mali). The cost of the GPU path:
@@ -185,9 +194,10 @@ accelerator, and its compiled custom op cannot run through the Pixel's NNAPI.
 **GPU** (fp16 / fp32):
 
 1. **LiteRT 2.3.0 `CompiledModel` GPU** (OpenCL) — **the transformer GPU
-   path.** Correct for float models; prepared DINOv2-small in 5 ms. Needs
-   float I/O, requirement-based buffers (host-memory buffers add 30–60 ms of
-   copies), and the Section 4.5 preparation. Google's supported successor
+   path.** Correct for float models; prepared DINOv2-small in 68.6 ms end to
+   end at fp32 vs 344 ms CPU. Needs float I/O and the Section 4.5
+   preparation. Its run call returns before the GPU finishes, so latency is
+   only meaningful measured through a synchronizing output lock. Google's supported successor
    runtime. Recheck its known defects (uint8 I/O never written; per-channel
    broadcast multiply wrong; GPU-only compilation fails if any op must fall
    back) on each new release.
@@ -224,7 +234,7 @@ evidence showing what actually ran on the accelerator.
 | SAM 2.1 / EdgeSAM decoders | Box → mask | Mixed; dynamic shapes | ~21 MB fp32 | **CPU** | CPU | LiteRT GPU, if converted | — |
 | RF-DETR Seg Nano | Fixed-class detector; GPU test case | Transformer | 123 MB fp32 | GPU | LiteRT GPU, prepared | CPU (483 ms, measured) | — |
 | OWLv2 image tower | Open-vocabulary detection | ViT-B/16 at 960×960 | ~155M params | **GPU** | LiteRT GPU, prepared | CPU (slow) | — |
-| DINOv2-small (test model, not in the pipeline) | GPU path proof | Transformer (ViT-S/14) | 22M params, 87 MB fp32 | **GPU** | **LiteRT GPU, prepared: 5.0 ms, cosine 1.0 (measured)** | CPU (~330 ms, measured) | — |
+| DINOv2-small (test model, not in the pipeline) | GPU path proof | Transformer (ViT-S/14) | 22M params, 87 MB fp32 | **GPU** | **LiteRT GPU, prepared: 68.6 ms end to end at fp32, cosine 1.0 (measured)** | CPU (344 ms, measured) | — |
 | OWLv2 text tower | Phrase → embedding | Small text transformer | Small | CPU, or precomputed offline | CPU | — | — |
 
 Every model therefore needs **two exports**: int8 ONNX (or LiteRT) for the
@@ -271,6 +281,45 @@ on this device:
 
 Expect more rules as more architectures go through (SAM 2.1's Hiera encoder,
 RF-DETR, OWLv2). Conversion is `litert-torch` (PyTorch → LiteRT) on the Mac.
+
+Measuring a prepared model: latency only counts end to end — input copy,
+run, and a synchronizing output lock — since LiteRT's GPU run call returns
+before the work finishes. Accuracy is reported as worst-image and worst-token
+cosine, max absolute error, relative L2 error, and a task-level check
+(DINOv2: embedding similarity ranking; masks: IoU and boundary agreement after
+thresholding). fp32 is the default; fp16 must pass the task-level check per
+model. Each model test also takes a live temperature reading (`dumpsys
+thermalservice`, "Current temperatures from HAL" section — not the cached one).
+
+### 4.6 Standard model-preparation packaging (proposed)
+
+Section 4.5's rewrites shouldn't stay one-off scripts. Proposed shape, to be
+built when SAM 2.1 becomes the second model through the pipeline — so it's
+shaped by two real cases rather than one:
+
+- **A shared transform library**, one function per rewrite (for example
+  `freeze_fixed_shape_inputs`, `fold_channel_scale_into_linear`). Each records
+  the math, the runtime defect or limitation it works around (runtime,
+  version, device), a "drop when" condition (recheck on each new LiteRT
+  release), and a self-check that the rewrite is exact on random inputs.
+- **A recipe per model**: source (repository + pinned revision), fixed input
+  spec, the ordered transforms, the conversion target (float `.tflite` for the
+  GPU, int8 for the TPU), and its validation spec (metrics, thresholds,
+  task-level check, test inputs).
+- **One runner on the Mac** that applies a recipe end to end: prepared vs
+  original in PyTorch, converted vs PyTorch, then emits the artifact and a
+  **manifest** — source revision, transforms and their versions, converter
+  version, checksums, validation results.
+- **Device validation** (`litert_e2e` + accuracy analysis) appends its
+  CPU-vs-accelerator results and temperature reading to the same manifest.
+- **The model catalog** records prepared artifacts with a `preparation` block
+  (recipe, transforms, manifest checksum), so `stage-model` stages exactly
+  what was validated and provenance travels with the artifact into the
+  `segment` service's response.
+
+The goal is that testing a new model is "write a recipe, run it, read the
+manifest" — and that removing a rewrite once a runtime fixes the underlying
+defect is a one-line recipe change, re-validated the same way.
 
 ## 5. Version 1 pipeline
 
@@ -377,6 +426,9 @@ on a working GPU path. Sequencing, per track:
    `.tflite`), with element-wise correctness checks against CPU — OpenCL is the
    stack LiteRT-LM already uses correctly here.
 4. For whichever path works, a sustained-load run with thermal readings.
+   Done once for DINOv2 (below); further stress tests deferred until the
+   lane settles, with live temperature readings taken during each model test
+   instead.
 5. **A LiteRT engine in a worker**, so prepared `.tflite` models on the
    LiteRT GPU path are served through the supervisor and MLServer like
    everything else — either a second engine inside `cerebrate-graph` (same
@@ -390,8 +442,8 @@ failed ([webgpu-op-bisect](../hosts/cerebrate-pixel6/spikes/webgpu-op-bisect/REA
 Item 3 done for the first transformer: the classic delegate is correct on
 float MobileNet but rejects DINOv2
 ([tflite-gpu-delegate](../hosts/cerebrate-pixel6/spikes/tflite-gpu-delegate/README.md));
-**LiteRT 2.3.0 runs a prepared DINOv2-small correctly at 5 ms (fp32, cosine
-1.0) vs ~330 ms CPU**
+**LiteRT 2.3.0 runs a prepared DINOv2-small correctly: 68.6 ms end to end at
+fp32 (cosine 1.0, task-level ranking identical) vs 344 ms CPU**
 ([litert-gpu-transformers](../hosts/cerebrate-pixel6/spikes/litert-gpu-transformers/README.md)).
 Next: SAM 2.1's decoder and Hiera encoder through the same preparation and
 check, a sustained-load thermal run (item 4), and the worker engine (item 5).
@@ -580,15 +632,32 @@ conditions in Section 4.4).
   transformer on the GPU.** The unchanged `litert-compiled-correctness`
   harness on 2.3.0 reproduces the all-zero result on the quantized MobileNet.
   A C-API canary with a sentinel-filled output isolated it: the GPU
-  accelerator can't bind uint8 I/O tensors and never writes the output (host
+  accelerator can't bind the tested model's uint8 I/O tensors and never writes the output (host
   or native OpenCL buffers alike) — not a readback of GPU results. Float
-  MobileNet is correct on the same path (cosine 0.99996, 8.3 ms vs 31.6 ms).
+  MobileNet is correct on the same path (cosine 0.99996; 8.3 ms run-call time
+  vs 31.6 ms, not an end-to-end figure).
   DINOv2-small (`litert-torch` 0.10.0, converted in parallel per the revised
   sequencing) ran but was numerically wrong (cosine 0.026) — not precision,
   not the CPU/GPU split; depth and in-layer bisection traced it to LayerScale's
   per-channel broadcast multiply. Folding LayerScale into the adjacent linear
   layers and freezing the embedding step gives a fully GPU-resident model that
-  is **correct: cosine 1.000000 at fp32 in 5.0 ms vs ~330 ms on CPU**. LiteRT
+  is **correct: cosine 1.000000 at fp32** (see the next note for the
+  corrected end-to-end latency). LiteRT
   2.3.0 `CompiledModel` becomes the transformer GPU path; model preparation
   rules recorded in Section 4.5; ORT WebGPU frozen; the model-oriented
   `segment` service direction recorded in Section 5.1.
+- **2026-10-24** — **End-to-end verification, with a correction.** A
+  synchronized benchmark over eight different real photos showed the earlier
+  "5 ms" timed only LiteRT's run call, which returns before the GPU finishes.
+  End to end, prepared DINOv2-small takes **68.6 ms at fp32 vs 344 ms on CPU
+  (~5×)**, and 37.8 ms at fp16 (~9×). Against the unmodified PyTorch model,
+  GPU fp32 matches the device CPU on every measure (relative L2 5.9e-6; worst
+  token cosine 1.000000; task-level similarity ranking 8/8); fp16 does not
+  (worst token 0.961, max abs error 2.58, ranking 7/8), so fp32 is the
+  default. Sustained 5-minute load held a steady 68.5–69.4 ms; live
+  temperature readings (after finding that the first poll read a stale cached
+  section) showed the GPU plateau at 74–76 °C with no throttling. Further
+  stress testing deferred; temperatures will be read during each model test.
+  The uint8 finding is now scoped to the tested quantized MobileNet. Recorded
+  the key lesson (Section 1) and proposed standard packaging for graph
+  rewrites (Section 4.6).

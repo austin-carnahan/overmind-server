@@ -171,7 +171,7 @@ NPU       -> unavailable on Tensor G1 through the tested modern path
 
 The existing correctness harness (`hosts/cerebrate-pixel6/spikes/litert-compiled-correctness/`) should be rerun whenever a materially newer LiteRT release or new Android/Tensor device is evaluated. Reading its `checksum`/`gpu_output_all_zero` output is enough to answer whether anything changed — only then should `LiteRtCompiledBackend` be implemented or promoted.
 
-**Update (2026-10-23, Segmentation and Labeling Lane):** rerun on LiteRT 2.3.0 — the quantized MobileNet result is unchanged, but the diagnosis is narrower than "readback defect": the GPU accelerator can't bind **uint8** I/O tensors and never writes the output buffer. **Float models are correct** on the 2.3.0 GPU path (float MobileNet; a prepared DINOv2-small at cosine 1.0, 5 ms vs ~330 ms CPU), so `CompiledModel` GPU is now the lane's GPU runtime for float transformer graphs. See `hosts/cerebrate-pixel6/spikes/litert-gpu-transformers/`.
+**Update (2026-10-23, Segmentation and Labeling Lane):** rerun on LiteRT 2.3.0 — the quantized MobileNet result is unchanged, but the diagnosis is narrower than "readback defect": for the tested **uint8**-I/O quantized MobileNet the GPU accelerator never writes the output buffer (other uint8 models untested). **Float models are correct** on the 2.3.0 GPU path (float MobileNet; a prepared DINOv2-small at cosine 1.0, 68.6 ms end to end vs 344 ms CPU), so `CompiledModel` GPU is now the lane's GPU runtime for float transformer graphs. See `hosts/cerebrate-pixel6/spikes/litert-gpu-transformers/`.
 
 ### 3.4 Session execution remains separate
 
