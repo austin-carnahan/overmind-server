@@ -105,6 +105,30 @@ device-pair publicUrl override → mobile app setup codes
 Tailnet: MagicDNS + HTTPS cert enabled (both required prerequisites for
 Serve/Funnel).
 
+## Web search and browser
+
+`web_search` uses Brave (`tools.web.search.provider: "brave"`). The
+provider is the official ClawHub plugin, not bundled with core. Pin the
+plugin version to the installed OpenClaw version: the latest plugin can
+require a newer plugin API than we run (`@2026.9.7` refused on core
+2026.9.6), so install `clawhub:@openclaw/brave-plugin@<openclaw version>`.
+The API key is a SecretRef (`plugins.entries.brave.config.webSearch.apiKey`
+→ store entry `BRAVE_API_KEY`), never plaintext. To store it, run
+`openclaw secrets store set BRAVE_API_KEY --kind secret --value-file -`
+as the `openclaw` user and paste the key on stdin. `BRAVE_API_KEY` is the
+literal entry name, not a placeholder for the key. Without a provider,
+agents fall back to `web_fetch` against search-engine HTML, which works
+but is fragile and wastes a failed call each time.
+
+**No browser is installed, deliberately (2026-10-07).** The `browser` tool
+fails with "No supported browser found." Reasons not to add one for now:
+the docs' recommended Google Chrome has no Linux arm64 build; Ubuntu's
+Chromium here is the snap wrapper the docs flag as a launch problem; the Pi
+is already into swap; and using Garmin Connect logged in through a browser
+would risk anti-bot lockout of the account that Garmin MCP depends on.
+Revisit only for a concrete task that needs JavaScript-rendered pages, and
+not for anything logged into Garmin.
+
 ## Permissions and host administration
 
 Kerrigan's design principle: **broad operational jurisdiction, narrow

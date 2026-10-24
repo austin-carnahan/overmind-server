@@ -153,7 +153,15 @@ Without this, `git log`/`git show` on a bind-mounted repo fails with
 ## MCP servers and tool access
 
 Garmin is Soma's integration (`mcp.servers.garmin`, streamable-http,
-`127.0.0.1:8001/mcp`, 55-tool `toolFilter.include` allowlist). **MCP
+`127.0.0.1:8001/mcp`, 57-tool `toolFilter.include` allowlist). The list
+includes `upload_workout`/`upload_workouts` — the raw-JSON workout tools —
+because the convenience `create_strength_workout` helper wraps every
+exercise in its own set and only supports rep targets. Multi-exercise
+repeat groups ("2 rounds of exercises 1–7"), time/lap-button targets, and
+anything Garmin Connect's own builder can do need `upload_workout` with
+`RepeatGroupDTO` steps; the server ships templates for this
+(`workout://templates/strength-circuit`, `workout://reference/structure`).
+Remember that changes to `mcp.*` need a real Gateway restart. **MCP
 servers are not agent-scoped by default** — a disposable test agent got
 full Garmin access with zero configuration simply because nothing had
 denied it. Kerrigan has an explicit `tools.deny: ["garmin__*"]` for
