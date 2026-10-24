@@ -6,7 +6,8 @@
 // raw. Reports load time (includes the TPU compile), first-run time and the
 // steady-state median.
 //
-// usage: tflite-nnapi-bench <model.tflite> <cpu|tpu> <inputs.txt> <out_dir> <iterations>
+// usage: tflite-nnapi-bench <model.tflite> <cpu|tpu|tpu16> <inputs.txt> <out_dir> <iterations>
+//   tpu16: as tpu, with the delegate's allow_fp16 (NNAPI relaxed fp32 -> fp16)
 //   inputs.txt: one sample per line, comma-separated files, one per input
 #include <stdio.h>
 #include <stdlib.h>
@@ -40,11 +41,12 @@ static bool read_file(const std::string& path, std::vector<char>* buf) {
 
 int main(int argc, char** argv) {
   if (argc < 6) {
-    fprintf(stderr, "usage: %s <model.tflite> <cpu|tpu> <inputs.txt> <out_dir> <iterations>\n", argv[0]);
+    fprintf(stderr, "usage: %s <model.tflite> <cpu|tpu|tpu16> <inputs.txt> <out_dir> <iterations>\n", argv[0]);
     return 1;
   }
   const char* model_path = argv[1];
-  bool tpu = strcmp(argv[2], "tpu") == 0;
+  bool fp16 = strcmp(argv[2], "tpu16") == 0;
+  bool tpu = strcmp(argv[2], "tpu") == 0 || fp16;
   int iterations = atoi(argv[5]);
 
   std::vector<std::vector<std::string>> samples;
@@ -69,6 +71,7 @@ int main(int argc, char** argv) {
     o.accelerator_name = "google-edgetpu";
     o.execution_preference = TfLiteNnapiDelegateOptions::kSustainedSpeed;
     o.disallow_nnapi_cpu = 1;
+    o.allow_fp16 = fp16 ? 1 : 0;
     delegate = TfLiteNnapiDelegateCreate(&o);
     if (!delegate) { fprintf(stderr, "FATAL: NNAPI delegate creation failed\n"); return 1; }
     TfLiteInterpreterOptionsAddDelegate(options, delegate);
@@ -124,7 +127,7 @@ int main(int argc, char** argv) {
     else times.push_back(dt);
   }
   std::sort(times.begin(), times.end());
-  printf("model=%s accel=%s load_us=%ld first_us=%ld iters=%zu median_us=%ld\n", model_path, tpu ? "tpu" : "cpu", load_us,
+  printf("model=%s accel=%s%s load_us=%ld first_us=%ld iters=%zu median_us=%ld\n", model_path, tpu ? "tpu" : "cpu", fp16 ? "16" : "", load_us,
          first_us, times.size(), times.empty() ? -1L : times[times.size() / 2]);
   TfLiteInterpreterDelete(interp);
   TfLiteInterpreterOptionsDelete(options);

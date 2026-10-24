@@ -594,3 +594,59 @@ model's fit is how well it tolerates int8 — fixed-vocabulary or
 coarse-output models are better candidates than a 4,585-class
 open-vocabulary head.
 
+## 2026-10-24 — Edge TPU precision probes (TPU investigation, step 1)
+
+Code: [tpu-precision-probes](../../hosts/cerebrate-pixel6/spikes/tpu-precision-probes/README.md)
+(capability matrix there). Tiny graphs, classic TFLite converter, TFLite +
+NNAPI pinned to `google-edgetpu`.
+
+| Probe | Mode | TPU placement | Median | Rel L2 vs fp32 |
+| --- | --- | --- | --- | --- |
+| conv block | CPU fp32 | — | 30.5 ms | 7e-7 |
+| conv block | TPU strict fp32 / fp16 weights | 0 ops supported | — | — |
+| conv block | **TPU fp16-relaxed** | 9/9 | **2.9 ms** | 3.7e-2 (max-pool padding defect; 3.8e-4 before the max-pool) |
+| conv block | CPU int8 | — | 8.8 ms | 2.0e-2 |
+| conv block | TPU int8 | 9/9 | **1.2 ms** | 4.2e-2 (same defect) |
+| attention block | CPU fp32 | — | 1.22 ms | 2e-7 |
+| attention block | **TPU fp16-relaxed** | 13/13 | **0.83 ms** | 1.0e-3 |
+| attention block | TPU int8 (per-channel dense weights) | rejected (`FULLY_CONNECTED`: per-channel int8 not accepted) | — | — |
+| attention block | TPU int8, per-tensor weights | 13/13 | 0.66 ms | 4.6e-2 (= CPU int8) |
+| either | TPU int16 activations | not delegated (int64 biases) | — | — |
+| 24 × conv+SiLU (160×160×64) | CPU fp32 | — | 762 ms | 2e-6 |
+| 24 × conv+SiLU | **TPU fp16-relaxed** | 72/72, compile 1.36 s | **20.7 ms** | **9.2e-4** |
+
+Single ops (sigmoid, SiLU, conv, strided conv, max-pool, resize, add +
+concat) on the TPU: int8 bit-identical to TFLite's CPU int8; fp16-relaxed
+1e-5–3e-4. The conv block's error enters at its 5×5 max-pool: **the TPU pads
+SAME max-pooling with zeros** (all large errors in the 2-pixel border where
+the true maximum is ≤ 0; TPU output exactly `max(true, 0)`). Exact
+workaround for inputs with a known lower bound: `maxpool(x + c) − c`.
+
+## 2026-10-24 — YOLOE-v8s int8 accuracy diagnosis (TPU investigation, step 2)
+
+Code: [`yoloe_int8_diagnose.py`](../../hosts/cerebrate-pixel6/spikes/yoloe-tpu/yoloe_int8_diagnose.py).
+The onnx2tf full-integer backbone (desktop TFLite CPU kernels; the TPU
+matched them at task level) → fp32 head, against Ultralytics' 132 reference
+detections.
+
+- **Input mapping is exact:** the letterboxed image (k/255) through the int8
+  input (scale 1/255, zero point −128) and back differs by 6e-8.
+- **Detections:** 83 matched, **17 label flips, 32 missed.**
+  - *Misses are borderline detections pushed under the threshold:* all 32
+    have an int8 score below 0.25 for the original label at the original
+    anchor (median 0.15); the original model's confidence on them was low to
+    begin with (median 0.30, 26/32 below 0.35; matched detections median
+    0.60).
+  - *Flips concentrate where the original model was undecided:* its top-1 vs
+    top-2 class margin is smaller for flipped detections (median 0.085)
+    than for matched ones (0.135). Many are near-synonyms (quilt → bedding,
+    toilet paper → paper towel, baby bottle → bottle); some are not
+    (sugar bowl → ashtray, sponge → diamond, handbag → hassock). The original
+    label ranks 2nd in 5 of 17 flips, 6th or worse in 6.
+- **Layer by layer (134 int8 tensors vs their float32 twins):** no single
+  catastrophic layer — error accumulates with depth: cosine ~0.95–0.99 at
+  160×160 and 80×80, 0.87–0.91 at 40×40, ~0.80–0.85 at 20×20 (the SPPF
+  output ~0.80) and in the neck (lowest ~0.77). The biggest per-op drops are
+  at the SiLU **multiplies** (x · sigmoid(x)), whose outputs are re-quantized
+  per tensor; the sigmoids themselves stay at 0.95–0.99.
+

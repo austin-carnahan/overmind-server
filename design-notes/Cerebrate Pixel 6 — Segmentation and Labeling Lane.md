@@ -1051,4 +1051,13 @@ conditions in Section 4.4).
   (186 ms, exact), `fast` = FP16 with FP32 accumulation (108 ms; all 132
   reference detections kept plus one borderline extra, mean mask IoU 0.996).
   YOLOE-11s gets no `fast` variant (the mixed mode loses a detection).
+- **2026-10-24** — **TPU investigation, steps 1–2.** Precision probes: the
+  Edge TPU computes **fp32 with fp16 relaxation** accurately (fp16-level
+  error, 9e-4 after 24 conv+SiLU layers; 37× the CPU) as well as int8; not
+  strict fp32, not int16 activations; int8 dense layers need per-tensor
+  weights; and **SAME max-pooling pads with zeros** (exact shift workaround).
+  YOLOE int8 diagnosis: input mapping exact; the losses are borderline
+  detections pushed under the threshold (32) and flips where the original
+  was undecided (17); error accumulates with depth, mostly at the SiLU
+  multiplies. Capability matrix in `tpu-precision-probes`.
 
