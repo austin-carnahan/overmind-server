@@ -113,7 +113,9 @@ reliably crashes the USB controller without it under real write load.
   the same level and didn't scale to a second disk; no service config needed
   to change except `TRANSMISSION_DOWNLOAD_ROOT`, which gained a proper bind
   mount instead of referencing the disk directly. Paperclip's database and
-  app state are live on it.
+  app state are live on it. Swap (`swapfile`), Docker/containerd storage, and
+  `~austin/.cache` are on it too. Docker refuses to start without the SSD; see
+  [storage](../../design-notes/storage-layout.md#logical-paths-and-physical-disks).
 
 ## Intended first roles
 

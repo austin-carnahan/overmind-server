@@ -105,13 +105,43 @@ under `/mnt`, which was confusing and didn't scale to a second disk:
     var-lib-overmind/        # simpler to scale to another disk. The actual
     downloads/               # ext4 label (e.g. overmind-ssd) can still
     models/                  # differ; nothing depends on them matching.
+    var-lib-docker/
+    var-lib-containerd/
+    cache-austin/
+    swapfile
 
 /mnt/substrate              # logical — the only paths services reference
 /mnt/library                # bind-mounted from a /mnt/disks/<name>/ subdir
 /mnt/downloads
 /mnt/models
 /var/lib/overmind
+/var/lib/docker             # service-default paths, SSD-backed (2026-10-23)
+/var/lib/containerd
+/home/austin/.cache
 ```
+
+Docker, containerd, and `~austin/.cache` were moved onto the SSD on
+2026-10-23. Two reasons: they were the largest items on the microSD (about
+29 GB of images and layers plus 6.5 GB of uv cache), and the card was taking
+about 11 GB/day of writes. Docker 29 uses the containerd image store, so
+images live in `/var/lib/containerd`, not `/var/lib/docker`. Both have to
+move together. `docker.service` and `containerd.service` have
+`RequiresMountsFor=` drop-ins (`/etc/systemd/system/*.service.d/10-require-ssd.conf`).
+If the SSD is missing at boot, they fail to start instead of quietly
+starting empty on the card. `~/.cache` has no such guard because its
+contents can be rebuilt. Because it is a separate mount, uv cannot hardlink
+from it into virtual environments elsewhere, so `~/.profile` sets
+`UV_LINK_MODE=copy`. It also sets `HF_HOME=/mnt/models/huggingface`.
+The microSD also has two caps:
+
+- Container logs: `/etc/docker/daemon.json` sets json-file at 10 MB × 3.
+  This only applies once a container is recreated.
+- The journal: `/etc/systemd/journald.conf.d/10-size.conf` sets
+  `SystemMaxUse=200M`.
+
+To roll back before the SD copies are deleted, stop Docker and containerd,
+unmount the three paths, move the `*.sd-old` directories back, remove the
+fstab lines and drop-ins, and start the services again.
 
 `/mnt/models` (added 2026-09-17 for the Cerebrate Pixel 6 model cache, see
 [models/README.md](../models/README.md)) is deliberately a sibling of
