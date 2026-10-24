@@ -656,6 +656,67 @@ supplied per request. Not a real-time model — seconds per image, run per
 request or per design session. Details: progress notes and
 [owlv2-gpu](../hosts/cerebrate-pixel6/spikes/owlv2-gpu/README.md).
 
+### Spike — EfficientSAM3 RV-M on the GPU (bounded, added 2026-10-24)
+
+A bounded research spike alongside the SAM 2.1 and YOLOE work, not replacing
+it. [EfficientSAM3](https://github.com/SimonZeng7108/efficientsam3) (Apache-2.0,
+University of Bristol) keeps SAM 3's text-prompted concept segmentation —
+every instance of a phrase, with masks — but swaps SAM 3's large encoders
+for small ones. The fine-tuned full **RV-M** model is 92.7M parameters:
+RepViT-M1.1 image backbone (25.6M), MobileCLIP-S0 text encoder (42.5M), a
+DETR-style fusion transformer (21M), and segmentation/scoring heads (3.5M).
+Input fixed at 1008×1008. No LiteRT conversion was published (a community
+ONNX export exists, tested on EfficientViT only). Scope, as decided: RV-M
+converted and validated, EV-M operator inspection only, text prompts only,
+no latency comparison with other pipelines. Questions: (1) original
+checkpoint correct and useful on the desktop CPU; (2) export to LiteRT
+graphs with FP32 weights; (3) which ops fail delegation or compute wrongly
+on the Mali-G78; (4) original-model mask correctness at FP32, then FP16 and
+mixed; path: LiteRT first (llama.cpp/GGML has no EfficientSAM3 port, and its
+Android GPU backends — Vulkan, Adreno-targeted OpenCL — are unproven on
+this Mali). Stop and report if a piece can't be made correct at FP32 within
+a few bisect rounds.
+
+**Finding 1 — masks strong, label calibration weak** (desktop CPU, eight
+photos, 24 household prompts, threshold 0.5). Masks follow object
+boundaries closely; the correct phrase usually scores highest (suitcase and
+laptop 0.81, backpack 0.70–0.72), but competing phrases also clear 0.5
+("handbag" 0.72 and "person" 0.62 on a backpack, "television" 0.61 on a
+laptop, "cat" 0.54 on a dog that "dog" scores only 0.48 and "puppy" 0.64).
+A global threshold of 0.7 would drop correct detections ("puppy" 0.64), so
+none is applied: raw scores and masks are kept, and evaluation separates
+**detection** (was the object found), **mask quality** (does it follow the
+boundary), **semantic discrimination** (did the right phrase beat competing
+ones) and **calibration** (does a score mean a reliable match). For the
+Design Agent, overlapping labels are workable: group highly overlapping
+masks, keep several candidate descriptions, and use a multimodal LLM for
+disambiguation when needed — likely better than expecting a 93M model to be
+a perfect visual-language interpreter. Weaker semantic discrimination than
+full SAM 3 is a credible cost of the distilled 42.5M text encoder. Label
+quality is a separate model-quality problem and is not pursued in this
+spike.
+
+**Finding 2 — early fusion: most per-prompt cost can't be cached.** Unlike
+OWLv2 (late fusion: image once, queries nearly free), SAM 3 fuses text into
+the image features inside its encoder, and everything after — decoder,
+pixel decoder at 288×288, mask heads — works on prompt-specific features.
+Desktop CPU (RV-M), per stage:
+
+| Stage | Time | When |
+| --- | --- | --- |
+| Image backbone | 1,070 ms | once per image |
+| Text encoder | 114 ms | cache per phrase |
+| Fusion encoder | 774 ms | every prompt |
+| Decoder | 185 ms | every prompt |
+| Segmentation heads | 1,076 ms | every prompt |
+
+Non-cacheable cost: **≈ 2.0 s per prompt** on the desktop CPU. So the
+fusion encoder and segmentation heads, not the image backbone, are the
+main GPU targets; the three per-prompt pieces are profiled independently
+even if first exported as one graph. Batching prompts may raise
+throughput, but early fusion still does substantial work per prompt —
+batching is not assumed to cut total computation or memory.
+
 ## 7. Output contract (draft)
 
 For each source image, stored next to it, keyed by the image's SHA-256:
