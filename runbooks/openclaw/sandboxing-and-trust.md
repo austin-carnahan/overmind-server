@@ -16,8 +16,10 @@ Kerrigan (main) / Soma
     under the same identity, with the same capability as its parent
 ```
 
-Only two agents exist: `main` (Kerrigan) and `soma` (Soma). No separate
-worker-agent identities. The deciding idea, stated plainly: **different
+Three agents exist: `main` (Kerrigan), `soma` (Soma), and, since
+2026-10-23, `buckminster` (Buckminster, design). Buckminster also uses
+`sandbox.mode: "off"`; it is restricted by a narrow tool profile instead.
+There are no separate worker-agent identities. The deciding idea, stated plainly: **different
 conversations with the same agent should primarily differ in context, not
 capability.** Home, a brand-new topic, and a delegated subagent all get the
 same tools and host access, because nothing in the current config
@@ -168,6 +170,25 @@ denied it. Kerrigan has an explicit `tools.deny: ["garmin__*"]` for
 hygiene; this is independent of the sandbox/runtime work above and kept as
 agent-hygiene, not revisited in the iteration-3 simplification.
 
+**Node-hosted MCP (paired worker machines), since 2026-10-23:**
+
+- A paired node can run MCP servers locally and publish their tools to the
+  Gateway. The first is GIMP on the `macbook-m1` node for Buckminster.
+- **Naming differs from Gateway-level MCP.** Node-published tools are
+  `<server>_<tool>` with one underscore, for example `gimp_gimp_status`,
+  **not** `<server>__<tool>`. A `gimp__*` allow or deny rule silently
+  matches nothing.
+- **Visibility.** Node tools are visible to every agent by default, the same
+  as Gateway MCP. So `main` and `soma` deny `gimp_gimp_*`, and only
+  `buckminster` allows it.
+- **Node command lockdown.** An admin-minted join link
+  (`openclaw devices join-code`) auto-approves everything a node declares,
+  including `system.run`. So `gateway.nodes.commands.deny` blocks shell,
+  browser, screen, desktop, terminal-upload, ollama and exec-approval-write
+  commands for **all** nodes. Set it before pairing any new node. The full
+  list is in the
+  [environment report](../../design-notes/agentic-design-studio-environment.md#pairing-results-design-003-2026-10-23).
+
 **Stated plainly, not implied:** hiding MCP tool names from an
 unsandboxed, host-capable agent is not a hard security boundary. Kerrigan
 can execute arbitrary host commands — she could reach Garmin's HTTP
@@ -180,7 +201,7 @@ an agent host-admin capability and sensitive credentials on the same host.
 
 ```bash
 openclaw agents list
-  # confirm the roster: just main, soma — no leftover worker/test agents
+  # confirm the roster: main, soma, buckminster — no leftover worker/test agents
 
 openclaw sandbox explain --agent <id> --session <key> --json
   # sandbox.sessionIsSandboxed should be false everywhere right now —

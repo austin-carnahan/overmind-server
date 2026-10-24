@@ -237,4 +237,17 @@ interrupted run, unrelated to sandbox.mode. `sessions.reset` on the
 affected cron session key clears it; verified by manually running both
 affected automations end-to-end to completion. Restored
 skills.workshop.autonomous.mode to "auto".
+
+2026-10-23 — Buckminster and the first paired worker node (macbook-m1)
+Added a third agent, buckminster (design), scoped to its own tools:
+profile "minimal" plus fs, memory, view_image and gimp_gimp_*; no shell.
+Paired the user's M1 MacBook as a headless node (openclaw 2026.9.6,
+autoUpdate off) hosting GIMP Agent MCP 0.5.0 with gimp_run_python
+disabled. Set gateway.nodes.commands.deny before pairing, because an
+admin-minted join link auto-approves system.run. Found that node-published
+MCP tools are named <server>_<tool> (gimp_gimp_*), not <server>__<tool>;
+the first gimp__* rules silently matched nothing. Verified with real turns:
+Buckminster drives GIMP on the Mac, Kerrigan and Soma have no gimp_*
+tools, and a disconnect withdraws the tools and a reconnect republishes
+them.
 ```

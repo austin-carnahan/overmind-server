@@ -5,7 +5,7 @@ this will keep changing as model lineups change.
 
 ## Agents and workspace files
 
-Two resident agents on `overmind-01` today:
+Three resident agents on `overmind-01` today:
 
 ### Kerrigan (`main`)
 
@@ -34,7 +34,27 @@ create/schedule). See
 [MCP Servers and Tool Access](sandboxing-and-trust.md#mcp-servers-and-tool-access)
 for the real sandboxing interaction.
 
-### Workspace file responsibilities (both agents)
+### Buckminster (`buckminster`)
+
+**Role:** general-purpose design agent (image editing, layout, and design
+exploration). Added 2026-10-23 for the
+[Agentic Design Studio](../../design-notes/agentic-design-studio-mac-worker-milestone-v0.1.md).
+
+Workspace: `/home/openclaw/.openclaw/agents/buckminster/workspace`
+(`AGENTS.md`, `SOUL.md` loosely after Buckminster Fuller, `IDENTITY.md`,
+`USER.md`, `MEMORY.md`, `runbooks/gimp-worker.md`).
+
+**This is the first agent scoped to only its own tools.** It uses
+`tools.profile: "minimal"` plus `alsoAllow: ["group:fs", "group:memory",
+"view_image", "gimp_gimp_*"]`, so it has no shell and no web tools. Its
+design tools run on a paired worker node, not on Overmind. GIMP comes from
+the `macbook-m1` node, and Kerrigan and Soma deny `gimp_gimp_*`. It uses
+`sandbox.mode: "off"` to match the other agents. See
+[Sandboxing and Trust](sandboxing-and-trust.md#mcp-servers-and-tool-access)
+and the
+[environment report](../../design-notes/agentic-design-studio-environment.md).
+
+### Workspace file responsibilities (all agents)
 
 ```text
 AGENTS.md  → role, operating policy, workspace conventions, tool behavior
