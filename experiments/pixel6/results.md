@@ -723,3 +723,24 @@ one fewer spurious detection than GPU-only `fast`. The head — mostly the
 4,585-class projection — is still ~80% of the time. Step 3 (tiled top-1
 selection) was conditional on not beating 108 ms and was not run.
 
+## 2026-10-24 — cerebrate-hetero: serving worker, contention and sustained tests
+
+Code: [cerebrate-hetero](../../hosts/cerebrate-pixel6/cerebrate-hetero/README.md)
+(full tables there). The YOLOE-v8s TPU + GPU pipeline as a serving worker
+speaking `cerebrate-graph`'s protocol; hand-launched on spare ports, not yet
+deployed.
+
+| Check | Result |
+| --- | --- |
+| `fast` served outputs (8 photos) | identical to the validated pipeline: 132/132, no extras |
+| `default` (`gpu`, fp32) | exact: 132/132, box/mask IoU 1.0000; 202 ms |
+| startup fallback (TPU model unloadable) | serves from the GPU-only mixed model, 107 ms |
+| `fast` inference | 73.9 ms median (TPU 12.8, GPU 60.3) |
+| contention with production MobileNet | MobileNet always correct; its p99 4.9 → 14.1 ms concurrent, 8.1 ms serialized; hetero unaffected and identical to solo; 0 TPU recompiles |
+| sustained 3 min (1,024 requests) | p50 72.9–73.2 ms per window, p99 ≤ 76 ms; outputs identical throughout; TPU ≤ 55 °C, GPU ≤ 56 °C; RSS flat 713 MB |
+| guest round trip | ≈ 175 ms (4.9 MB fp32 image in, ~5 MB out over the AVF path) |
+
+Pre-existing transport finding: a single high-rate connection to
+`cerebrate-infer` (~400 requests/s) is reset about once per 30 s with or
+without this worker running.
+

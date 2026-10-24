@@ -1,0 +1,9 @@
+# Built inside the LiteRT 2.3 C++ SDK project used for litert-e2e
+# (spikes/litert-gpu-transformers: litert_cc_sdk, NDK 27, android-26, arm64-v8a).
+# tpu_stage.cc compiles against the TFLite 2.16.1 AAR headers only;
+# libtensorflowlite_jni.so is dlopen'ed at run time with RTLD_LOCAL.
+set(TFLITE216_HEADERS "<tflite_aar>/headers")   # see cerebrate-infer's README for the AAR
+add_library(tpu_stage STATIC tpu_stage.cc)
+target_include_directories(tpu_stage BEFORE PRIVATE ${TFLITE216_HEADERS})
+add_executable(cerebrate_hetero cerebrate-hetero.cc)
+target_link_libraries(cerebrate_hetero tpu_stage litert_cc_api absl::raw_hash_set absl::hash android log dl)

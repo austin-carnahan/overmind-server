@@ -1083,4 +1083,13 @@ conditions in Section 4.4).
   (`dlopen(RTLD_LOCAL)`). Recommended as YOLOE-v8s's experimental `fast`
   configuration; production promotion needs a worker that hosts this
   two-runtime pipeline and a TPU-contention check against `cerebrate-infer`.
+- **2026-10-24** — **`cerebrate-hetero` built and tested** (not yet
+  deployed): a general TPU-stage + GPU-stage serving worker on
+  `cerebrate-graph`'s protocol, TFLite 2.16 (NNAPI → Edge TPU) and LiteRT 2.3
+  (GPU) in one process, with a GPU-only fallback. YOLOE-v8s `fast` serves at
+  73.9 ms (132/132), `default` exact at 202 ms; production MobileNet stays
+  correct under concurrent TPU load (p99 4.9 → 14.1 ms), the hybrid is
+  unaffected, no TPU recompiles; 3-minute sustained run stable (p99 ≤ 76 ms,
+  TPU ≤ 55 °C, flat memory). Deployment (supervisor slot, MLServer model,
+  catalog entry) awaits a go.
 
