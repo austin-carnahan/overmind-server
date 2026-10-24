@@ -63,3 +63,16 @@ the spike, and the model were pushed.
 ```bash
 adb shell 'cd /data/local/tmp && LD_LIBRARY_PATH=/data/local/tmp ./tflite-gpu-spike mobilenet_v1_1.0_224_float.tflite 20'
 ```
+
+## Transformers: rejected (2026-10-23)
+
+DINOv2-small converted with `litert-torch` (and a version with its embedding
+step frozen, so every op is GPU-eligible) fails delegate initialization:
+`CONCATENATION: Expected a 4D tensor of shape BxHxWxC but got 1x1x384`, plus
+unsupported `BROADCAST_TO` / `GATHER_ND` in the unfrozen graph. The delegate
+creates no kernels and the model falls back to CPU (318 ms). It is a 4-D,
+CNN-oriented delegate. Transformers go through LiteRT 2.3.0's `CompiledModel`
+GPU path instead, which runs a prepared DINOv2-small correctly in 5 ms — see
+[litert-gpu-transformers](../litert-gpu-transformers/README.md), which also
+narrows this README's mention of `CompiledModel`'s "all-zero" output to uint8
+I/O models only.
