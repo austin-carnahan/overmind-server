@@ -306,6 +306,7 @@ original), **`fast`** a reduced-precision mode that passed the task checks.
 | MI-GAN 512 (published) | FP32 compute, 147 ms | FP16, 79 ms (≥ 41 dB in the infilled region) |
 | DINOv2-S/14 | FP32 only | — (both reduced modes fail) |
 | OWLv2 B/16 (ours) | FP32 only, 4.53 s image tower | — (both reduced modes fail) |
+| YOLOE-v8s prompt-free (ours; added 2026-10-24) | FP32, 186 ms (exact: 132/132 detections, mask IoU 1.0000) | FP16 + FP32 acc., 108 ms (132/132 kept, plus one borderline extra; mask IoU ≥ 0.969, mean 0.996) |
 | EfficientSAM3 RV-M (ours; added 2026-10-24, experimental) | FP32: vision 715 ms per image + grounding 3.28 s per prompt (exact) | FP16 + FP32 acc. grounding, 1.72 s per prompt (all detections kept, final-mask IoU ≥ 0.9986); vision stays FP32. Pure FP16 rejected (changes detections) |
 
 ## 2026-10-24 — EfficientSAM3 RV-M (our conversion, checkpoint rev `85b05896`)

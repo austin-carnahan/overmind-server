@@ -1047,4 +1047,8 @@ conditions in Section 4.4).
   rejects and lost more accuracy. The TPU itself matched the CPU int8
   reference at task level. TPU offload stays a goal for models that quantize
   well; the working toolchain is recorded in `yoloe-tpu`.
+- **2026-10-24** — **YOLOE-v8s variants registered** (GPU): `default` = FP32
+  (186 ms, exact), `fast` = FP16 with FP32 accumulation (108 ms; all 132
+  reference detections kept plus one borderline extra, mean mask IoU 0.996).
+  YOLOE-11s gets no `fast` variant (the mixed mode loses a detection).
 
