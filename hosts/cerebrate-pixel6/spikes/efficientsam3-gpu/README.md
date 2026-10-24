@@ -31,16 +31,21 @@ led to six rewrites, documented in [`esam3_prepare.py`](esam3_prepare.py):
 
 1. **Constants as inputs** — any op computing only on constants was either
    rejected (`SIGN`, `MEAN`) or, worse, **accepted and computed wrongly**:
-   layer 0's attention value projection of the 200×256 learned query
-   embeddings (a model weight used as an activation) gave cosine 0.86.
+   layer 0's self-attention over the 200×256 learned query embeddings (a
+   model weight used as an activation, folded by the converter into a
+   constant attention-value operand) gave cosine 0.86 — reproduced in a
+   15-op attention block in [g1-gpu-repros](../g1-gpu-repros/README.md).
 2. Sine-embedding frequencies precomputed.
 3. Float padding mask instead of bool (attention adds −1e4 to padded keys —
    exactly 0 weight after the fp32 softmax); single-key attention returns V.
 4. Box relative-position bias in 4-D instead of 5-D.
 5. `inverse_sigmoid` without its [0, 1] clamp (identity on sigmoid outputs).
-6. **Scores for the last decoder layer only**, as a 2-D matmul: with all six
-   layers the scores came out wrong although every input to them was exact —
-   bisected to reshaping `[1200,1]` into `[6,1,200,1]` (batch 6, one channel).
+6. **Scores for the last decoder layer only**: with all six layers the
+   scores came out wrong although every input to them was exact. A minimal
+   reproduction ([g1-gpu-repros](../g1-gpu-repros/README.md)) pinned it to a
+   batch-broadcast `BATCH_MATMUL` (`[6,1,200,256]` × `[256,1]`), which the
+   converter emits even from a 2-D rewrite; at batch 1 it is correct. (The
+   on-device bisect first pointed at the reshape into `[6,1,200,1]`.)
 
 Export-only fixes (no math change): the box-bias feature size pinned to
 Python ints (it arrives as tensors and branches), and inputs/outputs cloned

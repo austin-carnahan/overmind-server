@@ -296,18 +296,21 @@ on this device:
    EfficientSAM3 widened the rule to **any constant used as an activation**:
    ops with only constant inputs were either rejected (`SIGN`, `MEAN`) or
    accepted and computed wrongly — the decoder's 200×256 learned query
-   embeddings, fed straight into an attention projection, gave cosine 0.86.
+   embeddings, folded by the converter into a constant attention-value
+   operand, gave cosine 0.86 (reproduced in a 15-op attention block).
    Feed every such constant (learned queries, reference boxes, constant
    tokens) as an input; then no op computes on constants alone.
 4. **No per-channel broadcast multiplies** (`[N, C] × [C]`). Fold them into the
    adjacent linear layer's weights (DINOv2's LayerScale into `o_proj` and
    `fc2`) — exact, since scaling a linear layer's output channels by λ is
    scaling its weight rows and bias by λ.
-5. **Keep batch at 1 inside GPU graphs.** Reshaping EfficientSAM3's scores
-   `[1200,1]` into `[6,1,200,1]` (batch 6, one channel) gave wrong values
-   with every input exact. Fold extra leading dimensions into the spatial
-   ones, or compute only what the outputs use (there: the last of six
-   decoder layers).
+5. **Keep batch at 1 inside GPU graphs.** A batch-broadcast `BATCH_MATMUL`
+   (`[6,1,200,256]` × `[256,1]`, EfficientSAM3's six-layer scoring) gives
+   wrong values as a single op; at batch 1 it is right. The converter fuses a
+   2-D `reshape → matmul → reshape` rewrite back into the 4-D form, so fold
+   the batch into the spatial dimensions before the graph boundary, or
+   compute only what the outputs use (there: the last of six decoder layers).
+   Minimal reproductions: [g1-gpu-repros](../hosts/cerebrate-pixel6/spikes/g1-gpu-repros/README.md).
 6. **Verify twice.** The prepared model against the unmodified original in
    PyTorch, then the converted `.tflite` against CPU on the device, with
    element-wise comparison — never trust a GPU run that merely completes.
@@ -744,11 +747,28 @@ at FP32**: 11 samples, 20 detections, mask IoU 1.0000, 0 flipped pixels, at
 detection (mask IoU ≥ 0.9987) at 1.72 s; pure FP16 fails. Per-stage on the
 GPU: fusion encoder 80% (2.63 s), decoder and scoring 0.26 s, heads 0.39 s —
 so the encoder's self-attention over 5,184 image tokens is the target for any
-further speed-up (one candidate, untested: if its first layer's
-self-attention runs before any text is fused in, that layer could be cached
-per image). Not done: the on-device chain end to end (grounding was fed the
-desktop features, which the device vision graph reproduces to rel L2 2e-6),
-vision at reduced precision, and question 5 (dropped by decision).
+further speed-up.
+
+**Follow-up (2026-10-24): phone-native chain passed; variants registered.**
+With every stage on the phone fed the phone's own outputs (vision GPU → text
+CPU → grounding GPU), the 11 samples keep all 20 detections against the
+original model in both variants: `default` (FP32) final masks IoU 1.0000
+(1 pixel of 6.4M differs), `fast` (grounding FP16+FP32 accumulation, vision
+FP32) IoU ≥ 0.9986. Registered as **`default` = FP32** and **`fast` =
+FP16 with FP32 accumulation**; **pure FP16 rejected** (it changes
+detections). The production-promotion condition — passing the complete
+phone-native chain — is met; a `models/catalog.yaml` entry waits for a
+serving worker (the schema requires one; none serves the LiteRT GPU models
+yet). The two silent defects have minimal reproductions for upstream reports
+([g1-gpu-repros](../hosts/cerebrate-pixel6/spikes/g1-gpu-repros/README.md)).
+**First-layer caching:** the dependency check came first — no text enters the
+image features before layer 0, and its pre-norm self-attention precedes the
+cross-attention to the prompt; on the original model its output is
+bit-identical across prompts. Caching it would save ~11% per prompt (364 ms
+FP32 / 190 ms mixed, matching its 11.8% FLOP share); the remaining ~89% is
+genuinely prompt-dependent. Not implemented — a natural fit for a worker's
+per-image state rather than a graph restructure now. Not done: vision at
+reduced precision; question 5 (dropped by decision).
 
 ## 7. Output contract (draft)
 
@@ -988,9 +1008,20 @@ conditions in Section 4.4).
   after six exact rewrites (3.28 s per prompt vs 14.65 s CPU; 11 samples, 20
   detections, mask IoU 1.0000, 0 flipped pixels). Two new G1 defects, both
   silent wrong values found by on-device bisection: a constant used as an
-  activation (learned query embeddings) and a reshape into batch 6 with one
-  channel — Section 4.5 rules 3 and 5. FP16+FP32 accumulation: same
+  activation (learned query embeddings) and a batch-broadcast
+  `BATCH_MATMUL` (first read as a reshape; corrected by the minimal
+  reproduction) — Section 4.5 rules 3 and 5. FP16+FP32 accumulation: same
   detections, mask IoU ≥ 0.9987, 1.72 s per prompt; pure FP16 fails. The
   fusion encoder is 80% of GPU time per prompt. Desktop findings preserved:
   masks strong, label calibration weak (evaluated as four separate
   properties); early fusion makes ~2 s per prompt non-cacheable on the CPU.
+- **2026-10-24** — **EfficientSAM3 RV-M: phone-native chain passed, variants
+  registered.** Vision (GPU) → text (CPU) → grounding (GPU), each stage fed
+  the phone's own outputs, against the original model on the 11 samples:
+  20/20 detections in both variants; final masks IoU 1.0000 (`default`, FP32)
+  and ≥ 0.9986 (`fast`, FP16+FP32 accumulation). Registered `default`/`fast`;
+  pure FP16 rejected. Minimal reproductions of both silent defects — which
+  corrected the second from "reshape" to a batch-broadcast `BATCH_MATMUL`
+  `[6,1,200,256]`×`[256,1]`, wrong as a single op. First-fusion-layer caching
+  verified possible (bit-identical across prompts) and worth ~11% per prompt;
+  not implemented.

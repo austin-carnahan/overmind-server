@@ -306,6 +306,7 @@ original), **`fast`** a reduced-precision mode that passed the task checks.
 | MI-GAN 512 (published) | FP32 compute, 147 ms | FP16, 79 ms (≥ 41 dB in the infilled region) |
 | DINOv2-S/14 | FP32 only | — (both reduced modes fail) |
 | OWLv2 B/16 (ours) | FP32 only, 4.53 s image tower | — (both reduced modes fail) |
+| EfficientSAM3 RV-M (ours; added 2026-10-24, experimental) | FP32: vision 715 ms per image + grounding 3.28 s per prompt (exact) | FP16 + FP32 acc. grounding, 1.72 s per prompt (all detections kept, final-mask IoU ≥ 0.9986); vision stays FP32. Pure FP16 rejected (changes detections) |
 
 ## 2026-10-24 — EfficientSAM3 RV-M (our conversion, checkpoint rev `85b05896`)
 
@@ -357,12 +358,14 @@ segmentation heads 386 / 244 ms. On the desktop CPU the heads were the
 largest piece; on the Pixel GPU the convolution-heavy heads are cheap and the
 encoder dominates.
 
-**Bisect record (G1 defects found):** (1) layer 0's attention value
-projection of the 200×256 learned query embeddings (a weight used as an
-activation, fed as a constant) computed wrongly — cosine 0.86 — fixed by
-feeding the queries and presence token as inputs; (2) reshaping the scores
-`[1200,1]` into `[6,1,200,1]` produced wrong values with every input exact —
-fixed by scoring only the last decoder layer (the only one the outputs use).
+**Bisect record (G1 defects found):** (1) layer 0's self-attention over the
+200×256 learned query embeddings (a weight used as an activation, folded by
+the converter into a constant attention-value operand) computed wrongly —
+cosine 0.86 — fixed by feeding the queries and presence token as inputs;
+(2) the scores came out wrong with every input exact — first attributed to
+the reshape into `[6,1,200,1]`; the minimal reproduction (below) pinned it to
+a batch-broadcast `BATCH_MATMUL` `[6,1,200,256]`×`[256,1]` — fixed by scoring
+only the last decoder layer (the only one the outputs use), at batch 1.
 Ops on constants (`SIGN`, `MEAN`, `FLOOR_DIV`) were rejected rather than
 miscomputed. One transient run failure (OpenCL `-14`, a kernel execution
 error) on an intermediate build did not recur on the final graph.
@@ -370,3 +373,63 @@ error) on an intermediate build did not recur on the final graph.
 **Per image + per prompt, Pixel GPU:** 715 ms vision once per image, text
 17 ms per phrase on CPU (cacheable), then 3.28 s (fp32) or 1.72 s (mixed) per
 prompt.
+
+## 2026-10-24 — EfficientSAM3 RV-M: phone-native chain, variants, reproductions, caching
+
+Code: [efficientsam3-gpu](../../hosts/cerebrate-pixel6/spikes/efficientsam3-gpu/README.md),
+[g1-gpu-repros](../../hosts/cerebrate-pixel6/spikes/g1-gpu-repros/README.md).
+
+**Phone-native chain** ([`esam3_e2e_accuracy.py`](../../hosts/cerebrate-pixel6/spikes/efficientsam3-gpu/esam3_e2e_accuracy.py)):
+every stage on the phone, each fed the phone's own outputs — vision on the GPU
+(FP32, 340/340) → text on the CPU → grounding on the GPU (2,490/2,490); host
+steps only image preprocessing, tokenization and the padding mask. The same
+11 samples (20 detections, including scores 0.504 and 0.510) against the
+original model on the desktop CPU, at two levels: raw (kept set, scores,
+boxes, 288×288 masks) and final (the processor's own post-processing —
+bilinear upsample to the photo, sigmoid > 0.5 — applied to the device
+outputs). The host post-processing reproduces the processor's saved masks
+exactly (10/10 checkable samples), so the final level compares against the
+original pipeline itself.
+
+| Variant | Detections retained | Kept score diff | Kept box diff | Final masks (photo resolution) | Verdict |
+| --- | --- | --- | --- | --- | --- |
+| **default** (grounding FP32) | **20/20** | ≤ 2.4e-6 | ≤ 2.4e-7 | IoU 1.0000; 1 pixel of 6,376,448 differs (a value at the 0.5 threshold) | **exact** |
+| **fast** (grounding FP16 + FP32 acc.) | **20/20** | ≤ 1.6e-3 | ≤ 9.3e-4 | IoU ≥ 0.9986; 643 of 6,376,448 pixels differ | **near-identical** |
+
+**Variants registered** (decision 2026-10-24): `default` = FP32, `fast` =
+grounding at FP16 with FP32 accumulation (vision FP32 in both), pure FP16
+rejected. Both pass the phone-native chain — the condition set for
+production promotion. Not yet in `models/catalog.yaml`: its schema requires
+a serving worker (binary and port), and no worker serves the LiteRT GPU
+models yet.
+
+**Minimal reproductions** of the two silent G1 miscomputations (relative L2
+against the PyTorch reference; full table in the repro README):
+
+| Case | CPU | GPU |
+| --- | --- | --- |
+| `BATCH_MATMUL` `[6,1,200,256]` × `[256,1]` (one op) | 3.1e-7 | **1.2** |
+| same values at batch 1 | 2.9e-7 | 2.9e-7 |
+| attention block, values from a constant `[201,1,256]` (15 ops) | 5.0e-7 | **0.87** |
+| same block, that tensor as an input | 3.3e-7 | 3.6e-7 |
+| `BATCH_MATMUL` with a constant `[8,201,32]` operand, alone / after softmax | ≤ 1.4e-7 | ≤ 2.1e-7 |
+
+The first defect was originally attributed to the reshape into
+`[6,1,200,1]`; the reproduction corrects that to the batch-broadcast matmul
+(the converter re-fuses a 2-D rewrite into it).
+
+**Caching the first fusion layer** ([`esam3_cache_check.py`](../../hosts/cerebrate-pixel6/spikes/efficientsam3-gpu/esam3_cache_check.py)):
+the dependency was checked before any restructuring. The fusion encoder adds
+no text to the image features before its layers (`add_pooled_text_to_img_feat`
+is off for the image model), and each pre-norm layer runs norm → self-attention
+over image tokens only → residual → cross-attention to the prompt → FFN. So
+layer 0's self-attention is prompt-independent — confirmed on the original
+model: its post-self-attention state is bit-identical across "laptop", "bed"
+and "person" on the same photo, while the layer's output after
+cross-attention differs by up to 1.8. That block alone on the GPU: 364 ms
+FP32 / 190 ms mixed (rel L2 1.3e-7 / 3.1e-4), matching its FLOP share (11.8%
+of the fusion encoder: 30.2 GFLOP of 255). Caching it per image would save
+about 11% per prompt (3.28 → ~2.9 s default, 1.72 → ~1.53 s fast) for a
+one-time per-image cost of the same and 5.3 MB of state. Everything after it
+is prompt-dependent (from layer 0's cross-attention on, every image token
+carries the text). Not implemented.

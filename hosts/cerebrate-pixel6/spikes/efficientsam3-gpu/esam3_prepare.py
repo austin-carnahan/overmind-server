@@ -19,10 +19,11 @@ GPU delegate rejected (device log, 2026-10-24):
 5. inverse_sigmoid without its [0, 1] clamp: its inputs are sigmoid outputs,
    so the clamp is the identity (RELU_0_TO_1).
 6. Dot-product scores for the last decoder layer only -- the only layer the
-   eval-mode outputs read -- as a 2-D matmul ([queries, d] @ [d, 1]). With
-   all six layers, the scores came out wrong on the GPU although every input
-   was exact; bisected to the reshape of [1200, 1] into [6, 1, 200, 1]
-   (batch 6, one channel), not the matmul.
+   eval-mode outputs read. With all six layers the converter emits a
+   batch-broadcast BATCH_MATMUL ([6,1,200,256] x [256,1]; it re-fuses a 2-D
+   reshape -> matmul -> reshape into that form), which the GPU computes
+   wrongly -- minimal reproduction in spikes/g1-gpu-repros. At batch 1 it is
+   correct.
 """
 import math, sys
 import torch
@@ -121,7 +122,7 @@ def mean_pool_text(self, prompt, prompt_mask):
 
 def scoring_forward(self, hs, prompt, prompt_mask):
     """DotProductScoring.forward for the last decoder layer only (the only one
-    the eval-mode outputs use), scores as a 2-D matmul."""
+    the eval-mode outputs use), so the scores' matmul runs at batch 1."""
     if self.prompt_mlp is not None:
         prompt = self.prompt_mlp(prompt)
     proj_prompt = self.prompt_proj(self.mean_pool_text(prompt, prompt_mask))    # [1, d_proj]
