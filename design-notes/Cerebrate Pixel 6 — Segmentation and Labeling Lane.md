@@ -282,11 +282,16 @@ on this device:
    shape-dependent steps for the fixed input size (DINOv2: precompute the
    interpolated position embeddings; use the class token without expanding it),
    which removed `BROADCAST_TO` and `GATHER_ND`.
-3. **No per-channel broadcast multiplies** (`[N, C] × [C]`). Fold them into the
+3. **No large baked constants consumed directly** (SAM decoder: the
+   `[1,256,64,64]` dense prompt and `[4096,256]` positional table). Feed them
+   as model inputs, written once per process — the fully GPU-resident decoder
+   went from mask IoU ≈ 0 to exact. (Size/dtype threshold not established;
+   a 98K-element fp32 constant and fp16-cast constants were fine.)
+4. **No per-channel broadcast multiplies** (`[N, C] × [C]`). Fold them into the
    adjacent linear layer's weights (DINOv2's LayerScale into `o_proj` and
    `fc2`) — exact, since scaling a linear layer's output channels by λ is
    scaling its weight rows and bias by λ.
-4. **Verify twice.** The prepared model against the unmodified original in
+5. **Verify twice.** The prepared model against the unmodified original in
    PyTorch, then the converted `.tflite` against CPU on the device, with
    element-wise comparison — never trust a GPU run that merely completes.
 
@@ -809,3 +814,14 @@ conditions in Section 4.4).
   our transformers-graph decoder remains correct (GPU+CPU FP32, 82 ms).
   Added Depth Anything V2 Small and MI-GAN to the grid; results now recorded
   in `experiments/pixel6/`.
+- **2026-10-24** — **SAM 2.1 sequence complete; validated FP32 path.** The
+  GPU-clean box decoder's G1 failure was bisected to large baked constants;
+  fed as inputs, it is exact on the GPU at FP32 (80 ms vs 203 ms CPU). The
+  published v2 decoder, unmodified with point prompts, is correct at FP32
+  compute on this GPU and fails at FP16 (worst mask IoU 0.557 vs the 0.999
+  its card reports on a Pixel 8a). Across all four SAM formulations tried,
+  pure FP16 fails on the G1, FP16+FP32-accumulation gives worst mask IoU
+  ≈ 0.98, and FP32 is exact. Validated path: prepared encoder (1.38 s) +
+  constants-as-inputs box decoder, vs 10.2 s + ~150–200 ms per box on CPU.
+  Preparation rule added (Section 4.5). Open decision: an acceptance
+  threshold for the mixed-precision variants.

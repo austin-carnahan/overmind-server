@@ -96,7 +96,44 @@ exact (mask IoU 1.0, cosine 1.0); 328/328 ops on GPU:
 | GPU fp16 + fp32 accumulation | 52 ms | 0.000 | 0.011 | 117,200 | 2/8 | kernel defect |
 | GPU fp16 | 55 ms | 0.000 | 0.007 | 114,300 | 1/8 | kernel defect |
 
-(Under investigation — see the design notes' progress notes.)
+**Root cause (bisection, [`bisect_box_decoder.py`](../../hosts/cerebrate-pixel6/spikes/sam21-gpu/bisect_box_decoder.py)):
+large baked constants.** With the `[1,256,64,64]` dense prompt, `[4096,256]`
+positional table and output tokens baked into the graph, the GPU output is
+already wrong after the first transformer block (keys cosine 0.70); fed as
+inputs instead, the same graph is exact (cosine 1.00000, rel L2 4e-7). Same
+class of defect `litert-community`'s RF-DETR card reports for this GPU
+accelerator, now reproduced on the G1. (Our prepared DINOv2 bakes a 98K-element
+constant without trouble, and the published fp16 decoder bakes these same
+constants cast to fp16 without trouble — size and dtype may matter; not
+established.)
+
+**Decoder (box prompt), constants as inputs** (328/328 on GPU; the benchmark
+rewrites 24 MB of embeddings and constants every iteration, ~20 ms of the
+total — in use only the 3 KB prompt changes per box):
+
+| Config | E2E | Worst mask IoU | Mean IoU | Pixels flipped | Same best mask | Verdict |
+| --- | --- | --- | --- | --- | --- | --- |
+| CPU | 203 ms | 1.00000 | 1.00000 | 0 | 8/8 | reference |
+| **GPU fp32** | **80 ms** | **1.00000** | 1.00000 | **0** | 8/8 | **correct** |
+| GPU fp16 + fp32 accumulation | 57 ms | 0.978 | 0.9946 | 314 | 8/8 | slight degradation |
+| GPU fp16 | 60 ms | 0.559 | 0.895 | 5,756 | 8/8 | precision failure |
+
+**Published v2 decoder, unmodified** (`litert-community`, rev `049c2500`;
+425/425 on GPU), with its native 2-token point prompt (one positive click +
+padding), eight samples (four photos × two clicks), against the original
+model decoding the same clicks ([`prep_published_point.py`](../../hosts/cerebrate-pixel6/spikes/sam21-gpu/prep_published_point.py)):
+
+| Config | E2E | Worst mask IoU | Mean IoU | Pixels flipped | Same best mask | Verdict |
+| --- | --- | --- | --- | --- | --- | --- |
+| CPU | 206 ms | 0.975 | 0.9988 | 18 | 8/8 | fp16-weight error |
+| GPU fp32 compute | 69 ms | 0.975 | 0.9988 | 18 | 8/8 | fp16-weight error; no constants defect |
+| GPU default (fp16) | 48 ms | 0.557 | 0.963 | 1,739 | 7/8 | precision failure |
+
+Its card reports binary IoU 0.999 vs CPU at fp16 on a Pixel 8a; on this
+Pixel 6, against the original model, pure fp16 fails. Across every SAM 2.1
+formulation tried — two decoders, two encoders, ours and published — **pure
+FP16 fails on the G1, FP16 with FP32 accumulation lands at worst mask IoU
+≈ 0.98, and FP32 is exact.**
 
 **Image encoder** (four photos; task metric = masks decoded by the original
 fp32 decoder from the device embeddings, eight box prompts):

@@ -58,3 +58,19 @@ Full numbers: [experiments/pixel6/results.md](../../../../experiments/pixel6/res
   re-authoring (Apache-2.0, attributed in the file) to 3-token boxes with
   rank-4 attention and plain LayerNorm: exact on CPU, **wrong on this GPU at
   every precision** (mask IoU ≈ 0) — a G1 kernel defect under bisection.
+
+## The decoder defect, found, and the published decoder on this device (2026-10-24)
+
+[`bisect_box_decoder.py`](bisect_box_decoder.py): the GPU-clean box decoder's
+failure is **large baked constants** — fed as inputs, the fully GPU-resident
+decoder is exact at fp32 (80 ms, 0 flipped pixels). The published v2 decoder,
+unmodified, with its native point prompts
+([`prep_published_point.py`](prep_published_point.py)), runs correctly at fp32
+compute on this GPU (its remaining error is its fp16 weights) and fails at
+fp16 (worst mask IoU 0.557). Numbers in the
+[ledger](../../../../experiments/pixel6/results.md#2026-10-24--sam-21-hiera-tiny).
+
+**Validated SAM 2.1 path on the Pixel 6 (fp32, exact vs the original):** our
+prepared encoder (1.38 s/image) + the constants-as-inputs box decoder (80 ms
+per box as benchmarked, less with persistent buffers) — vs 10.2 s + ~150–200 ms
+per box on CPU.
