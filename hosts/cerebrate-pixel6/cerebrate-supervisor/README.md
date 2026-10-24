@@ -284,7 +284,7 @@ pre-flight orphan-port check.
 
 ## Segmentation and Labeling Lane Step 1: `graph1`–`graph3` slots (2026-10-23)
 
-**Written and tested on the Mac; not yet deployed to the device.** Three
+**Deployed 2026-10-23** (see the deploy record at the end of this section). Three
 identical slots for [`cerebrate-graph`](../cerebrate-graph/README.md), the
 general-purpose ONNX Runtime worker, on fixed ports **8769, 8770, 8771**. One
 model per process stays the rule (catalog v4 Section 8), so a pipeline that
@@ -310,5 +310,23 @@ graph slots started concurrently with different backends, idempotent
 `START`, configuration conflict, `generate` still rejecting graph backends,
 `LIST`, crash detection (`kill -9` → `EXITED exit_code=-9`), `STOP`.
 
-Deploying it means swapping the supervisor binary with production workers
-running, using the drain procedure in [Deploy](#deploy) above.
+### Deploy record (2026-10-23)
+
+Drain-and-swap per [Deploy](#deploy), driven from `overmind-01` over its
+wireless ADB pairing and the supervisor's LAN port:
+
+1. Recorded `LIST` (all three workers `RUNNING`, configs as in the catalog).
+2. Pushed the new binary as `cerebrate-supervisor.new` (sha256 `908f5620…48fd9`)
+   and copied the running one to **`cerebrate-supervisor.prev`** (`b1fa7d1e…15c4`)
+   as the rollback.
+3. `STOP` `gguf`, `generate`, `infer` through the old supervisor; killed it;
+   moved the new binary into place; relaunched with the `nohup setsid`
+   command above. It came up as `workers=infer,generate,gguf,graph1,graph2,graph3`.
+4. `START` each worker with its recorded config — all `OK` on fresh PIDs.
+
+Verified afterward through MLServer: `cerebrate-infer` classifies,
+`cerebrate-generate` generates, `cerebrate-gguf` reports ready (not
+exercised with a full Granite-Docling request). Total worker downtime was
+seconds. **Rollback:** drain the same way, `mv cerebrate-supervisor.prev
+cerebrate-supervisor`, relaunch, and `START` the three workers (the graph
+slots disappear with it).

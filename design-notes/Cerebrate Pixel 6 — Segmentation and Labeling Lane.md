@@ -1,6 +1,6 @@
 # Cerebrate Pixel 6 — Segmentation and Labeling Lane
 
-**Status:** PROPOSED — Step 1 (general-purpose ONNX graph worker) in progress.
+**Status:** PARTIAL — Step 1 (general-purpose ONNX graph worker) done and deployed; Step 2 next.
 **Date:** 2026-10-23
 **System:** Overmind / Cerebrate Pixel 6
 **Builds on:** [Operational Model Catalog v4](cerebrate_pixel6_operational_model_catalog_v4.md),
@@ -430,3 +430,14 @@ conditions in Section 4.4).
   block, so Step 2B tests a v8 and an 11 variant. Step 2 split into parallel
   tracks — GPU path characterization (2A) and YOLOE on the TPU (2B). RAM++
   taken out of the grid and deferred (Section 4.4).
+- **2026-10-23** — **Step 1 gate met.** Supervisor drain-and-swap done
+  (production workers restarted on the same configs within seconds;
+  previous binary kept as `cerebrate-supervisor.prev`). The `cerebrate-graph`
+  MLServer adapter deployed without restarting MLServer (repository `load`);
+  `graph-canary` (MobileNet ONNX, `graph3`, CPU) returns class 795 through
+  `inference.home.arpa`, and `cerebrate-infer`, `cerebrate-generate` and
+  `cerebrate-gguf` all verified afterward. The guest's checkout now tracks
+  this lane's branch until it is merged. Deploy details in the
+  [supervisor](../hosts/cerebrate-pixel6/cerebrate-supervisor/README.md#deploy-record-2026-10-23)
+  and [MLServer](../hosts/cerebrate-pixel6/mlserver/README.md#deploy-notes-2026-10-23)
+  READMEs.

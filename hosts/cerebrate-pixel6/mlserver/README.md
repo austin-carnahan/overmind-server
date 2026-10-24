@@ -605,8 +605,8 @@ sampler instead of trusting the C API's undocumented default.
 
 ## Segmentation and Labeling Lane Step 1 — generic `cerebrate-graph` adapter (2026-10-23)
 
-**Written and tested against a local MLServer 1.7.1 on the Mac; not yet
-deployed to the guest.** [`models/cerebrate-graph/`](models/cerebrate-graph/)
+**Deployed 2026-10-23** (deploy notes at the end of this section).
+[`models/cerebrate-graph/`](models/cerebrate-graph/)
 holds a generic tensor-passthrough runtime for
 [`cerebrate-graph`](../cerebrate-graph/README.md): each V2 request input
 becomes one named tensor for the worker, each worker output becomes one V2
@@ -632,3 +632,24 @@ worker running RF-DETR Seg Nano: V2 outputs bit-exact against the reference,
 a bad input name returns HTTP 400 with the worker's message, a killed worker
 fails the next request and a repository `load` restarts it with a fresh PID,
 `unload` stops the worker and returns the refcount to 0.
+
+### Deploy notes (2026-10-23)
+
+- **No MLServer restart.** MLServer 1.7.1 picks up a model folder added after
+  startup through `POST /v2/repository/models/<name>/load` (verified on the Mac
+  first, with the already-loaded models staying ready). So the deploy was:
+  update the guest checkout, then load `graph-canary`. The adapter started
+  `graph3` through the supervisor and the canary returned class 795 — inside
+  the guest and through `inference.home.arpa` from `overmind-01`. On future
+  MLServer restarts it loads at startup like the other models.
+- **Guest checkout.** It was on `main` at `408cbfa`, 70 commits behind, with
+  the `cerebrate-gguf` adapter present as *untracked* files. Those files were
+  byte-identical to the committed versions, so they were moved to
+  `/home/droid/untracked-backup-2026-10-23/` and the checkout fast-forwarded
+  to the `feat/segmentation-lane-graph-worker` branch. The running adapters'
+  code was unchanged by the fast-forward (the `cerebrate-infer` and
+  `cerebrate-generate` adapters have no changes in that range). Switch the
+  guest back to `main` once the branch is merged.
+- MLServer logs a harmless warning that the model name `graph-canary` differs
+  from its folder name `cerebrate-graph`; the folder holds the shared adapter
+  code, and later models will get their own folders.

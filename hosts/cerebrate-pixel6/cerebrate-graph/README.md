@@ -1,8 +1,9 @@
 # cerebrate-graph
 
-**Status:** PARTIAL — worker built and verified on the Pixel 6 by manual
-launch; supervisor slots and the MLServer canary are written and tested on
-the Mac, not yet deployed to the device.
+**Status:** PARTIAL — deployed 2026-10-23: runs under `cerebrate-supervisor`
+(slots `graph1`–`graph3`) and serves the `graph-canary` MLServer model
+through `inference.home.arpa`. Acceleration beyond the MobileNet canary is
+still being characterized (lane Step 2).
 
 General-purpose ONNX Runtime graph worker, Step 1 of the
 [Segmentation and Labeling Lane](../../../design-notes/Cerebrate%20Pixel%206%20%E2%80%94%20Segmentation%20and%20Labeling%20Lane.md).
