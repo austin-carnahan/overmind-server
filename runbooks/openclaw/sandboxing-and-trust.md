@@ -185,8 +185,12 @@ agent-hygiene, not revisited in the iteration-3 simplification.
   (`openclaw devices join-code`) auto-approves everything a node declares,
   including `system.run`. So `gateway.nodes.commands.deny` blocks shell,
   browser, screen, desktop, terminal-upload, ollama and exec-approval-write
-  commands for **all** nodes. Set it before pairing any new node. The full
-  list is in the
+  commands for **all** nodes. Set it before pairing any new node. File
+  Transfer's `file.*`/`dir.*` commands are marked dangerous and need
+  `gateway.nodes.commands.allow`, plus a per-node path policy under
+  `plugins.entries.file-transfer.config`, plus a node approval. Only
+  `file.fetch` is allowed, and it is read-only, limited to the Mac's
+  `~/DesignStudio/workspaces/`. The full list is in the
   [environment report](../../design-notes/agentic-design-studio-environment.md#pairing-results-design-003-2026-10-23).
 
 **Stated plainly, not implied:** hiding MCP tool names from an

@@ -265,6 +265,53 @@ launchd service (`openclaw node install`) needs the nvm `PATH` handled first.
 160 MB of free RAM and a load around 4 on 8 GB. Watch this during heavier
 edits.
 
+## Spike C results, 2026-10-23
+
+**Gate C: passed.** In one turn from Overmind, Buckminster changed the
+`Label` text and moved `Rug placeholder` 120 px left, both inside one
+`gimp_gimp_edit_batch` undo group. The operator saw both changes live, and
+one Ctrl+Z reverted both. Buckminster looked up the image and layer IDs
+fresh (image 3, layers 18/20) and didn't save.
+
+**Finding: Buckminster couldn't see its own renders.** The images crossed
+the node connection intact (`image/png`, 775 KB), but every
+`gimp_gimp_render` result reached the model as `"omitted": true`.
+
+- Cause: Code Mode's bridge between the JavaScript runner and tools is
+  JSON-only, so image results can't cross it.
+- Turning Code Mode off per agent doesn't help. OpenClaw then falls back to
+  Tool Search, which nests calls the same way and also omits images.
+- `tools.toolSearch` can only be set globally, not per agent. It was left
+  alone to avoid changing Kerrigan's and Soma's tool surfaces.
+
+**Fix: export, fetch, view.** `view_image` stays a direct tool even under
+Code Mode. The loop is:
+
+1. `gimp_gimp_export` a PNG into the project working directory on the Mac.
+2. `file_fetch` it to Overmind.
+3. `view_image` the returned local path.
+
+Verified: Buckminster correctly read the label text, the rectangle's colour
+and position, and the room objects, matching the exported file. That run
+took 8 calls and about 67k tokens, against 28 calls and 378k for Spike C.
+
+**What this required:**
+
+- **Path policy.** `plugins.entries.file-transfer.config` is
+  `{policyVersion: 2, nodes: {<macbook-m1 node id>: {ask: "off",
+  allowReadPaths: ["/Users/dev/DesignStudio/workspaces/**"], maxBytes:
+  16777216, followSymlinks: false}}}`. That is read-only, with no write
+  paths.
+- **Gateway opt-in.** `gateway.nodes.commands.allow: ["file.fetch"]`. All
+  `file.*` and `dir.*` commands are marked dangerous and need this.
+- **Node approval.** The node then requested an expanded command surface
+  (its existing commands plus `file.fetch`), approved with
+  `openclaw nodes approve`.
+- **Agent tools.** `file_fetch` was added to Buckminster's `alsoAllow`.
+- **Workspace docs.** Buckminster's `runbooks/gimp-worker.md` ("Seeing your
+  work") and `AGENTS.md` now describe this as the only way to look at a
+  document.
+
 ## Risks
 
 - The Mac's local exec defaults are broad until finding 2's denies are in
