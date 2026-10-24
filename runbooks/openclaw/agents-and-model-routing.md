@@ -46,10 +46,26 @@ Workspace: `/home/openclaw/.openclaw/agents/buckminster/workspace`
 
 **This is the first agent scoped to only its own tools.** It uses
 `tools.profile: "minimal"` plus `alsoAllow: ["group:fs", "group:memory",
-"view_image", "gimp_gimp_*", "file_fetch", "exec"]`. It has no web tools. Its
-`exec` is in `mode: "allowlist"`, with one Gateway approvals entry
-(`design-checkpoint`), so it can take its own design checkpoints but has no
-general shell. Its
+"view_image", "gimp_gimp_*", "file_fetch", "exec"]`. It has no web or
+messaging tools.
+
+- **Shell (since 2026-10-23):** `exec` is `{host: "gateway", mode: "full"}`
+  with no sudo (`elevated` unset), the same as Kerrigan and Soma. It is used
+  for design notes, reading files, and local git. It briefly ran with an
+  allowlist that only permitted `design-checkpoint`; that was dropped once a
+  general-purpose design role needed git.
+- **Limits enforced by the system:** `/opt/overmind` isn't writable by
+  `openclaw`, and the Gateway denies `system.run` on every node, so it has no
+  shell on the Mac.
+- **Limits that are policy only (its `AGENTS.md`):**
+  - checkpoints only through `design-checkpoint`, never by hand;
+  - git is local only, with no push and no borrowed credentials;
+  - stay out of other agents' workspaces and OpenClaw state.
+
+  Like Kerrigan and Soma, it runs as the shared `openclaw` user, so these are
+  not OS-enforced.
+- **Mode settings:** Code Mode and Tool Search are at their defaults.
+  `gimp_run_python` is off on the Mac side. Its
 design tools run on a paired worker node, not on Overmind. GIMP comes from
 the `macbook-m1` node, and Kerrigan and Soma deny `gimp_gimp_*`. It uses
 `sandbox.mode: "off"` to match the other agents. See

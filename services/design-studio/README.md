@@ -6,14 +6,15 @@ were verified on 2026-10-23. Buckminster runs its own checkpoints (it
 committed `0002`). Restoring a checkpoint onto a worker that has lost its
 files is **not built yet**; see the environment report's Spike E caveats.
 
-**Agent access.** Buckminster's exec tool is limited by an allowlist to this
-one program (`agents.entries.buckminster.tools.exec.mode: "allowlist"` plus a
-Gateway approvals entry for
-`/opt/overmind/services/design-studio/design-checkpoint`). Because an agent
-chooses the arguments, the tool validates every input that decides where it
-reads or writes: the store path is fixed, project and staging ids are
-format-checked, and worker paths must be under `/Users/dev/DesignStudio/workspaces/`.
-Treat any new argument the same way.
+**Agent access.** Buckminster runs this tool from its shell on Overmind.
+The shell was an exec allowlist naming only this program until 2026-10-23,
+and is now full, with no sudo. Committing only through this tool is now a
+rule in Buckminster's `AGENTS.md`, not something the system enforces; the
+`openclaw` user owns the store. The tool still validates every input that
+decides where it reads or writes, as if an agent chose it: the store path is
+fixed, project and staging ids are format-checked, and worker paths must be
+under `/Users/dev/DesignStudio/workspaces/`. Treat any new argument the same
+way.
 
 Overmind is the authority for design projects. A worker (currently the
 `macbook-m1` OpenClaw node running GIMP) edits a working copy. Only a

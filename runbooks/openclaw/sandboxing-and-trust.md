@@ -18,7 +18,9 @@ Kerrigan (main) / Soma
 
 Three agents exist: `main` (Kerrigan), `soma` (Soma), and, since
 2026-10-23, `buckminster` (Buckminster, design). Buckminster also uses
-`sandbox.mode: "off"`; it is restricted by a narrow tool profile instead.
+`sandbox.mode: "off"`. Its tool profile is narrow (no web or messaging), but
+it has a full host shell with no sudo, like the others. See
+[agents and model routing](agents-and-model-routing.md#buckminster-buckminster).
 There are no separate worker-agent identities. The deciding idea, stated plainly: **different
 conversations with the same agent should primarily differ in context, not
 capability.** Home, a brand-new topic, and a delegated subagent all get the
