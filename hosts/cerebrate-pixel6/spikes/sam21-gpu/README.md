@@ -40,3 +40,21 @@ verifies at stage 1 (all four photos, max abs ≤ 9e-6) and stage 2 (cosine
 Then `litert-community` turned out to publish GPU-clean fp16 conversions of
 both halves; per the lane's Section 4.7 policy they are evaluated next, with
 these results as the FP32 comparison.
+
+## Published conversions and the GPU-clean box decoder (2026-10-24)
+
+Full numbers: [experiments/pixel6/results.md](../../../../experiments/pixel6/results.md#2026-10-24--sam-21-hiera-tiny).
+
+- [`accuracy_encoder.py`](accuracy_encoder.py) scores encoder embeddings
+  against the original encoder and, at task level, decodes the eight box
+  prompts from the device embeddings with the original fp32 decoder.
+- **Our prepared encoder is pixel-identical on the GPU at fp32 (1.38 s vs
+  10.2 s CPU).** The published fp16 encoder carries a small fp16-weight error
+  even at fp32 compute; pure fp16 compute fails task level on both.
+- [`inspect_published.py`](inspect_published.py) found the published decoder
+  takes a fixed 2-token prompt (click + padding), while the original encodes a
+  box as 3 tokens — so it can't take box prompts as built.
+- [`build_box_decoder.py`](build_box_decoder.py) adapts its GPU-clean
+  re-authoring (Apache-2.0, attributed in the file) to 3-token boxes with
+  rank-4 attention and plain LayerNorm: exact on CPU, **wrong on this GPU at
+  every precision** (mask IoU ≈ 0) — a G1 kernel defect under bisection.

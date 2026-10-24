@@ -235,7 +235,18 @@ evidence showing what actually ran on the accelerator.
 | RF-DETR Seg Nano | Fixed-class detector; GPU test case | Transformer | 123 MB fp32 | GPU | LiteRT GPU, prepared | CPU (483 ms, measured) | — |
 | OWLv2 image tower | Open-vocabulary detection | ViT-B/16 at 960×960 | ~155M params | **GPU** | LiteRT GPU, prepared | CPU (slow) | — |
 | DINOv2-small (test model, not in the pipeline) | GPU path proof | Transformer (ViT-S/14) | 22M params, 87 MB fp32 | **GPU** | **LiteRT GPU, prepared: 68.6 ms end to end at fp32, cosine 1.0 (measured)** | CPU (344 ms, measured) | — |
+| Depth Anything V2 Small (added 2026-10-24) | Depth-aware edits: relative depth map | Transformer (DINOv2 ViT-S + DPT head) | ~25M params | **GPU** | Published `litert-community/depth-anything-v2-small`, validated per Section 4.7 | Our prepared conversion (DINOv2 rules apply) | CPU |
+| MI-GAN 512 Places2 (added 2026-10-24) | Infill: object removal and correction | CNN (mobile inpainting GAN) | small (size to confirm) | **GPU** | Published `litert-community/MI-GAN-512-Places2-LiteRT`, validated per Section 4.7 | TPU int8, if quality holds | CPU |
 | OWLv2 text tower | Phrase → embedding | Small text transformer | Small | CPU, or precomputed offline | CPU | — | — |
+
+The two models added on 2026-10-24 extend the design capabilities beyond
+segmentation — depth-aware edits and infill — and are tested after the
+planned SAM 2.1, DINOv2 and RF-DETR runs. Their task metrics: for depth,
+scale-and-shift-invariant agreement with the original model's depth map
+(AbsRel, δ<1.25) plus ordering of labeled objects by depth; for infill,
+masked-region agreement with the original model's output on the same image
+and mask (PSNR/SSIM, plus a perceptual metric) — never just whole-image
+cosine. Licences to confirm at evaluation time.
 
 Every model therefore needs **two exports**: int8 ONNX (or LiteRT) for the
 TPU path and a float `.tflite` for the GPU path, each with its own CPU
@@ -543,7 +554,13 @@ If the published FP16 v2 decoder also fails on the Pixel 6, that suggests a
 device-specific problem but doesn't establish that G1 FP16 hardware is
 responsible — distinguish driver behavior, graph structure, precision, and
 input preparation before assigning a root cause. Then DINOv2 and
-RF-DETR-Seg-Nano's published conversions go through the same evaluation.
+RF-DETR-Seg-Nano's published conversions go through the same evaluation,
+then Depth Anything V2 Small and MI-GAN (Section 4.3).
+
+Every run is recorded in [`experiments/pixel6/`](../experiments/pixel6/README.md)
+— device and software environment, method, and a run ledger
+([results.md](../experiments/pixel6/results.md)) — so results can be revisited
+on new runtime releases or published.
 
 **Gate:** at least one GPU path runs a transformer vision model correctly on
 the Pixel with measured latency and thermal behavior — or a documented,
@@ -776,3 +793,19 @@ conditions in Section 4.4).
   came to light. Adopted: discover-before-converting, the FP32-reference
   precision policy and four validation stages (Section 4.7), the SAM
   evaluation sequence (Step 2A), and model validation ahead of Step 3.
+- **2026-10-24** — **SAM 2.1 sequence, steps 1, 2 and 4.** Encoder: our
+  prepared FP32 encoder runs fully on the GPU (797/797) and is
+  **pixel-identical to the original (0 flipped pixels across 24 masks) at
+  1.38 s vs 10.2 s on CPU**; FP16-with-FP32-accumulation is 0.77 s with worst
+  mask IoU 0.981; pure FP16 fails (0.83). The published FP16 encoder matches
+  those numbers at FP16/mixed compute and carries a small FP16-weight error
+  (worst IoU 0.991) even at FP32 compute; its card's "mask quality holds at
+  fp16" (Pixel 8a, one click) does not hold on this Pixel 6. Decoder: the
+  published decoder has a fixed 2-token prompt (one click + padding) and
+  can't take box prompts, which the original encodes as 3 tokens. A GPU-clean
+  3-token box decoder adapted from the published script (rank-4 attention,
+  plain LayerNorm, FP32 weights) is exact on CPU but **wrong on the GPU at
+  every precision (mask IoU ≈ 0)** — a G1 kernel defect, under investigation;
+  our transformers-graph decoder remains correct (GPU+CPU FP32, 82 ms).
+  Added Depth Anything V2 Small and MI-GAN to the grid; results now recorded
+  in `experiments/pixel6/`.

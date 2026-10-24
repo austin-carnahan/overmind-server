@@ -15,7 +15,7 @@
 // samples.
 //
 // usage: litert-e2e <model.tflite> <cpu|gpu|gpu+cpu> <req|host> <inputs.txt> <out_dir>
-//                   <iterations> [sustain_seconds] [fp32|fp16|default]
+//                   <iterations> [sustain_seconds] [fp32|fp16|fp16acc32|default]
 #include <math.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -108,9 +108,10 @@ int main(int argc, char** argv) {
   if (gpu && strcmp(prec, "default") != 0) {
     LrtGpuOptions* g;
     CHECK("LrtCreateGpuOptions", LrtCreateGpuOptions(&g));
-    CHECK("SetPrecision", LrtSetGpuAcceleratorCompilationOptionsPrecision(
-                              g, strcmp(prec, "fp16") == 0 ? kLiteRtDelegatePrecisionFp16
-                                                           : kLiteRtDelegatePrecisionFp32));
+    LiteRtDelegatePrecision dp = strcmp(prec, "fp16") == 0       ? kLiteRtDelegatePrecisionFp16
+                                 : strcmp(prec, "fp16acc32") == 0 ? kLiteRtDelegatePrecisionFp16WithFp32Accum
+                                                                  : kLiteRtDelegatePrecisionFp32;
+    CHECK("SetPrecision", LrtSetGpuAcceleratorCompilationOptionsPrecision(g, dp));
     const char* id; void* payload; void (*deleter)(void*);
     CHECK("GetOpaqueGpuOptionsData", LrtGetOpaqueGpuOptionsData(g, &id, &payload, &deleter));
     LiteRtOpaqueOptions opaque;
