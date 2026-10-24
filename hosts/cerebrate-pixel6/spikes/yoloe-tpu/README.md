@@ -62,6 +62,17 @@ class and box IoU, plus a label-agnostic count; mask IoU).
 - [`yoloe_chain_desktop.py`](yoloe_chain_desktop.py) — backbone (fp32/int8) →
   fp32 head on the desktop, in the device output layout, for the task check.
 
+- [`yoloe_int8_tflite.py`](yoloe_int8_tflite.py) — fully-integer TFLite
+  backbone via litert-torch PT2E (SiLU spelled out as `x * sigmoid(x)`, or
+  it stays float); int8 input and outputs. [`yoloe_pt2e_debug.py`](yoloe_pt2e_debug.py)
+  separates PT2E quantization error from conversion error.
+- [`tflite-nnapi-bench/main.cc`](tflite-nnapi-bench/main.cc) — classic TFLite
+  C API (2.16.1, same library as `cerebrate-infer`) on the CPU or through the
+  NNAPI delegate pinned to `google-edgetpu` with NNAPI's CPU fallback
+  disallowed; raw tensor files in and out; load (incl. TPU compile), first
+  and median latency. Built like `cerebrate-infer`
+  (`aarch64-linux-android24-clang++ -std=c++17 ... -ltensorflowlite_jni`).
+
 ## Device runs ([`yoloe_run.sh`](yoloe_run.sh))
 
 Hand-launched `cerebrate-graph` worker per (model, backend) on a spare port,

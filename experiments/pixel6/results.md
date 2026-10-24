@@ -513,3 +513,43 @@ better calibration; many of the losses are label flips between near-synonyms
 among 4,585 classes rather than missed objects. TPU compile of the int8
 backbone (9 MB) not yet run — waiting for the VM watchdog on overmind-01.
 
+## 2026-10-24 — YOLOE backbone on the Edge TPU (int8)
+
+Code: [yoloe-tpu](../../hosts/cerebrate-pixel6/spikes/yoloe-tpu/README.md).
+All runs with the VM watchdog active and a memory guard (minimum free memory
+3.57–3.65 GB: the small int8 backbone compiles without memory pressure).
+
+**ORT + NNAPI on the QDQ int8 backbone:** ORT's NNAPI provider can't take
+quantized `Sigmoid` (180 node units — every SiLU), `Slice` (64) or `MaxPool`
+(8): 55 partitions, 503/695 nodes; the TPU then rejects float tensors at the
+partition boundaries (`input.type != TENSOR_FLOAT32`) and the load fails.
+Not viable without rewriting SiLU.
+
+**TFLite + NNAPI (TPU path 2), fully-integer TFLite from litert-torch PT2E**
+(YOLOE-v8s backbone + neck; 212 ops, all int8 — after spelling SiLU out as
+`x * sigmoid(x)`; as `nn.SiLU` it stayed float):
+
+| Config | Placement | Load (incl. compile) | Median |
+| --- | --- | --- | --- |
+| TFLite CPU (int8 kernels) | — | 4 ms | 132 ms |
+| **TFLite + NNAPI → Edge TPU** | 76/212 nodes delegated in 7 partitions; driver 200/236 NNAPI ops supported, compiled (status 0) | 1.47 s | **90 ms** |
+
+The 36 rejected ops are the graph's 24 int8→int8 `QUANTIZE` requantizations
+(where branches with different scales meet, mostly at concatenations) and
+their neighbours: the TPU only takes `QUANTIZE` from float input
+(`RET_CHECK input.type != TENSOR_FLOAT32`, ×24).
+
+**Accuracy problems, two separate ones:**
+- *Quantization (PT2E):* feature cosine vs fp32 — PyTorch's own quantized
+  model 0.97 / 0.90 / 0.88 (80², 40², 20²), after conversion to TFLite 0.75 /
+  0.57 / 0.43. Too lossy to use (the ORT QDQ int8 kept 119/132 objects on the
+  desktop; this one was not usable through the head at all).
+- *TPU vs CPU int8:* the TPU's outputs differ from TFLite's CPU int8 kernels
+  in 33% of feature values, by up to 29 quantization steps — far beyond
+  rounding.
+
+YOLOE-11's C2PSA attention (batched matmul, softmax) is not quantized by this
+PT2E quantizer and stays float. Status: the Edge TPU *can* run a YOLOE int8
+backbone (compiled, 90 ms partly on TPU) but not yet *correctly* or fully;
+the GPU fp32 path (186 ms whole model, exact) remains the reference.
+

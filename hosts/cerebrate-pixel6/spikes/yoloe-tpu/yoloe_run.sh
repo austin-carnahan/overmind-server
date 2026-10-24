@@ -4,6 +4,11 @@
 # graph-client from the guest (outputs saved, first photo compared with the
 # desktop reference, timing over repeats), then the worker log tail and the
 # NNAPI partitioning lines from logcat. Runs on overmind-01.
+# A memory guard polls the phone's MemAvailable every 2 s while the worker
+# loads (NNAPI/Edge TPU compile), records the minimum, and kills the worker
+# below MEM_FLOOR_KB -- an Edge TPU compile once exhausted memory and the
+# low-memory killer took the Debian VM (the vendor compiler process itself
+# can't be killed from adb's shell user; pixel-vm-watchdog is the backstop).
 # usage: yoloe_run.sh <model.onnx on device> <backend> <port> <guest dir> <tag> <ref prefix>
 set -u
 M=$1; B=$2; P=$3; G=$4; TAG=$5; REF=$6
@@ -12,11 +17,17 @@ LOG=/data/local/tmp/yoloe-$TAG.log
 $D shell "pkill -f 'cerebrate-graph .* $P'" 2>/dev/null
 $D logcat -c
 ( $D shell "cd /data/local/tmp && CEREBRATE_GRAPH_VERBOSE=1 LD_LIBRARY_PATH=/data/local/tmp nohup setsid ./cerebrate-graph $M $B $P > $LOG 2>&1 < /dev/null &" & sleep 5; kill $! 2>/dev/null ) >/dev/null 2>&1
+MEM_FLOOR_KB=${MEM_FLOOR_KB:-800000}; minmem=99999999
 for i in $(seq 1 150); do
+  mem=$($D shell "grep MemAvailable /proc/meminfo" | awk '{print $2}'); [ -n "$mem" ] && [ "$mem" -lt "$minmem" ] && minmem=$mem
+  if [ -n "$mem" ] && [ "$mem" -lt "$MEM_FLOOR_KB" ]; then
+    echo "== MEMORY GUARD: MemAvailable ${mem} kB < ${MEM_FLOOR_KB} kB, killing the worker"; $D shell "pkill -f 'cerebrate-graph .* $P'"; break
+  fi
   if $D shell "grep -q -E 'READY|FATAL' $LOG"; then break; fi
   if ! $D shell "pgrep -f 'cerebrate-graph .* $P'" >/dev/null; then break; fi
   sleep 2
 done
+echo "== $TAG min MemAvailable during load: $((minmem / 1024)) MB"
 echo "== $TAG worker: $($D shell "grep -E 'READY|FATAL|load' $LOG | tail -2 | cut -c1-160")"
 if $D shell "grep -q READY $LOG"; then
   ssh -o ConnectTimeout=8 -p 2206 droid@127.0.0.1 "cd $G && mkdir -p out-$TAG && GW=\$(ip route show default | awk '{print \$3}');
