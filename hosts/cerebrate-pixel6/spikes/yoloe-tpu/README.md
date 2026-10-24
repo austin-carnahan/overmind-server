@@ -82,6 +82,32 @@ class and box IoU, plus a label-agnostic count; mask IoU).
   and median latency. Built like `cerebrate-infer`
   (`aarch64-linux-android24-clang++ -std=c++17 ... -ltensorflowlite_jni`).
 
+## fp16-relaxed backbone on the Edge TPU (the working configuration)
+
+- [`yoloe_fp16_tpu_prep.py`](yoloe_fp16_tpu_prep.py) — the **G1 max-pool
+  correction** with a *proved* input bound: every MaxPool's input must trace
+  to a SiLU (`Mul(t, Sigmoid(t))`, global minimum −0.278464542761074) or to a
+  MaxPool over one, else the rewrite refuses; then `MaxPool(x + 0.28) − 0.28`
+  (the TPU pads SAME max-pooling with zeros —
+  [tpu-precision-probes](../tpu-precision-probes/README.md)). Extracts three
+  growing fragments (F1: model.7–9, 36 ops; F2: model.0–9, 114 ops; F3: the
+  whole backbone + neck, 188 ops), converts each with onnx2tf to float32
+  TFLite (NHWC), and writes device inputs and references from the
+  *unmodified* fp32 ONNX.
+- [`fp16tpu_run.sh`](fp16tpu_run.sh) — guarded device run (on overmind-01):
+  isolated bench process under a hard timeout, free memory sampled every
+  second with a kill below 1.5 GB, one attempt, compile/memory/placement
+  report. The bench's `tpu16` mode sets the NNAPI delegate's `allow_fp16`.
+- [`fp16tpu_accuracy.py`](fp16tpu_accuracy.py) — fragment outputs vs the
+  unmodified reference (border vs interior, for the max-pool check);
+  [`fp16tpu_chain.py`](fp16tpu_chain.py) — TPU feature maps → the original
+  fp32 head for the task check.
+- The head for the GPU: the prepared head ONNX through onnx2tf with
+  `-rarf32` (argmax as reduce-max + float indices, so the GPU runs all 123
+  ops; with onnx2tf's default int64 `ARG_MAX` two ops fall to the CPU and the
+  154 MB score tensor is read back, 327 ms). At fp16 the float-index argmax
+  overflows (NaN): 4,585 classes exceed what fp16 represents exactly.
+
 ## Device runs ([`yoloe_run.sh`](yoloe_run.sh))
 
 Hand-launched `cerebrate-graph` worker per (model, backend) on a spare port,

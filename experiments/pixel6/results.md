@@ -650,3 +650,43 @@ detections.
   at the SiLU **multiplies** (x · sigmoid(x)), whose outputs are re-quantized
   per tensor; the sigmoids themselves stay at 0.95–0.99.
 
+## 2026-10-24 — YOLOE-v8s backbone on the Edge TPU at fp16 relaxation (guarded sequence)
+
+Code: [yoloe-tpu](../../hosts/cerebrate-pixel6/spikes/yoloe-tpu/README.md).
+The guarded sequence agreed on 2026-10-24: growing fragments, each an
+isolated bench process with a hard timeout (240 s) and a 1.5 GB free-memory
+cutoff, the VM watchdog active, one attempt each, stop on any failure. With
+the G1 max-pool correction (input bound proved: SiLU or max-pool over SiLU;
+corrected vs unmodified backbone 1.5e-5 on the desktop). References: the
+unmodified fp32 ONNX.
+
+| Fragment | Ops | Placement | Compile | Free-memory drop | TPU median | CPU fp32 | Rel L2 vs fp32 (worst output) |
+| --- | --- | --- | --- | --- | --- | --- | --- |
+| F1 model.7–9 (40×40×256 → SPPF 20×20×512) | 36 | 36/36, 1 partition | 1.0 s | 17 MB | **2.45 ms** | 46.8 ms | 9.3e-4 (border ≈ interior: correction works) |
+| F2 model.0–9 (image → P3/P4/P5) | 114 | 114/114, 1 partition | 2.0 s | 141 MB | **11.3 ms** | 237 ms | 3.3e-3 |
+| **F3 backbone + neck (the TPU partition)** | **188** | **188/188, 1 partition** | **3.9 s** | **410 MB** (min 3.1 GB free) | **14.8 ms** (15.4 ms over 8 photos) | 368 ms | **4.6e-3** (cosine ≥ 0.99999) |
+
+No crash, timeout or guard trip at any step. (The earlier fp16 failures were
+the whole model *with* its 4,585-class head through ORT; the backbone alone
+through TFLite compiles comfortably.)
+
+**Detection pipeline, against Ultralytics' 132 reference detections:**
+
+| Pipeline | Matched | Any label | Box IoU min | Score max diff | Mask IoU min / mean | Latency |
+| --- | --- | --- | --- | --- | --- | --- |
+| GPU only, fp32 (`default`) | 132 | 132 | 1.0000 | 0.0000 | 1.000 / 1.000 | 186 ms |
+| GPU only, fp16 + fp32 acc. (`fast`) | 132 (+1 extra) | 132 | 0.965 | 0.0063 | 0.969 / 0.996 | 108 ms |
+| TPU int8 backbone → fp32 head | 84 | 105 | 0.523 | 0.49 | 0.426 / 0.922 | — |
+| **TPU fp16 backbone → fp32 head (desktop)** | **132** | **132** | **0.993** | **0.0034** | **0.990 / 0.9995** | — |
+| **TPU fp16 backbone → GPU fp32 head (on the phone)** | **132** | **132** | **0.993** | **0.0034** | **0.990 / 0.9995** | **≈145 ms** (TPU 15.4 + GPU head 129.4, transfers included) |
+
+The fp16-relaxed TPU backbone loses no detection and no label — more
+accurate than the GPU's `fast` variant — and int8's flips and misses are
+gone. The pipeline is ~1.3× faster than GPU-only fp32 because **the head
+(mostly the 4,585-class projection) dominates**: 125–129 ms on the GPU at
+fp32 (1.05 s on the CPU). A fp16 head (72–75 ms) needs a different argmax:
+onnx2tf's float-index argmax overflows at fp16 (NaN class indices) — 4,585
+classes exceed fp16's exact integer range — and even at fp32 it produced
+non-integer indices on ~5% of anchors where low scores tie (none reached a
+detection).
+

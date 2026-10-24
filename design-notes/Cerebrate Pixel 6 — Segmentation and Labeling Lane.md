@@ -1060,4 +1060,15 @@ conditions in Section 4.4).
   detections pushed under the threshold (32) and flips where the original
   was undecided (17); error accumulates with depth, mostly at the SiLU
   multiplies. Capability matrix in `tpu-precision-probes`.
+- **2026-10-24** — **YOLOE-v8s backbone runs on the Edge TPU at fp16 with no
+  detection lost.** Guarded fragment sequence (36 → 114 → 188 ops), all
+  compiled in one TPU partition with modest memory (≤ 410 MB). The full
+  backbone + neck takes **14.8 ms on the TPU** (25× the CPU) with the G1
+  max-pool correction (proved input bound); its features through the
+  original fp32 head match all 132 reference detections with the same labels
+  (box IoU ≥ 0.993, mask IoU mean 0.9995) — including the real on-phone
+  pipeline (TPU backbone → GPU head, ≈145 ms vs 186 ms GPU-only). The head's
+  4,585-class projection is now the bottleneck (125 ms on the GPU).
+  Reusable lesson: the TPU takes a CNN trunk whole at fp16; keep large
+  output projections off it.
 
