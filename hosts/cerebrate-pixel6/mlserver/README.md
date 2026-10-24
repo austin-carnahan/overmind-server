@@ -653,3 +653,54 @@ fails the next request and a repository `load` restarts it with a fresh PID,
 - MLServer logs a harmless warning that the model name `graph-canary` differs
   from its folder name `cerebrate-graph`; the folder holds the shared adapter
   code, and later models will get their own folders.
+
+## Segmentation and Labeling Lane Step 2B — on-demand residency, `yoloe-v8s-pf` (prepared 2026-10-24, deploy scheduled)
+
+**Tested off production; deploy scheduled** (runbook in the
+[supervisor README](../cerebrate-supervisor/README.md#scheduled-deploy-runbook)).
+
+- **On-demand residency in the graph adapter** (catalog v4 Section 9),
+  opt-in per model: `cerebrate_graph_residency: on_demand` (default
+  `pinned`, unchanged) and `cerebrate_graph_idle_stop_s` (default 600).
+  `load()` only validates the settings and reports ready; the first request
+  STARTs the worker (with the same DESCRIBE check), and a background task
+  STOPs it after the idle window. Starts and stops take the same per-slot
+  refcount as pinned loads. An on-demand model stays READY after a failure
+  — MLServer turns requests away from a not-ready model before `predict()`
+  runs, which would block the very request that restarts the worker (found
+  in testing: the first version marked it unready and never recovered). A
+  lost worker costs one failed request; the slot is released and the next
+  request starts it afresh.
+- **`models/yoloe-v8s-pf/`** — YOLOE-v8s prompt-free on slot `hetero1`
+  (port 8772), profile `yoloe-v8s-fast` (TPU + GPU, GPU-only fallback
+  inside the worker), on demand with a 10-minute idle stop. The runtime and
+  protocol files are symlinks to `models/cerebrate-graph/`. Pass-through
+  like every graph model: input `images` FP32 `[1,640,640,3]` (letterboxed
+  RGB, 0–1), outputs `boxes, score, cls, coef, protos`; NMS and masks stay
+  with the caller. To serve the exact `default` variant instead, set
+  `cerebrate_graph_backend: yoloe-v8s-default` and `cerebrate_graph_model_path:
+  /data/local/tmp/yoloe-v8s-pf-gpu-nhwc.tflite`.
+
+Tested 2026-10-24 with a second MLServer instance in the guest (ports
+18080–18082, the adapter copy pointed at a test supervisor on control port
+8777; script
+[`hetero_ondemand.py`](../cerebrate-hetero/tests/hetero_ondemand.py)) next to
+production, plus a pinned canary on `graph2` as a regression check of the
+refactored pinned path (started at load through START + DESCRIBE, stopped on
+unload):
+
+| Check | Result |
+| --- | --- |
+| after startup | `yoloe-v8s-pf` READY, `hetero1` STOPPED |
+| first request (cold) | 7.4–8.5 s (worker load 5.1 s incl. TPU compile), output bit-identical to the validated run |
+| warm requests | ~2.0 s each, bit-identical |
+| idle | `hetero1` STOPPED 65 s after the last request (60 s window); the next request restarts it, bit-identical |
+| worker `kill -9` | next request HTTP 500, model stays READY; the one after restarts it on a fresh PID, bit-identical |
+| repository unload | `hetero1` and `graph2` STOPPED, refcount back to 0 |
+
+**The JSON REST path dominates:** ~2.0 s per warm request against 74 ms of
+inference and ≈ 200 ms over the worker protocol directly — the 4.9 MB fp32
+image and ~5 MB of outputs as JSON number lists. Fine for occasional calls;
+real use wants a smaller payload (uint8 image, only the outputs
+post-processing needs) or a binary path, which is the planned transport
+work.

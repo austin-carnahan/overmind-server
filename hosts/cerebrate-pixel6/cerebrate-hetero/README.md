@@ -1,8 +1,10 @@
 # cerebrate-hetero
 
-**Status:** BUILT AND TESTED, NOT YET DEPLOYED (2026-10-24) — hand-launched
-on spare ports for the integration tests below; not yet under
-`cerebrate-supervisor`, MLServer or the model catalog.
+**Status:** DEPLOYMENT PREPARED, SCHEDULED (2026-10-24) — supervisor slot
+`hetero1` (port 8772, fixed profiles `yoloe-v8s-fast`/`yoloe-v8s-default`),
+MLServer model `yoloe-v8s-pf` (on demand) and the catalog entry are built and
+tested side by side with production; the production swap waits for its
+window ([runbook](../cerebrate-supervisor/README.md#scheduled-deploy-runbook)).
 
 Heterogeneous inference worker for the Pixel 6: one model served as a
 pipeline of accelerator stages — **stage 1 on the Edge TPU, stage 2 on the
@@ -36,7 +38,10 @@ bound to itself. The worker links LiteRT normally.
 float32 outputs (`CEREBRATE_HETERO_OUTPUTS`, default
 `boxes,score,cls,coef,protos`). Models, buffers and compiled graphs are
 created once; stage-1 outputs are matched to stage-2 inputs by byte size.
-DESCRIBE (an empty request) returns the configuration as JSON. DONE carries
+DESCRIBE (an empty request) returns the configuration as JSON, including
+`model` and `backend` for the MLServer adapter's check: the supervisor's
+`CEREBRATE_HETERO_MODEL`/`CEREBRATE_HETERO_PROFILE` when set, else the
+stage-1 (or only) model path and the mode. DONE carries
 `request_id inference_us handle_us backend tpu_us gpu_us`, every value an
 integer (the shared protocol parser requires it): `backend` 1 = tpu+gpu,
 2 = gpu-fallback (TPU configured but unavailable or failed), 3 = gpu.
@@ -78,6 +83,12 @@ Load: `fast` 5.1–5.2 s (TPU compile ~3.8 s); `default` 1.2 s. Resident:
   NHWC image (4.9 MB) in and ~5 MB of outputs out over the AVF path. Sending
   a uint8 image and returning only what post-processing needs would cut it;
   not done yet.
+- **Under the supervisor and MLServer** (side by side with production):
+  both profiles bit-identical to the runs above, on-demand start, idle
+  stop, kill recovery and unload —
+  [`hetero_supervisor_chain.py`](tests/hetero_supervisor_chain.py),
+  [`hetero_ondemand.py`](tests/hetero_ondemand.py); results in the
+  supervisor and MLServer READMEs.
 - **Pre-existing, unrelated:** a single connection driven at ~400
   requests/s (≈60 MB/s) to `cerebrate-infer` gets reset roughly once per
   30 s — reproduced with this worker stopped. Clients should reconnect on

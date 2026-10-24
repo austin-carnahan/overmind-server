@@ -1092,4 +1092,17 @@ conditions in Section 4.4).
   unaffected, no TPU recompiles; 3-minute sustained run stable (p99 ≤ 76 ms,
   TPU ≤ 55 °C, flat memory). Deployment (supervisor slot, MLServer model,
   catalog entry) awaits a go.
+- **2026-10-24** — **YOLOE-v8s deployment prepared; production swap
+  scheduled.** Supervisor slot `hetero1` (port 8772) with fixed profiles
+  `yoloe-v8s-fast` (TPU + GPU, GPU fallback inside) and `yoloe-v8s-default`
+  (GPU fp32); the graph adapter gained opt-in on-demand residency (start on
+  first request, stop after 10 minutes idle); MLServer model `yoloe-v8s-pf`;
+  catalog entry with the three backends (hybrid, GPU mixed fallback, GPU
+  fp32). Tested beside production with a test supervisor and a test
+  MLServer: both profiles bit-identical to the validated runs, cold start
+  7.4–8.5 s, idle stop, kill recovery (a readiness bug found and fixed),
+  unload. Over MLServer's JSON REST a warm request takes ~2 s against 74 ms
+  of inference, so the transport work (uint8 input, fewer outputs) comes
+  before real use. Next TPU candidates: EdgeSAM's RepViT encoder, then
+  MI-GAN.
 

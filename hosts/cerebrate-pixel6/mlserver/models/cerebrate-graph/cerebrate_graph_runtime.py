@@ -16,6 +16,26 @@ parameters.extra:
   cerebrate_graph_backend     cpu | nnapi | nnapi16 | xnnpack | webgpu
   cerebrate_graph_host        optional; default is the AVF gateway
   cerebrate_graph_request_timeout_s  optional; default 120
+  cerebrate_graph_residency   optional; pinned (default) | on_demand
+  cerebrate_graph_idle_stop_s optional, on_demand only; default 600
+
+Residency (catalog v4 Section 9). pinned: START at load, STOP at unload --
+the worker runs for as long as the MLServer model is loaded. on_demand:
+load only validates the settings (the model reports ready without a
+worker); the first request STARTs the worker (paying its load and any
+accelerator compile), and it is STOPped again after idle_stop_s without
+requests. Starts and idle stops take the same refcount as pinned loads, so
+a rolling reload still never STOPs a worker another instance is using.
+An on_demand model stays ready (= able to start its worker on request):
+MLServer refuses requests to a model that isn't ready before predict()
+runs, so marking it unready after a failure would block the very request
+that restarts it. A failed start or a lost worker is a failed request
+(and a log line); the slot is released and the next request starts afresh.
+
+The slot may also be cerebrate-hetero's (hetero1, port 8772); its
+"backend" is then one of the supervisor's fixed profile names (e.g.
+yoloe-v8s-fast) and model_path that profile's declared model. The worker
+speaks the same protocol and DESCRIBEs the same two fields.
 
 Lifecycle, refcounting, gateway discovery, and readiness handling follow
 cerebrate_infer_runtime.py (duplicated, not shared, per that module's own
@@ -26,6 +46,7 @@ import fcntl
 import os
 import socket
 import subprocess
+import time
 
 from mlserver import MLModel
 from mlserver.codecs import NumpyCodec
@@ -37,6 +58,7 @@ import cerebrate_graph_protocol as protocol
 DEFAULT_HOST = "10.70.217.78"
 CONNECT_TIMEOUT_S = 5.0
 DEFAULT_REQUEST_TIMEOUT_S = 120.0
+DEFAULT_IDLE_STOP_S = 600.0
 
 SUPERVISOR_PORT = 8767
 SUPERVISOR_CONNECT_TIMEOUT_S = 5.0
@@ -114,23 +136,44 @@ class CerebrateGraphRuntime(MLModel):
         self._request_timeout = float(
             extra.get("cerebrate_graph_request_timeout_s", DEFAULT_REQUEST_TIMEOUT_S)
         )
+        self._residency = extra.get("cerebrate_graph_residency", "pinned")
+        if self._residency not in ("pinned", "on_demand"):
+            print(f"cerebrate-graph ({self.name}): unknown cerebrate_graph_residency {self._residency!r}")
+            self.ready = False
+            return self.ready
+        self._idle_stop_s = float(extra.get("cerebrate_graph_idle_stop_s", DEFAULT_IDLE_STOP_S))
         self._refcount_path = REFCOUNT_PATH_TEMPLATE.format(worker=self._worker)
         self._lock = asyncio.Lock()
+        self._start_lock = asyncio.Lock()
         self._reader = None
         self._writer = None
         self._counted = False
+        self._last_used = time.monotonic()
+        self._idle_task = None
 
+        if self._residency == "on_demand":
+            self._idle_task = asyncio.create_task(self._idle_stopper())
+            print(
+                f"cerebrate-graph ({self.name}): on demand on {self._worker} "
+                f"(backend={self._backend}, idle stop after {self._idle_stop_s:.0f}s)"
+            )
+            self.ready = True
+            return self.ready
+        self.ready = await self._start_worker()
+        return self.ready
+
+    async def _start_worker(self) -> bool:
+        """START the slot and confirm by DESCRIBE that it serves this model
+        with this backend. True when ready."""
         fields = {"worker": self._worker, "model": self._model_path, "backend": self._backend}
         try:
             response = await asyncio.to_thread(_supervisor_request, self._host, "START", fields)
         except OSError as exc:
             print(f"cerebrate-graph ({self.name}): cerebrate-supervisor unreachable: {exc}")
-            self.ready = False
-            return self.ready
+            return False
         if not response.startswith("OK"):
             print(f"cerebrate-graph ({self.name}): supervisor refused START: {response.strip()}")
-            self.ready = False
-            return self.ready
+            return False
         await asyncio.to_thread(_adjust_refcount, self._refcount_path, 1)
         self._counted = True
 
@@ -140,32 +183,29 @@ class CerebrateGraphRuntime(MLModel):
             description, _ = await self._call({})
         except (ConnectionError, protocol.WorkerError, ValueError) as exc:
             print(f"cerebrate-graph ({self.name}): DESCRIBE failed: {exc}")
-            self.ready = False
-            return self.ready
+            return False
         if description.get("model") != self._model_path or description.get("backend") != self._backend:
             print(
                 f"cerebrate-graph ({self.name}): worker on port {self._port} serves "
                 f"{description.get('model')} ({description.get('backend')}), expected "
                 f"{self._model_path} ({self._backend})"
             )
-            self.ready = False
-            return self.ready
+            return False
         print(
             f"cerebrate-graph ({self.name}): ready on {self._worker} "
             f"(backend={self._backend}, load_us={description.get('load_us')})"
         )
-        self.ready = True
-        return self.ready
+        return True
 
-    async def unload(self) -> bool:
+    async def _stop_worker(self) -> bool:
+        """Drop this instance's hold on the slot; STOP it if no other
+        instance holds it."""
         await self._drop_connection()
         if not getattr(self, "_counted", False):
-            self.ready = False
             return True
         remaining = await asyncio.to_thread(_adjust_refcount, self._refcount_path, -1)
         self._counted = False
         if remaining > 0:
-            self.ready = False
             return True
         try:
             response = await asyncio.to_thread(
@@ -177,8 +217,44 @@ class CerebrateGraphRuntime(MLModel):
         if not response.startswith("OK"):
             print(f"cerebrate-graph ({self.name}): supervisor STOP did not confirm: {response.strip()}")
             return False
-        self.ready = False
         return True
+
+    async def _idle_stopper(self) -> None:
+        """on_demand: STOP the worker once no request has arrived for
+        idle_stop_s. Rechecks under both locks, so a request that arrived
+        meanwhile keeps it (or restarts it right after)."""
+        while True:
+            await asyncio.sleep(min(30.0, self._idle_stop_s / 2))
+            if not self._counted or time.monotonic() - self._last_used < self._idle_stop_s:
+                continue
+            async with self._start_lock:
+                async with self._lock:
+                    if not self._counted or time.monotonic() - self._last_used < self._idle_stop_s:
+                        continue
+                    if await self._stop_worker():
+                        print(f"cerebrate-graph ({self.name}): stopped {self._worker} after "
+                              f"{self._idle_stop_s:.0f}s idle")
+
+    async def _ensure_started(self) -> None:
+        self._last_used = time.monotonic()
+        if self._residency != "on_demand":
+            return
+        async with self._start_lock:
+            if self._counted:
+                return
+            if not await self._start_worker():
+                await self._stop_worker()
+                self.ready = True
+                raise MLServerError(f"cerebrate-graph ({self.name}): could not start {self._worker} on demand")
+
+    async def unload(self) -> bool:
+        if getattr(self, "_idle_task", None) is not None:
+            self._idle_task.cancel()
+            self._idle_task = None
+        stopped = await self._stop_worker()
+        if stopped:
+            self.ready = False
+        return stopped
 
     async def _drop_connection(self) -> None:
         if getattr(self, "_writer", None) is not None:
@@ -216,10 +292,18 @@ class CerebrateGraphRuntime(MLModel):
         if not payload.inputs:
             raise MLServerError("no inputs provided")
         inputs = {request_input.name: NumpyCodec.decode_input(request_input) for request_input in payload.inputs}
+        await self._ensure_started()
         try:
             outputs, done = await self._call(inputs)
         except protocol.WorkerError as exc:
             raise MLServerError(f"cerebrate-graph rejected the request: {exc}") from exc
+        except ConnectionError:
+            # on_demand: release the slot so the next request starts it afresh.
+            if self._residency == "on_demand":
+                async with self._start_lock:
+                    await self._stop_worker()
+                self.ready = True
+            raise
         except TypeError as exc:
             raise MLServerError(str(exc)) from exc
         return InferenceResponse(

@@ -744,3 +744,28 @@ Pre-existing transport finding: a single high-rate connection to
 `cerebrate-infer` (~400 requests/s) is reset about once per 30 s with or
 without this worker running.
 
+## 2026-10-24 — cerebrate-hetero deployment prepared (supervisor slot, on-demand MLServer model, catalog)
+
+Code: [supervisor `hetero1` slot](../../hosts/cerebrate-pixel6/cerebrate-supervisor/README.md#segmentation-and-labeling-lane-step-2b-hetero1-slot-prepared-2026-10-24-deploy-scheduled),
+[on-demand adapter and `yoloe-v8s-pf`](../../hosts/cerebrate-pixel6/mlserver/README.md#segmentation-and-labeling-lane-step-2b--on-demand-residency-yoloe-v8s-pf-prepared-2026-10-24-deploy-scheduled),
+`models/catalog.yaml` (`yoloe-v8s-pf`, validated). All tests ran beside
+production (test supervisor on control port 8777, test MLServer on
+18080–18082); production processes and models untouched. Deploy scheduled.
+
+| Check | Result |
+| --- | --- |
+| supervisor error paths (unknown profile, wrong model, subdirectory, hetero profile on a graph slot) | all refused before fork |
+| `yoloe-v8s-fast` via `START` | 5.3 s; DESCRIBE = declared model/profile; 8 photos bit-identical to the validated run |
+| `yoloe-v8s-default` via `START` | 1.5 s; 8 photos bit-identical to the validated fp32 run |
+| idempotent `START` / other profile while running / `STOP` | OK / refused / OK |
+| MLServer on demand: cold first request | 7.4–8.5 s, bit-identical; warm ~2.0 s (JSON REST) |
+| idle stop (60 s test window) | stopped at 65 s; next request restarts, bit-identical |
+| worker `kill -9` | one HTTP 500, model stays READY, next request restarts on a fresh PID |
+| unload | slots STOPPED, refcount 0 |
+| temperatures | TPU/GPU 31 °C, big cores 32 °C during; TPU 25 °C after |
+
+Bug found and fixed in testing: the on-demand model was marked unready after
+a lost worker, and MLServer then refused every request before the adapter
+could restart it. JSON REST costs ~2.0 s per request at these tensor sizes
+(vs 74 ms inference): the transport work is the next lever.
+

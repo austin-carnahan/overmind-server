@@ -42,6 +42,13 @@
 // per-slot allowed list, and the readiness wait became per-slot, since large
 // ONNX models and NNAPI compilation can take far longer than 15s to load.
 //
+// cerebrate-hetero (TPU + GPU pipeline worker) added one slot, "hetero1"
+// (port 8772), with no protocol change. Its "backend" field names one of a
+// fixed set of profiles compiled in below; each profile carries its
+// declared model and its complete command line, so a client still chooses
+// only among fixed configurations -- never a path or an argument. The
+// backend field widened from 8 to 32 characters for the profile names.
+//
 // Deliberately NOT built: arbitrary command execution, arbitrary binary
 // paths, arbitrary ports, orphan-worker adoption after a supervisor
 // restart, or automatic respawn-on-crash (see cerebrate-supervisor's
@@ -63,12 +70,32 @@
 #include <unistd.h>
 
 #define STAGING_DIR "/data/local/tmp"
-#define CONTROL_PORT 8767
+#ifndef CONTROL_PORT
+#define CONTROL_PORT 8767  // overridable at build time for a side-by-side test instance
+#endif
 
 enum WorkerState { STOPPED, RUNNING, EXITED };
 
 // cerebrate-graph's execution providers (see cerebrate-graph.cc).
 #define kGraphBackends "cpu,nnapi,nnapi16,xnnpack,webgpu"
+
+// cerebrate-hetero profiles: the slot's "backend" names one; "model" must
+// equal its declared model. argv follows the port (see cerebrate-hetero.cc).
+// Every path is a flat file in STAGING_DIR, like every other worker's model.
+struct HeteroProfile {
+  const char* name;
+  const char* model;
+  const char* argv[10];  // NULL-terminated
+};
+static const HeteroProfile kHeteroProfiles[] = {
+  {"yoloe-v8s-fast", STAGING_DIR "/yoloe-v8s-pf-backbone-tpu-fp32.tflite",
+   {"tpu+gpu", STAGING_DIR "/libtensorflowlite_jni.so", STAGING_DIR "/yoloe-v8s-pf-backbone-tpu-fp32.tflite",
+    STAGING_DIR "/yoloe-v8s-pf-head-gpu.tflite", "fp16acc32", STAGING_DIR "/yoloe-v8s-pf-gpu-nhwc.tflite", "fp16acc32", NULL}},
+  {"yoloe-v8s-default", STAGING_DIR "/yoloe-v8s-pf-gpu-nhwc.tflite",
+   {"gpu", STAGING_DIR "/yoloe-v8s-pf-gpu-nhwc.tflite", "fp32", NULL}},
+};
+static const int kNumHeteroProfiles = sizeof(kHeteroProfiles) / sizeof(kHeteroProfiles[0]);
+#define kHeteroBackends "yoloe-v8s-fast,yoloe-v8s-default"
 
 struct WorkerSlot {
   const char* name;         // protocol identifier, e.g. "infer"
@@ -83,19 +110,31 @@ struct WorkerSlot {
   WorkerState state;
   pid_t pid;
   char model[256];
-  char backend[8];
+  char backend[32];
   char mmproj[256];
   int last_exit_code;
+
+  // Optional, zero for the original slots
+  int is_hetero;                // backend names a kHeteroProfiles entry
+  const char* ld_library_path;  // NULL = STAGING_DIR
 };
 
 static WorkerSlot g_slots[] = {
-  {"infer", STAGING_DIR "/cerebrate-infer", 8765, 0, 0, NULL, 15000, STOPPED, 0, "", "", "", 0},
-  {"generate", STAGING_DIR "/cerebrate-generate", 8766, 1, 0, "cpu,gpu", 15000, STOPPED, 0, "", "", "", 0},
-  {"gguf", STAGING_DIR "/cerebrate-gguf", 8768, 0, 1, NULL, 15000, STOPPED, 0, "", "", "", 0},
-  {"graph1", STAGING_DIR "/cerebrate-graph", 8769, 1, 0, kGraphBackends, 120000, STOPPED, 0, "", "", "", 0},
-  {"graph2", STAGING_DIR "/cerebrate-graph", 8770, 1, 0, kGraphBackends, 120000, STOPPED, 0, "", "", "", 0},
-  {"graph3", STAGING_DIR "/cerebrate-graph", 8771, 1, 0, kGraphBackends, 120000, STOPPED, 0, "", "", "", 0},
+  {"infer", STAGING_DIR "/cerebrate-infer", 8765, 0, 0, NULL, 15000, STOPPED, 0, "", "", "", 0, 0, NULL},
+  {"generate", STAGING_DIR "/cerebrate-generate", 8766, 1, 0, "cpu,gpu", 15000, STOPPED, 0, "", "", "", 0, 0, NULL},
+  {"gguf", STAGING_DIR "/cerebrate-gguf", 8768, 0, 1, NULL, 15000, STOPPED, 0, "", "", "", 0, 0, NULL},
+  {"graph1", STAGING_DIR "/cerebrate-graph", 8769, 1, 0, kGraphBackends, 120000, STOPPED, 0, "", "", "", 0, 0, NULL},
+  {"graph2", STAGING_DIR "/cerebrate-graph", 8770, 1, 0, kGraphBackends, 120000, STOPPED, 0, "", "", "", 0, 0, NULL},
+  {"graph3", STAGING_DIR "/cerebrate-graph", 8771, 1, 0, kGraphBackends, 120000, STOPPED, 0, "", "", "", 0, 0, NULL},
+  {"hetero1", STAGING_DIR "/cerebrate-hetero", 8772, 1, 0, kHeteroBackends, 120000, STOPPED, 0, "", "", "", 0,
+   1, STAGING_DIR "/litert-2.3.0:" STAGING_DIR},
 };
+
+static const HeteroProfile* find_profile(const char* name) {
+  for (int i = 0; i < kNumHeteroProfiles; i++)
+    if (strcmp(kHeteroProfiles[i].name, name) == 0) return &kHeteroProfiles[i];
+  return NULL;
+}
 static const int kNumSlots = sizeof(g_slots) / sizeof(g_slots[0]);
 
 // Set once at startup / per-accept so a forked worker child can close its
@@ -214,6 +253,22 @@ static void start_worker(const char* worker, const char* model, const char* back
     snprintf(out, out_len, "ERROR: worker %s requires backend one of %s\n", worker, s->backends);
     return;
   }
+  const HeteroProfile* profile = NULL;
+  if (s->is_hetero) {
+    profile = find_profile(backend);
+    if (!profile || strcmp(model, profile->model) != 0) {
+      snprintf(out, out_len, "ERROR: worker %s profile %s requires model %s\n", worker, backend,
+               profile ? profile->model : "(unknown profile)");
+      return;
+    }
+    for (int a = 0; profile->argv[a]; a++) {
+      struct stat pst;
+      if (strncmp(profile->argv[a], STAGING_DIR "/", strlen(STAGING_DIR "/")) == 0 && stat(profile->argv[a], &pst) != 0) {
+        snprintf(out, out_len, "ERROR: profile %s file not found: %s\n", backend, profile->argv[a]);
+        return;
+      }
+    }
+  }
   if (s->needs_mmproj) {
     if (mmproj == NULL || mmproj[0] == '\0') {
       snprintf(out, out_len, "ERROR: worker %s requires an mmproj field\n", worker);
@@ -293,10 +348,20 @@ static void start_worker(const char* worker, const char* model, const char* back
       dup2(log_fd, 2);
       close(log_fd);
     }
-    setenv("LD_LIBRARY_PATH", STAGING_DIR, 1);
+    setenv("LD_LIBRARY_PATH", s->ld_library_path ? s->ld_library_path : STAGING_DIR, 1);
     char port_str[16];
     snprintf(port_str, sizeof(port_str), "%d", s->fixed_port);
-    if (s->needs_backend) {
+    if (profile) {
+      setenv("CEREBRATE_HETERO_PROFILE", profile->name, 1);
+      setenv("CEREBRATE_HETERO_MODEL", profile->model, 1);
+      const char* args[16];
+      int n = 0;
+      args[n++] = s->binary_path;
+      args[n++] = port_str;
+      for (int a = 0; profile->argv[a] && n < 15; a++) args[n++] = profile->argv[a];
+      args[n] = NULL;
+      execv(s->binary_path, (char* const*)args);
+    } else if (s->needs_backend) {
       execl(s->binary_path, s->binary_path, model, backend, port_str, (char*)NULL);
     } else if (s->needs_mmproj) {
       execl(s->binary_path, s->binary_path, model, mmproj, port_str, (char*)NULL);
@@ -437,7 +502,7 @@ static void read_request(int client, char* cmd, char* worker, char* model, char*
         while (*val == ' ') val++;
         if (strcmp(key, "worker") == 0) { strncpy(worker, val, 31); worker[31] = '\0'; }
         else if (strcmp(key, "model") == 0) { strncpy(model, val, 255); model[255] = '\0'; }
-        else if (strcmp(key, "backend") == 0) { strncpy(backend, val, 7); backend[7] = '\0'; }
+        else if (strcmp(key, "backend") == 0) { strncpy(backend, val, 31); backend[31] = '\0'; }
         else if (strcmp(key, "mmproj") == 0) { strncpy(mmproj, val, 255); mmproj[255] = '\0'; }
       }
     }
@@ -480,10 +545,10 @@ int main(int argc, char** argv) {
     struct timeval recv_timeout = {10, 0};
     setsockopt(client, SOL_SOCKET, SO_RCVTIMEO, &recv_timeout, sizeof(recv_timeout));
 
-    char cmd[16], worker[32], model[256], backend[8], mmproj[256];
+    char cmd[16], worker[32], model[256], backend[32], mmproj[256];
     read_request(client, cmd, worker, model, backend, mmproj);
 
-    char response[2048];  // LIST: one status line per slot, six slots
+    char response[2048];  // LIST: one status line per slot, seven slots
     if (cmd[0] == '\0') {
       snprintf(response, sizeof(response), "ERROR: empty request\n");
     } else {

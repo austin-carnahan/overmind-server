@@ -17,6 +17,10 @@
 //   cerebrate-hetero <port> tpu+gpu <libtensorflowlite_jni.so> <stage1.tflite>
 //                    <stage2.tflite> <fp32|fp16acc32> [<fallback.tflite> <fp32|fp16acc32>]
 //   cerebrate-hetero <port> gpu <model.tflite> <fp32|fp16acc32>
+// DESCRIBE reports "model" and "backend" as the MLServer graph adapter checks
+// them: CEREBRATE_HETERO_MODEL and CEREBRATE_HETERO_PROFILE when set (by
+// cerebrate-supervisor, from the slot's fixed profile), otherwise the stage-1
+// (tpu+gpu) or only (gpu) model path and the mode.
 // Outputs are named from CEREBRATE_HETERO_OUTPUTS (comma-separated, in the
 // GPU model's output order; default boxes,score,cls,coef,protos) and the
 // input from CEREBRATE_HETERO_INPUT (default images). Every tensor is float32.
@@ -408,7 +412,13 @@ int main(int argc, char** argv) {
   std::string describe;
   {
     char buf[96];
-    describe.append("{\"worker\":\"cerebrate-hetero\",\"mode\":");
+    const char* model_env = getenv("CEREBRATE_HETERO_MODEL");
+    const char* profile_env = getenv("CEREBRATE_HETERO_PROFILE");
+    describe.append("{\"worker\":\"cerebrate-hetero\",\"model\":");
+    append_json_string(&describe, model_env && *model_env ? model_env : argv[mode == "tpu+gpu" ? 4 : 3]);
+    describe.append(",\"backend\":");
+    append_json_string(&describe, profile_env && *profile_env ? profile_env : mode.c_str());
+    describe.append(",\"mode\":");
     append_json_string(&describe, mode.c_str());
     describe.append(",\"config\":");
     append_json_string(&describe, config.c_str());

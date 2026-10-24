@@ -130,3 +130,90 @@ models:
       disk_mb: 136.19
       # Never measured -- same gap as mobilenetv1 above.
       ram_mb: null
+
+  yoloe-v8s-pf:
+    description: >-
+      YOLOE-v8s prompt-free instance segmentation (Ultralytics 8.4.184
+      yoloe-v8s-seg-pf): boxes, masks and one of 4,585 built-in labels per
+      object, no prompt. Segmentation and Labeling Lane, Step 2B. Served by
+      cerebrate-hetero through the supervisor's hetero1 slot as MLServer
+      model yoloe-v8s-pf. Prepared and tested off production 2026-10-24;
+      deployment scheduled (see cerebrate-supervisor's README, "hetero1
+      slot"), so not yet live.
+    # Capability names beyond catalog v4's initial list, introduced by the
+    # lane for prompt-free detection and masks.
+    capabilities:
+      - detect-objects
+      - segment-objects
+    # All three are our own conversions of the one upstream checkpoint
+    # (no published LiteRT/TPU conversion exists); the schema records
+    # upstream provenance only, so each cites the checkpoint, verified by
+    # hash against the release asset (also identical under v8.4.0). The
+    # derived files are produced by hosts/cerebrate-pixel6/spikes/yoloe-tpu
+    # (README: fp16-relaxed backbone, head, GPU path); deployed sha256 noted
+    # per artifact. Accuracy is task-level against the original model on
+    # the lane's eight photos (132 detections), not tensor similarity.
+    artifacts:
+      tflite_tpu_backbone:
+        # yoloe-v8s-pf-backbone-tpu-fp32.tflite, 36.1 MB, sha256 f4bfb178...
+        # Backbone + neck, max-pool padding corrected; Edge TPU via NNAPI
+        # with fp16 relaxation.
+        source:
+          url: https://github.com/ultralytics/assets/releases/download/v8.3.0/yoloe-v8s-seg-pf.pt
+          sha256: df213f389d69a0df544cc1a3e500f567176468e4b4ed2ce933b8073c27539ac1
+        validated:
+          pixel6_tflite_nnapi_tpu_fp16relaxed: passed
+      tflite_gpu_head:
+        # yoloe-v8s-pf-head-gpu.tflite, 18.3 MB, sha256 4001f7e8...
+        # Head with native int32 argmax; LiteRT 2.3 GPU.
+        source:
+          url: https://github.com/ultralytics/assets/releases/download/v8.3.0/yoloe-v8s-seg-pf.pt
+          sha256: df213f389d69a0df544cc1a3e500f567176468e4b4ed2ce933b8073c27539ac1
+        validated:
+          pixel6_litert_compiled_gpu_fp16acc32: passed
+      tflite_gpu_full:
+        # yoloe-v8s-pf-gpu-nhwc.tflite, 54.5 MB, sha256 dc504b3b...
+        # The whole model on the GPU: the default variant (fp32) and the
+        # fast variant's fallback (fp16 + fp32 accumulation).
+        source:
+          url: https://github.com/ultralytics/assets/releases/download/v8.3.0/yoloe-v8s-seg-pf.pt
+          sha256: df213f389d69a0df544cc1a3e500f567176468e4b4ed2ce933b8073c27539ac1
+        validated:
+          # fp32: 132/132 detections, box and mask IoU 1.0000.
+          pixel6_litert_compiled_gpu: passed
+          # fp16acc32: 132/132 plus one extra detection.
+          pixel6_litert_compiled_gpu_fp16acc32: passed
+          # pure fp16 (no fp32 accumulation) never adopted for this lane.
+          pixel6_litert_compiled_gpu_fp16: untested
+    worker:
+      binary: cerebrate-hetero
+      port: 8772
+    # The three-way backend distinction, most- to least-preferred. Each maps
+    # to a fixed supervisor profile (the slot's "backend" field):
+    #   fast     tpu_gpu_hybrid: TPU fp16-relaxed backbone + GPU fp16acc32
+    #            head, 74-79 ms on the device; 132/132, box IoU >= 0.965,
+    #            mask IoU mean 0.996. Profile yoloe-v8s-fast (what MLServer
+    #            serves).
+    #   fallback litert_gpu_fp16acc32: the whole model on the GPU, 107 ms;
+    #            not a profile -- used inside yoloe-v8s-fast when the TPU
+    #            stage can't load or fails a request (DONE backend code 2).
+    #   default  litert_gpu_fp32: exact, 186-202 ms. Profile
+    #            yoloe-v8s-default (the reference variant; switch
+    #            model-settings to use it).
+    execution_preferences:
+      pixel6:
+        - tpu_gpu_hybrid
+        - litert_gpu_fp16acc32
+        - litert_gpu_fp32
+    # Worker started by the first request and stopped after 10 minutes idle
+    # (cerebrate_graph_residency: on_demand in model-settings.json). Cold
+    # first request ~7.5 s through MLServer (5.1 s load incl. ~3.8 s TPU
+    # compile).
+    residency: on_demand
+    requirements:
+      # The three .tflite files, MiB like the entries above (the default
+      # variant alone: 51.93).
+      disk_mb: 103.82
+      # Worker RSS, fast profile with its fallback loaded; measured flat
+      # over a 3-minute sustained run. The default profile's not measured.
+      ram_mb: 713

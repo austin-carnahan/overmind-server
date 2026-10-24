@@ -330,3 +330,86 @@ exercised with a full Granite-Docling request). Total worker downtime was
 seconds. **Rollback:** drain the same way, `mv cerebrate-supervisor.prev
 cerebrate-supervisor`, relaunch, and `START` the three workers (the graph
 slots disappear with it).
+
+## Segmentation and Labeling Lane Step 2B: `hetero1` slot (prepared 2026-10-24, deploy scheduled)
+
+**Built and tested side by side with production; not yet deployed.** One
+slot for [`cerebrate-hetero`](../cerebrate-hetero/README.md) (TPU + GPU
+pipeline worker) on fixed port **8772**. No wire-protocol change: the
+slot's `backend` names one of a fixed set of **profiles** compiled into the
+supervisor, and each profile carries its declared model and its complete
+command line. A client still picks only among fixed configurations, never
+a path or an argument:
+
+| Profile (`backend`) | `model` must be | Worker command (after the port) |
+| --- | --- | --- |
+| `yoloe-v8s-fast` | `yoloe-v8s-pf-backbone-tpu-fp32.tflite` | `tpu+gpu libtensorflowlite_jni.so <backbone> yoloe-v8s-pf-head-gpu.tflite fp16acc32 yoloe-v8s-pf-gpu-nhwc.tflite fp16acc32` |
+| `yoloe-v8s-default` | `yoloe-v8s-pf-gpu-nhwc.tflite` | `gpu yoloe-v8s-pf-gpu-nhwc.tflite fp32` |
+
+All paths are flat files in `/data/local/tmp` (the approval rule is
+unchanged; the files were copied out of the spike's `hetero/`
+subdirectory). `START` refuses an unknown profile, a model other than the
+profile's, or a missing profile file, before forking. The worker gets
+`LD_LIBRARY_PATH=/data/local/tmp/litert-2.3.0:/data/local/tmp` (LiteRT 2.3
+first) and `CEREBRATE_HETERO_PROFILE`/`CEREBRATE_HETERO_MODEL`, which its
+DESCRIBE reports as `backend`/`model` — exactly what the MLServer graph
+adapter checks. Other changes: `backend` widened from 8 to 32 characters
+(profile names); `CONTROL_PORT` overridable at build time
+(`-DCONTROL_PORT=8777`) for a side-by-side test instance; slot initializers
+spell out the two new optional fields.
+
+### Tests (2026-10-24, side by side with production)
+
+A test build on control port 8777 ran next to the production supervisor
+(8767), touching only `hetero1` (nothing else listens on 8772); the
+production supervisor, its workers (same PIDs throughout) and MLServer were
+untouched.
+
+- [`hetero_supervisor_chain.py`](../cerebrate-hetero/tests/hetero_supervisor_chain.py):
+  unknown profile, profile/model mismatch, subdirectory path, and a graph
+  slot given a hetero profile — all refused. Each profile: `START` (fast
+  5.3 s incl. TPU compile, default 1.5 s), `STATUS`, DESCRIBE reports the
+  declared model and profile, the eight photos' outputs **bit-identical** to
+  the hand-launched validated runs (all five outputs, max difference 0),
+  idempotent `START`, the other profile refused while running, `STOP`.
+- Through a test MLServer instance (its own ports, adapter copy pointed at
+  8777) with on-demand residency — see the
+  [MLServer README](../mlserver/README.md#segmentation-and-labeling-lane-step-2b--on-demand-residency-yoloe-v8s-pf-prepared-2026-10-24-deploy-scheduled):
+  cold start on the first request, idle stop, kill recovery, unload.
+- TPU/GPU/big cores 31–32 °C during the runs.
+
+### Scheduled deploy runbook
+
+Already staged on the device (new filenames only): `cerebrate-hetero`
+(sha256 `bfcb8e8b…1d49`) and the three `.tflite` files (hashes in
+`models/catalog.yaml`). The new supervisor binary is this directory's
+`cerebrate-supervisor` (sha256 `0921ae22…068a`, built with the Deploy
+command above). An MLServer **restart** is required — a repository `load`
+would import the cached old adapter module, which ignores on-demand
+residency. Expected MLServer downtime about a minute.
+
+1. Record `LIST` from the production supervisor (expected: `infer`,
+   `generate`, `gguf`, `graph3` RUNNING).
+2. In the guest: `sudo systemctl stop cerebrate-mlserver`. Its unloads STOP
+   the workers they started; confirm `LIST` shows everything STOPPED and
+   `STOP` anything left.
+3. Swap the supervisor (as in the 2026-10-23 deploy record): push the new
+   binary as `cerebrate-supervisor.new`; copy the running one (`908f5620…48fd9`)
+   over `cerebrate-supervisor.prev`; kill the old supervisor; move the new
+   one into place; relaunch with the `nohup setsid` command. Its READY line
+   must list `…,graph3,hetero1`.
+4. In the guest: `git pull --ff-only` (adapter with on-demand residency and
+   the `yoloe-v8s-pf` model folder).
+5. `sudo systemctl start cerebrate-mlserver`. The pinned models START their
+   workers through the new supervisor; `yoloe-v8s-pf` loads without one.
+6. Verify: repository index all READY including `yoloe-v8s-pf`; `LIST`
+   shows the four workers RUNNING and `hetero1` STOPPED; MobileNet still
+   classifies 795; `hetero_ondemand.py first http://127.0.0.1:8080 <gateway>
+   8767 /home/droid/cg-test/hetero` → 4/4 bit-identical, `hetero1` RUNNING;
+   a temperature reading. Ten minutes later `hetero1` is STOPPED again.
+
+**Rollback:** stop MLServer and confirm every slot is STOPPED (including
+`hetero1`); kill the supervisor; `mv cerebrate-supervisor.prev
+cerebrate-supervisor`; relaunch; in the guest check out `248c6e3` (the
+commit before this change) or revert this commit; start MLServer. The
+staged hetero files are inert without the slot and can stay or be removed.
