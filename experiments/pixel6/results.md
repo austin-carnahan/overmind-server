@@ -292,3 +292,17 @@ batches of 32 phrases, against the original `get_text_features`:
 
 OWLv2 joins DINOv2 as FP32-only on the G1: both reduced-precision modes fail
 (logit errors ~60, ~8× the detections, wrong top patch for every query).
+
+## 2026-10-24 — Variant decisions (GPU models)
+
+Same naming as SAM 2.1: **`default`** is FP32 compute (exact against the
+original), **`fast`** a reduced-precision mode that passed the task checks.
+
+| Model | `default` | `fast` |
+| --- | --- | --- |
+| SAM 2.1 Hiera-Tiny | FP32, 1.38 s encoder | FP16 + FP32 acc., 0.77 s (worst mask IoU ≈ 0.98) |
+| RF-DETR-Seg-Nano (published) | FP32, ~354 ms | FP16 + FP32 acc., ~205 ms (all detections matched, mask IoU ≥ 0.983) |
+| Depth Anything V2 Small (published) | FP32, 661 ms | FP16 + FP32 acc., 340 ms (depth order 99.98%) |
+| MI-GAN 512 (published) | FP32 compute, 147 ms | FP16, 79 ms (≥ 41 dB in the infilled region) |
+| DINOv2-S/14 | FP32 only | — (both reduced modes fail) |
+| OWLv2 B/16 (ours) | FP32 only, 4.53 s image tower | — (both reduced modes fail) |

@@ -881,3 +881,9 @@ conditions in Section 4.4).
   queries, 882 ms for 4,585 — a candidate for its own small GPU graph if
   large vocabularies are used per image. GPU 27 → 66 °C across each
   8-image run. Step 5's gate is met.
+- **2026-10-24** — **Variants decided for the other GPU models**, named like
+  SAM 2.1's: RF-DETR `default` FP32 (~354 ms) / `fast` FP16+FP32 accumulation
+  (~205 ms); Depth Anything V2 `default` FP32 (661 ms) / `fast` FP16+FP32
+  accumulation (340 ms); MI-GAN `default` FP32 compute (147 ms) / `fast` pure
+  FP16 (79 ms). DINOv2 and OWLv2 are FP32 only. Registered under these names
+  when the models are cataloged and served.
