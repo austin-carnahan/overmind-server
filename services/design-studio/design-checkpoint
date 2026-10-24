@@ -1,0 +1,421 @@
+#!/usr/bin/env python3
+"""Stage, verify, and commit Design Studio checkpoints on Overmind.
+
+Runs as the `openclaw` user. Files are pulled from a paired worker node with
+the File Transfer plugin's `file.fetch` (via `openclaw nodes invoke`), so the
+worker never needs SSH access to Overmind. Stdlib only.
+
+  design-checkpoint init    PROJECT --node NODE --source /abs/path/on/worker
+  design-checkpoint stage   PROJECT --node NODE --src-dir /abs/outbox/dir \
+                            --description TEXT --layers A,B,C [--agent ID]
+  design-checkpoint verify  PROJECT STAGING_ID
+  design-checkpoint commit  PROJECT STAGING_ID
+  design-checkpoint status  PROJECT
+
+Layout under $DESIGN_STORE (default /mnt/substrate/design-studio):
+  projects/<project>/project.json   metadata + HEAD (replaced atomically)
+  projects/<project>/sources/       immutable source files, named by sha256
+  projects/<project>/checkpoints/   immutable committed checkpoints
+  projects/<project>/staging/       incomplete or failed; never HEAD
+  projects/<project>/history/events.jsonl
+"""
+import argparse
+import base64
+import datetime
+import fcntl
+import hashlib
+import json
+import os
+import secrets
+import struct
+import subprocess
+import sys
+import zlib
+from pathlib import Path
+
+STORE = Path(os.environ.get("DESIGN_STORE", "/mnt/substrate/design-studio"))
+CHECKPOINT_FILES = ("document.xcf", "preview.png", "worker-validation.json")
+SCHEMA_VERSION = 1
+
+
+class Fail(Exception):
+    pass
+
+
+def now():
+    return datetime.datetime.now(datetime.timezone.utc).isoformat(timespec="seconds")
+
+
+def sha256(path):
+    h = hashlib.sha256()
+    with open(path, "rb") as f:
+        for block in iter(lambda: f.read(1 << 20), b""):
+            h.update(block)
+    return h.hexdigest()
+
+
+def write_json_atomic(path, data):
+    tmp = path.with_name(f".{path.name}.{secrets.token_hex(4)}.tmp")
+    with open(tmp, "w") as f:
+        json.dump(data, f, indent=2)
+        f.write("\n")
+        f.flush()
+        os.fsync(f.fileno())
+    os.replace(tmp, path)
+
+
+def log_event(project_dir, event, **fields):
+    with open(project_dir / "history" / "events.jsonl", "a") as f:
+        f.write(json.dumps({"at": now(), "event": event, **fields}) + "\n")
+
+
+def project_paths(project):
+    root = STORE / "projects" / project
+    return root, root / "project.json"
+
+
+def locked(project_dir):
+    lock = open(project_dir / ".lock", "w")
+    fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)  # one writer per project
+    return lock
+
+
+def node_fetch(node, path):
+    """Fetch one file from a node; returns (bytes, worker-side sha256)."""
+    out = subprocess.run(
+        ["openclaw", "nodes", "invoke", "--node", node, "--command", "file.fetch",
+         "--params", json.dumps({"path": path}), "--json",
+         "--invoke-timeout", "120000", "--timeout", "150000"],
+        capture_output=True, text=True)
+    text = out.stdout[out.stdout.find("{"):] if "{" in out.stdout else ""
+    try:
+        payload = json.loads(text)["payload"]
+    except (ValueError, KeyError):
+        raise Fail(f"file.fetch {path}: {out.stderr.strip() or out.stdout.strip()[:300]}")
+    if not payload.get("ok"):
+        raise Fail(f"file.fetch {path}: {payload}")
+    data = base64.b64decode(payload["base64"], validate=True)
+    if len(data) != payload["size"]:
+        raise Fail(f"file.fetch {path}: size {len(data)} != reported {payload['size']}")
+    return data, payload["sha256"]
+
+
+# --- format checks -----------------------------------------------------------
+
+def inspect_png(path):
+    data = Path(path).read_bytes()
+    if data[:8] != b"\x89PNG\r\n\x1a\n":
+        raise Fail("preview.png: bad signature")
+    pos, idat, ihdr = 8, b"", None
+    while pos < len(data):
+        length, ctype = struct.unpack(">I4s", data[pos:pos + 8])
+        body = data[pos + 8:pos + 8 + length]
+        crc = struct.unpack(">I", data[pos + 8 + length:pos + 12 + length])[0]
+        if zlib.crc32(ctype + body) != crc:
+            raise Fail(f"preview.png: CRC mismatch in {ctype.decode()} chunk")
+        if ctype == b"IHDR":
+            ihdr = struct.unpack(">IIBBBBB", body)
+        elif ctype == b"IDAT":
+            idat += body
+        elif ctype == b"IEND":
+            break
+        pos += 12 + length
+    if not ihdr:
+        raise Fail("preview.png: no IHDR")
+    width, height, depth, color, _, _, interlace = ihdr
+    channels = {0: 1, 2: 3, 3: 1, 4: 2, 6: 4}[color]
+    raw = zlib.decompress(idat)  # raises on truncated/corrupt data
+    if interlace == 0:
+        expected = height * (1 + (width * channels * depth + 7) // 8)
+        if len(raw) != expected:
+            raise Fail(f"preview.png: pixel data {len(raw)} bytes, expected {expected}")
+    return {"width": width, "height": height}
+
+
+def inspect_xcf(path):
+    """Read canvas size and the layer list from an XCF without GIMP."""
+    data = Path(path).read_bytes()
+    if not data.startswith(b"gimp xcf "):
+        raise Fail("document.xcf: not an XCF file")
+    tag = data[9:13].decode("ascii", "replace")
+    version = 0 if tag == "file" else int(tag[1:])
+    pos = 14
+    width, height, _base = struct.unpack(">III", data[pos:pos + 12])
+    pos += 12 + (4 if version >= 4 else 0)
+    ptr_fmt, ptr_size = (">Q", 8) if version >= 11 else (">I", 4)
+
+    def props(pos):
+        found = {}
+        while True:
+            ptype, plen = struct.unpack(">II", data[pos:pos + 8])
+            if pos + 8 + plen > len(data):
+                raise Fail("document.xcf: property runs past end of file")
+            found.setdefault(ptype, data[pos + 8:pos + 8 + plen])
+            pos += 8 + plen
+            if ptype == 0:
+                return found, pos
+
+    _, pos = props(pos)
+    layer_ptrs = []
+    while True:
+        (ptr,) = struct.unpack(ptr_fmt, data[pos:pos + ptr_size])
+        pos += ptr_size
+        if ptr == 0:
+            break
+        if ptr >= len(data):
+            raise Fail("document.xcf: layer pointer past end of file")
+        layer_ptrs.append(ptr)
+
+    def read_ptr(pos):
+        (ptr,) = struct.unpack(ptr_fmt, data[pos:pos + ptr_size])
+        if ptr >= len(data):
+            raise Fail("document.xcf: pointer past end of file (truncated?)")
+        return ptr
+
+    def check_pixels(hier_ptr, name):
+        """Every tile of the full-resolution level must lie inside the file."""
+        w, h, _bpp = struct.unpack(">III", data[hier_ptr:hier_ptr + 12])
+        level = read_ptr(hier_ptr + 12)
+        lw, lh = struct.unpack(">II", data[level:level + 8])
+        if (lw, lh) != (w, h):
+            raise Fail(f"document.xcf: layer {name!r} level size mismatch")
+        pos, tiles = level + 8, []
+        while True:
+            (tile,) = struct.unpack(ptr_fmt, data[pos:pos + ptr_size])
+            pos += ptr_size
+            if tile == 0:
+                break
+            if tile >= len(data):
+                raise Fail(f"document.xcf: layer {name!r} tile past end of file (truncated?)")
+            tiles.append(tile)
+        expected = -(-w // 64) * -(-h // 64)
+        if len(tiles) != expected:
+            raise Fail(f"document.xcf: layer {name!r} has {len(tiles)} tiles, expected {expected}")
+
+    layers = []
+    for ptr in layer_ptrs:
+        lw, lh, _ltype, nlen = struct.unpack(">IIII", data[ptr:ptr + 16])
+        name = data[ptr + 16:ptr + 16 + nlen].rstrip(b"\0").decode("utf-8")
+        found, after = props(ptr + 16 + nlen)
+        check_pixels(read_ptr(after), name)
+        if 33 in found:  # PROP_FLOAT_OPACITY
+            opacity = struct.unpack(">f", found[33])[0] * 100
+        elif 6 in found:  # PROP_OPACITY
+            opacity = struct.unpack(">I", found[6])[0] / 2.55
+        else:
+            opacity = 100.0
+        offsets = list(struct.unpack(">ii", found[15])) if 15 in found else [0, 0]
+        is_text = 26 in found or b"gimp-text-layer" in found.get(21, b"")
+        kind = "group" if 29 in found else "text" if is_text else "layer"
+        layers.append({"name": name, "kind": kind, "offsets": offsets,
+                       "size": [lw, lh], "opacity": round(opacity, 1)})
+    return {"xcf_version": version, "canvas": {"width": width, "height": height},
+            "layers": layers}
+
+
+# --- commands ----------------------------------------------------------------
+
+def cmd_init(args):
+    root, pj = project_paths(args.project)
+    if pj.exists():
+        raise Fail(f"project {args.project} already exists")
+    for sub in ("sources", "checkpoints", "staging", "history"):
+        (root / sub).mkdir(parents=True, exist_ok=True)
+    data, worker_sha = node_fetch(args.node, args.source)
+    local_sha = hashlib.sha256(data).hexdigest()
+    if local_sha != worker_sha:
+        raise Fail(f"source hash mismatch: worker {worker_sha} local {local_sha}")
+    name = local_sha + Path(args.source).suffix.lower()
+    dest = root / "sources" / name
+    dest.write_bytes(data)
+    dest.chmod(0o444)
+    write_json_atomic(pj, {
+        "schema_version": SCHEMA_VERSION, "project_id": args.project,
+        "created_at": now(), "head": None, "checkpoints": [],
+        "sources": [{"id": local_sha, "file": f"sources/{name}", "bytes": len(data),
+                     "origin": {"node": args.node, "path": args.source}}]})
+    log_event(root, "project.init", source=local_sha, node=args.node)
+    print(json.dumps({"project": args.project, "source": local_sha}, indent=2))
+
+
+def load_project(project):
+    root, pj = project_paths(project)
+    if not pj.exists():
+        raise Fail(f"no project {project}")
+    return root, pj, json.loads(pj.read_text())
+
+
+def cmd_stage(args):
+    root, _, proj = load_project(args.project)
+    parent = proj["head"]
+    number = len(proj["checkpoints"]) + 1
+    staging_id = datetime.datetime.now(datetime.timezone.utc).strftime("%Y%m%dT%H%M%SZ-") + secrets.token_hex(3)
+    stage = root / "staging" / staging_id
+    stage.mkdir()
+    log_event(root, "stage.start", staging_id=staging_id, node=args.node, src_dir=args.src_dir)
+    files = {}
+    try:
+        for name in CHECKPOINT_FILES:
+            data, worker_sha = node_fetch(args.node, f"{args.src_dir.rstrip('/')}/{name}")
+            (stage / name).write_bytes(data)
+            local_sha = sha256(stage / name)
+            if local_sha != worker_sha:
+                raise Fail(f"{name}: worker sha256 {worker_sha} != received {local_sha}")
+            files[name] = {"sha256": local_sha, "bytes": len(data)}
+    except Fail as e:
+        (stage / "FAILED").write_text(f"{now()} {e}\n")
+        log_event(root, "stage.failed", staging_id=staging_id, error=str(e))
+        raise
+    worker = json.loads((stage / "worker-validation.json").read_text())
+    manifest = {
+        "schema_version": SCHEMA_VERSION,
+        "project_id": args.project,
+        "checkpoint_id": f"{number:04d}-{files['document.xcf']['sha256'][:6]}",
+        "parent_checkpoint_id": parent,
+        "created_at": now(),
+        "agent_id": args.agent,
+        "worker_id": args.node,
+        "source_dir": args.src_dir,
+        "toolchain": {"gimp_version": worker.get("gimp_version")},
+        "files": files,
+        "layers_expected": [s for s in args.layers.split(",") if s],
+        "canvas": worker.get("canvas"),
+        "description": args.description,
+        "source_asset_ids": [s["id"] for s in proj["sources"]],
+    }
+    write_json_atomic(stage / "checkpoint.json", manifest)
+    log_event(root, "stage.fetched", staging_id=staging_id, checkpoint_id=manifest["checkpoint_id"])
+    print(json.dumps({"staging_id": staging_id, "checkpoint_id": manifest["checkpoint_id"],
+                      "parent": parent, "files": files}, indent=2))
+
+
+def verify_stage(stage, project):
+    """Return the list of checks; raise Fail on the first failure."""
+    checks = []
+
+    def ok(name, detail=""):
+        checks.append({"check": name, "ok": True, "detail": detail})
+
+    if (stage / "FAILED").exists():
+        raise Fail("staging directory is marked FAILED")
+    for name in CHECKPOINT_FILES + ("checkpoint.json",):
+        if not (stage / name).is_file():
+            raise Fail(f"missing {name}")
+    ok("files present")
+    m = json.loads((stage / "checkpoint.json").read_text())
+    if m.get("schema_version") != SCHEMA_VERSION or m.get("project_id") != project:
+        raise Fail("manifest schema_version/project_id mismatch")
+    for name, meta in m["files"].items():
+        actual = sha256(stage / name)
+        size = (stage / name).stat().st_size
+        if actual != meta["sha256"] or size != meta["bytes"]:
+            raise Fail(f"{name}: sha256/size differs from manifest")
+    ok("hashes match manifest")
+    try:
+        xcf = inspect_xcf(stage / "document.xcf")
+        png = inspect_png(stage / "preview.png")
+    except (struct.error, ValueError, KeyError, IndexError, zlib.error) as e:
+        raise Fail(f"unreadable checkpoint file: {e!r}")
+    if xcf["canvas"] != m["canvas"]:
+        raise Fail(f"XCF canvas {xcf['canvas']} != manifest {m['canvas']}")
+    names = [l["name"] for l in xcf["layers"]]
+    if sorted(names) != sorted(m["layers_expected"]):
+        raise Fail(f"XCF layers {names} != expected {m['layers_expected']}")
+    ok("xcf structure", f"v{xcf['xcf_version']}, layers {names}")
+    worker = json.loads((stage / "worker-validation.json").read_text())
+    if not worker.get("xcf_reopened") or [l["name"] for l in worker["layers"]] != names:
+        raise Fail("worker reopen check missing or disagrees with XCF layer order")
+    if worker.get("xcf_sha256") != m["files"]["document.xcf"]["sha256"]:
+        raise Fail("worker reopen check was run on a different document.xcf")
+    ok("worker fresh-process reopen agrees", worker.get("gimp_version", ""))
+    if png != m["canvas"]:
+        raise Fail(f"preview {png} != canvas {m['canvas']}")
+    ok("preview decodes", f"{png['width']}x{png['height']}")
+    return checks, xcf
+
+
+def cmd_verify(args):
+    root, _, _ = load_project(args.project)
+    stage = root / "staging" / args.staging_id
+    try:
+        checks, xcf = verify_stage(stage, args.project)
+    except Fail as e:
+        if stage.is_dir():
+            (stage / "FAILED").write_text(f"{now()} verify: {e}\n")
+        log_event(root, "verify.failed", staging_id=args.staging_id, error=str(e))
+        raise
+    write_json_atomic(stage / "verify.json", {"verified_at": now(), "checks": checks, "xcf": xcf})
+    log_event(root, "verify.ok", staging_id=args.staging_id)
+    print(json.dumps(checks, indent=2))
+
+
+def cmd_commit(args):
+    root, pj, proj = load_project(args.project)
+    lock = locked(root)
+    try:
+        proj = json.loads(pj.read_text())  # re-read under the lock
+        stage = root / "staging" / args.staging_id
+        if not (stage / "verify.json").exists():
+            raise Fail("not verified; run verify first")
+        try:
+            verify_stage(stage, args.project)  # files must be unchanged since verify
+        except Fail as e:
+            (stage / "FAILED").write_text(f"{now()} commit re-verify: {e}\n")
+            log_event(root, "commit.refused", staging_id=args.staging_id, error=str(e))
+            raise
+        m = json.loads((stage / "checkpoint.json").read_text())
+        if m["parent_checkpoint_id"] != proj["head"]:
+            raise Fail(f"parent {m['parent_checkpoint_id']} != HEAD {proj['head']}; restage")
+        dest = root / "checkpoints" / m["checkpoint_id"]
+        if dest.exists():
+            raise Fail(f"{dest.name} already exists")
+        os.rename(stage, dest)  # atomic on one filesystem
+        for f in dest.iterdir():
+            f.chmod(0o444)
+        dest.chmod(0o555)
+        proj["head"] = m["checkpoint_id"]
+        proj["checkpoints"].append({"id": m["checkpoint_id"], "parent": m["parent_checkpoint_id"],
+                                    "committed_at": now(), "description": m["description"]})
+        write_json_atomic(pj, proj)
+        log_event(root, "commit", checkpoint_id=m["checkpoint_id"], parent=m["parent_checkpoint_id"])
+        print(json.dumps({"head": proj["head"], "path": str(dest)}, indent=2))
+    finally:
+        lock.close()
+
+
+def cmd_status(args):
+    root, _, proj = load_project(args.project)
+    listed = {c["id"] for c in proj["checkpoints"]}
+    on_disk = sorted(p.name for p in (root / "checkpoints").iterdir())
+    staging = []
+    for s in sorted((root / "staging").iterdir()):
+        state = "failed" if (s / "FAILED").exists() else "verified" if (s / "verify.json").exists() else "pending"
+        staging.append({"id": s.name, "state": state})
+    print(json.dumps({
+        "project": proj["project_id"], "head": proj["head"],
+        "checkpoints": proj["checkpoints"],
+        "unrecorded_checkpoint_dirs": [d for d in on_disk if d not in listed],
+        "staging": staging}, indent=2))
+
+
+def main():
+    p = argparse.ArgumentParser(description=__doc__.splitlines()[0])
+    sub = p.add_subparsers(dest="cmd", required=True)
+    s = sub.add_parser("init"); s.add_argument("project"); s.add_argument("--node", required=True); s.add_argument("--source", required=True)
+    s = sub.add_parser("stage"); s.add_argument("project"); s.add_argument("--node", required=True)
+    s.add_argument("--src-dir", required=True); s.add_argument("--description", required=True)
+    s.add_argument("--layers", required=True); s.add_argument("--agent", default="buckminster")
+    s = sub.add_parser("verify"); s.add_argument("project"); s.add_argument("staging_id")
+    s = sub.add_parser("commit"); s.add_argument("project"); s.add_argument("staging_id")
+    s = sub.add_parser("status"); s.add_argument("project")
+    args = p.parse_args()
+    try:
+        {"init": cmd_init, "stage": cmd_stage, "verify": cmd_verify,
+         "commit": cmd_commit, "status": cmd_status}[args.cmd](args)
+    except (Fail, BlockingIOError) as e:
+        print(f"FAIL: {e}", file=sys.stderr)
+        sys.exit(1)
+
+
+if __name__ == "__main__":
+    main()

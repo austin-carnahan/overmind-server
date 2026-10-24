@@ -1,0 +1,40 @@
+#!/usr/bin/env bash
+# Reopen an XCF in a fresh, isolated headless GIMP (no bridge, throwaway
+# profile) and print its canvas and layer list as JSON. Runs on the worker
+# (macOS GIMP 3.x); the JSON goes into the checkpoint package as
+# worker-validation.json.
+#
+#   worker-reopen-check /path/to/document.xcf > worker-validation.json
+set -euo pipefail
+
+xcf=${1:?usage: worker-reopen-check /path/to/document.xcf}
+[ -f "$xcf" ] || { echo "not a file: $xcf" >&2; exit 1; }
+gimp_console=${GIMP_CONSOLE:-/Applications/GIMP.app/Contents/MacOS/gimp-console}
+
+profile=$(mktemp -d)
+log=$(mktemp)
+trap 'rm -rf "$profile" "$log"' EXIT
+
+GIMP3_DIRECTORY=$profile XCF_PATH=$xcf "$gimp_console" -i -n --quit \
+  --batch-interpreter=python-fu-eval -b '
+import json, os, gi
+gi.require_version("Gimp", "3.0")
+from gi.repository import Gimp, Gio
+img = Gimp.file_load(Gimp.RunMode.NONINTERACTIVE, Gio.File.new_for_path(os.environ["XCF_PATH"]))
+out = {"canvas": {"width": img.get_width(), "height": img.get_height()},
+       "gimp_version": Gimp.version(),
+       "layers": [{"name": l.get_name(), "kind": type(l).__name__,
+                   "offsets": list(l.get_offsets()[1:]),
+                   "size": [l.get_width(), l.get_height()],
+                   "opacity": round(l.get_opacity(), 2)} for l in img.get_layers()]}
+print("REOPEN-JSON " + json.dumps(out))
+' >"$log" 2>&1 || { cat "$log" >&2; exit 1; }
+
+line=$(grep -m1 '^REOPEN-JSON ' "$log") || { echo "no result from GIMP" >&2; cat "$log" >&2; exit 1; }
+printf '%s\n' "${line#REOPEN-JSON }" | XCF_PATH=$xcf python3 -c '
+import hashlib, json, os, sys
+d = json.load(sys.stdin)
+d["xcf_reopened"] = True
+d["xcf_sha256"] = hashlib.sha256(open(os.environ["XCF_PATH"], "rb").read()).hexdigest()
+d["checked_at"] = __import__("datetime").datetime.now(__import__("datetime").timezone.utc).isoformat(timespec="seconds")
+print(json.dumps(d, indent=2))'

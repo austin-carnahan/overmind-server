@@ -312,6 +312,52 @@ took 8 calls and about 67k tokens, against 28 calls and 378k for Spike C.
   work") and `AGENTS.md` now describe this as the only way to look at a
   document.
 
+## Spike D results, 2026-10-23
+
+**Gate D: passed.** Store, tools, and protocol:
+[services/design-studio](../services/design-studio/README.md).
+
+- **Store.** `/mnt/substrate/design-studio` (`austin:openclaw 2775`).
+  Project: `design-studio-smoke-test`. Its source `hotel-room.jpg` is pinned
+  as `sources/955562bb….jpg`.
+- **Transport.** `file.fetch` through `openclaw nodes invoke`. The node
+  reports a sha256 computed on the Mac, and Overmind recomputes it after the
+  file lands. A 4.9 MB XCF crossed without trouble.
+- **Checkpoint `0001-fedc42` committed** (parent none). Contents: the
+  Spike A XCF (sha256 `fedc422e…`), its preview, and the Mac's
+  fresh-process reopen result. The Overmind copy matches the manifest, and
+  the operator could inspect it without the Mac.
+  - Caveat: `0001` was verified before the reopen check started recording
+    the XCF's hash. Its `worker-validation.json` has no `xcf_sha256`.
+- **No GIMP on the Pi** (decided). Validation is a stdlib structural XCF
+  parse plus a full PNG decode on Overmind, and a fresh-process GIMP reopen
+  on the worker, tied to the file by hash.
+
+**Failure tests.** All rejected, and HEAD stayed at `0001-fedc42`
+throughout:
+
+| Test | Result |
+| --- | --- |
+| Package missing `preview.png` | `file.fetch` `NOT_FOUND`; staging marked FAILED |
+| XCF truncated at 1 MB, hashes honest | Rejected: "layer 'Background' tile past end of file" |
+| One byte flipped after landing | Rejected: sha256 mismatch; commit refused (not verified) |
+| Verified, then preview changed before commit | Commit re-verify rejected it and marked it FAILED |
+| Two candidates built on the same HEAD (throwaway project) | First committed; second refused: "parent None != HEAD 0001-fedc42; restage" |
+
+**What the tests changed in the tools:**
+
+- The first truncation test **passed verification**. XCF keeps layer
+  headers before pixel data, and the reused worker check wasn't tied to the
+  file.
+- Fix 1: the parser now walks every layer's hierarchy, level, and tile
+  pointers.
+- Fix 2: `worker-reopen-check` now records `xcf_sha256`, and verify requires
+  it to match the manifest.
+
+**Still manual.** The operator runs commits. Buckminster can export and
+fetch, but cannot yet stage or commit, because it has no shell. Spike E
+decides how the agent requests a publish.
+
 ## Risks
 
 - The Mac's local exec defaults are broad until finding 2's denies are in
