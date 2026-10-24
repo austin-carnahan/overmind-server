@@ -152,3 +152,8 @@ fp32 decoder from the device embeddings, eight box prompts):
 The published card reports, on a Pixel 8a, that mask quality holds at fp16
 (one center click). On this Pixel 6, judged against the original model across
 eight box prompts, pure fp16 does not hold for either encoder.
+
+**Decision (2026-10-24):** SAM 2.1 ships as two variants — **`default`**: FP32
+(prepared encoder + constants-as-inputs box decoder; exact), and **`fast`**:
+the same graphs at FP16 with FP32 accumulation (encoder 0.77 s, decoder 57 ms;
+worst mask IoU ≈ 0.98). Pure FP16 is not offered.

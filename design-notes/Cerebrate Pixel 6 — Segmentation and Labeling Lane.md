@@ -823,5 +823,10 @@ conditions in Section 4.4).
   pure FP16 fails on the G1, FP16+FP32-accumulation gives worst mask IoU
   ≈ 0.98, and FP32 is exact. Validated path: prepared encoder (1.38 s) +
   constants-as-inputs box decoder, vs 10.2 s + ~150–200 ms per box on CPU.
-  Preparation rule added (Section 4.5). Open decision: an acceptance
-  threshold for the mixed-precision variants.
+  Preparation rule added (Section 4.5).
+- **2026-10-24** — **SAM 2.1 variants decided.** Two variants, both kept
+  available: **`default` = FP32** (exact vs the original — the lane's choice
+  for SAM for now) and **`fast` = FP16 with FP32 accumulation** (worst mask
+  IoU ≈ 0.98, ~1.8× faster), an accepted compromise for workflows that favor
+  speed. Pure FP16 is not offered. When these models are cataloged and
+  served, both variants are registered under those names.
