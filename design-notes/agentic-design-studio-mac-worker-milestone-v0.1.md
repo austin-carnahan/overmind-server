@@ -1,6 +1,6 @@
 # Agentic Design Studio — Mac GIMP Worker Milestone
 
-**Status:** Implementation plan / not yet executed  
+**Status:** Spikes A–E executed and gates passed, 2026-10-23 (with caveats). See the [environment report](agentic-design-studio-environment.md) and [remote workers](remote-workers.md). Open: agent-driven restore to the worker, and upstream GIMP Agent MCP bugs.  
 **Version:** 0.1  
 **Date:** 2026-10-23  
 **Parent architecture:** `agentic-design-shopping-workbench.md` (not written yet; not needed for this milestone)  

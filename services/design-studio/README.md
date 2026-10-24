@@ -47,6 +47,10 @@ SSD.
   bridge) and prints JSON with the canvas size, the layer list, the GIMP
   version, and the XCF's `sha256`. That JSON becomes the package's
   `worker-validation.json`.
+- [`make-gimp-launcher`](make-gimp-launcher) runs **on the Mac**. It builds
+  `GIMP Agent Bridge.app`, which opens GIMP through LaunchServices with the
+  bridge on. Use it instead of `gimp_launch`, which ties GIMP's lifetime to
+  the node host.
 - [`design-checkpoint`](design-checkpoint) runs **on Overmind as `openclaw`**
   and uses only the Python standard library. It pulls files with
   `openclaw nodes invoke ... file.fetch`, so the worker never needs SSH access
@@ -72,6 +76,29 @@ SSD.
 
    A new project needs `$D init <project> --node macbook-m1 --source <path>`
    first. It fetches the source file and pins it under its hash.
+
+## Restoring a checkpoint to the worker
+
+Normally you resume from the worker's own outbox copy, after `file_fetch`
+confirms its sha256 matches the committed manifest. When that copy is gone,
+restoring is an **operator step** for now. Agents can't push files to the Mac,
+because `openclaw nodes invoke` passes params as a single argv string and
+Linux caps one argument at 128 KB.
+
+```bash
+design-checkpoint restore-command <project> [<checkpoint>]   # default: HEAD
+```
+
+This prints a `run_on_mac` line
+(`mkdir -p … && rsync -a --chmod=u+w overmind-01:<checkpoint dir>/ ~/DesignStudio/workspaces/<project>/restore/<id>/`)
+and the `expect_sha256` to check afterwards. It reuses the Mac's existing SSH
+access to Overmind and adds no service. Buckminster can run it and hand the
+line to the user. Verified 2026-10-23 by restoring `0002-3f2f0f`; the hash
+matched.
+
+If agent-driven restore becomes worth it, the cheapest step up is a
+read-only share in the existing Samba container, which the Mac keeps
+mounted.
 
 ## What "verified" means
 

@@ -258,8 +258,8 @@ later if a spike needs it. Turning it off is not a sandbox:
   published tools, so Buckminster loses the GIMP tools.
 - After reconnecting: `connected: true`, 38 tools, no pending approval.
 
-**Not yet persistent.** For the spikes, the node runs in the foreground. A
-launchd service (`openclaw node install`) needs the nvm `PATH` handled first.
+**Persistence.** The spikes ran the node in the foreground. It has since been
+installed as a launchd service with a pinned `--runtime-path`; see Wrap-up.
 
 **Mac resources.** At pairing time, with GIMP open, the node reported about
 160 MB of free RAM and a load around 4 on 8 GB. Watch this during heavier
@@ -417,6 +417,30 @@ from Overmind.
      open.
    - The PDB argument converter has no `GimpDisplay` case.
    - `gimp_launch` doesn't detach GIMP on POSIX.
+
+## Wrap-up, 2026-10-23
+
+- **Restore.** `design-checkpoint restore-command <project> [<id>]` prints
+  the operator's `rsync` line and the expected sha256. Verified by restoring
+  `0002-3f2f0f` to the Mac; the hash matched.
+- **GIMP launcher.**
+  [`make-gimp-launcher`](../services/design-studio/make-gimp-launcher)
+  builds `~/Applications/GIMP Agent Bridge.app`, which runs
+  `open -n -a GIMP --args … -b <start bridge>`. The bridge is reachable
+  about 22 s after opening, with GIMP's parent PID 1. No menu click is
+  needed.
+- **Node service.** `openclaw node install … --runtime-path
+  ~/.nvm/versions/node/v24.20.0/bin/node` installs the LaunchAgent
+  `ai.openclaw.node` (`RunAtLoad`, `KeepAlive`, log
+  `~/Library/Logs/openclaw/node.log`). It kept the same paired identity.
+  After `kill -9`, launchd restarted it, it reconnected with 38 tools, and
+  the launcher-started GIMP survived.
+- **Network-drop test.** Tailscale went down on the Mac for 25 s during a
+  baked 250 px blur. GIMP and the node process stayed alive, the blur
+  finished, and the node reconnected by itself. Buckminster reported
+  "appears to have taken effect" from a pixel check, said the tool's
+  completion was unconfirmed, and did not retry.
+- **Pattern.** Generalized in [remote workers](remote-workers.md).
 
 ## Risks
 

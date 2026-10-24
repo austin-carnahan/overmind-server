@@ -11,6 +11,7 @@ worker never needs SSH access to Overmind. Stdlib only.
   design-checkpoint verify  PROJECT STAGING_ID
   design-checkpoint commit  PROJECT STAGING_ID
   design-checkpoint status  PROJECT
+  design-checkpoint restore-command PROJECT [CHECKPOINT]   (default: HEAD)
 
 Layout under $DESIGN_STORE (default /mnt/substrate/design-studio):
   projects/<project>/project.json   metadata + HEAD (replaced atomically)
@@ -420,6 +421,27 @@ def cmd_commit(args):
         lock.close()
 
 
+def cmd_restore_command(args):
+    """Print the operator command that copies a checkpoint back to the worker.
+
+    There is no agent-driven restore yet (node invoke params are argv-limited),
+    so the operator runs this on the Mac, which already has SSH to Overmind.
+    """
+    root, _, proj = load_project(args.project)
+    cid = args.checkpoint or proj["head"]
+    listed = {c["id"]: c for c in proj["checkpoints"]}
+    if cid not in listed:
+        raise Fail(f"no committed checkpoint {cid!r} in {args.project}")
+    dest = f"~/DesignStudio/workspaces/{args.project}/restore/{cid}/"
+    m = json.loads((root / "checkpoints" / cid / "checkpoint.json").read_text())
+    print(json.dumps({
+        "checkpoint": cid,
+        "run_on_mac": f"mkdir -p {dest} && rsync -a --chmod=u+w overmind-01:{root}/checkpoints/{cid}/ {dest}",
+        "then_open": f"{dest}document.xcf",
+        "expect_sha256": m["files"]["document.xcf"]["sha256"],
+    }, indent=2))
+
+
 def cmd_status(args):
     root, _, proj = load_project(args.project)
     listed = {c["id"] for c in proj["checkpoints"]}
@@ -445,10 +467,12 @@ def main():
     s = sub.add_parser("verify"); s.add_argument("project"); s.add_argument("staging_id")
     s = sub.add_parser("commit"); s.add_argument("project"); s.add_argument("staging_id")
     s = sub.add_parser("status"); s.add_argument("project")
+    s = sub.add_parser("restore-command"); s.add_argument("project"); s.add_argument("checkpoint", nargs="?")
     args = p.parse_args()
     try:
         {"init": cmd_init, "stage": cmd_stage, "verify": cmd_verify,
-         "commit": cmd_commit, "status": cmd_status}[args.cmd](args)
+         "commit": cmd_commit, "status": cmd_status,
+         "restore-command": cmd_restore_command}[args.cmd](args)
     except (Fail, BlockingIOError) as e:
         print(f"FAIL: {e}", file=sys.stderr)
         sys.exit(1)

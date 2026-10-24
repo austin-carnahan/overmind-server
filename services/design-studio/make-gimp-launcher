@@ -1,0 +1,22 @@
+#!/usr/bin/env bash
+# Build "GIMP Agent Bridge.app" on the macOS worker: a launcher that opens
+# GIMP with the GIMP Agent MCP bridge already listening.
+#
+# GIMP is started through LaunchServices (`open -n -a`), so it is not a child
+# of the node host, a terminal, or the MCP server. Restarting or crashing any
+# of those cannot take unsaved work with it. (gimp-agent-mcp's own `shortcut`
+# writes a shell script, and `gimp_launch` spawns an attached child.)
+#
+#   make-gimp-launcher [destination dir]    # default: ~/Applications
+set -euo pipefail
+
+dest=${1:-$HOME/Applications}
+gimp_app=/Applications/GIMP.app
+[ -d "$gimp_app" ] || { echo "GIMP not found at $gimp_app" >&2; exit 1; }
+mkdir -p "$dest"
+
+# Same bridge start-up code as `gimp-agent-mcp launch` (gimp_agent_mcp.paths).
+bridge="proc=Gimp.get_pdb().lookup_procedure('plug-in-gimp-agent-bridge');cfg=proc.create_config();cfg.set_property('run-mode',Gimp.RunMode.NONINTERACTIVE);proc.run(cfg)"
+
+osacompile -o "$dest/GIMP Agent Bridge.app" -e "do shell script \"open -n -a $gimp_app --args --new-instance --batch-interpreter=python-fu-eval -b \" & quoted form of \"$bridge\""
+echo "Created $dest/GIMP Agent Bridge.app"
