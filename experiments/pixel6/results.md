@@ -241,3 +241,54 @@ CPU: 58–71 dB.
 
 The first model where pure FP16 holds up (PSNR ≥ 41 dB in the infilled region).
 CPU worked here despite the card's note that XNNPACK declines this graph.
+
+## 2026-10-24 — OWLv2 B/16 ensemble (our conversion, rev `cfd3195b`)
+
+Code: [owlv2-gpu](../../hosts/cerebrate-pixel6/spikes/owlv2-gpu/README.md).
+No published LiteRT conversion existed. Image tower and text tower as separate
+graphs, vocabulary as data; host step computes logits and adds the box bias.
+Stage 1 (prepared tower + host step vs original forward): logits ≤ 1.3e-5,
+boxes ≤ 1.2e-7, objectness exact. Stage 2 (converted vs eager): cosine
+1.000000 on every output. Eight photos, 24 text queries (household objects).
+
+**Image tower** (354 MB fp32, `[1,3,960,960]`, 3,600 patches):
+
+| Config | E2E | Logit max diff | Detections (ref 75) | Matched | Box IoU min | Score max diff | Top patch / query | Objectness top-100 | Verdict |
+| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |
+| CPU (XNNPACK) | 35.9 s | — | — | — | — | — | — | — | reference latency |
+| GPU fp32, box bias on device | 4.51 s | 0.016 | 81 | 0 | — | — | 192/192 | 1.000 | **wrong boxes** (G1 defect) |
+| **GPU fp32, box bias on host** | **4.53 s** (~7.9×) | 0.016 | 75 | 75 | 1.0000 | 0.0002 | 192/192 | 1.000 | **correct** |
+| GPU fp16 + fp32 acc. | 2.38 s | 60.1 | 602 | 73 | 0.55 | 0.17 | 0/192 | 0.946 | fails |
+| GPU fp16 | 2.01 s | 59.9 | 608 | 67 | 0.56 | 0.21 | 0/192 | 0.860 | fails |
+
+The box defect: with `sigmoid(box_head(feats) + box_bias)` in the graph, the
+GPU output has the box head's patch-0 value at every patch — x and y take only
+the 60 grid values the baked `[1,3600,4]` bias supplies, w and h are constant.
+Emitting the box logits and adding the bias on the host fixes it exactly.
+G3D rose 27 → 63–66 °C over each 8-image GPU run (~36 s busy), back to
+25–36 °C within minutes.
+
+**Text tower** (254 MB fp32, token ids `[32,16]` int32 → `[32,512]`); three
+batches of 32 phrases, against the original `get_text_features`:
+
+| Config | E2E per 32 phrases | Placement | Worst row cosine | Nearest vocabulary entry same | Verdict |
+| --- | --- | --- | --- | --- | --- |
+| CPU (XNNPACK) | 1.08 s | 691/702 XNNPACK | 1.000000 | 96/96 | correct |
+| **GPU + CPU** | **229 ms** | 662/702 GPU (int token ops on CPU) | 1.000000 | 96/96 | **correct** |
+| GPU only | — | — | — | — | compile fails (int ops must fall back) |
+
+**Task checks on the GPU fp32 image-tower outputs:**
+
+- *Large vocabulary* — all 4,585 YOLOE prompt-free class names as queries:
+  every one of the 355 patches the original scores ≥ 0.2 gets the same best
+  label (355/355); best-logit max diff 0.015. Host step (3,600 × 512 ·
+  512 × N, plus argmax) in the Pixel's Debian guest (numpy): 8 ms for 24
+  queries, 110 ms for 1,203, 882 ms for 4,585.
+- *Image exemplars* — three crops (laptop, dog, mirror) run through the image
+  tower on the GPU; query = class embedding of the crop's highest-objectness
+  box (transformers' rule), against `image_guided_detection` on all eight
+  photos at score ≥ 0.9: 6/6, 34/34 and 39/39 detections matched, box IoU
+  ≥ 0.9999, score diff ≤ 1e-4.
+
+OWLv2 joins DINOv2 as FP32-only on the G1: both reduced-precision modes fail
+(logit errors ~60, ~8× the detections, wrong top patch for every query).

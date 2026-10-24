@@ -233,11 +233,11 @@ evidence showing what actually ran on the accelerator.
 | SAM 2.1 Tiny encoder | Mask refinement | Transformer (Hiera) | 134 MB fp32 / 67 MB fp16 | **GPU** | LiteRT GPU, prepared | CPU fp32 | — |
 | SAM 2.1 / EdgeSAM decoders | Box → mask | Mixed; dynamic shapes | ~21 MB fp32 | **CPU** | CPU | LiteRT GPU, if converted | — |
 | RF-DETR Seg Nano | Fixed-class detector; GPU test case | Transformer | 123 MB fp32 | GPU | LiteRT GPU, prepared | CPU (483 ms, measured) | — |
-| OWLv2 image tower | Open-vocabulary detection | ViT-B/16 at 960×960 | ~155M params | **GPU** | LiteRT GPU, prepared | CPU (slow) | — |
+| OWLv2 image tower | Open-vocabulary detection | ViT-B/16 at 960×960 | ~155M params, 354 MB fp32 | **GPU** | **LiteRT GPU, prepared (box bias on host): 4.53 s end to end at fp32, task-exact (measured)**; fp16 modes fail | CPU (35.9 s, measured) | — |
 | DINOv2-small (test model, not in the pipeline) | GPU path proof | Transformer (ViT-S/14) | 22M params, 87 MB fp32 | **GPU** | **LiteRT GPU, prepared: 68.6 ms end to end at fp32, cosine 1.0 (measured)** | CPU (344 ms, measured) | — |
 | Depth Anything V2 Small (added 2026-10-24) | Depth-aware edits: relative depth map | Transformer (DINOv2 ViT-S + DPT head) | ~25M params | **GPU** | Published `litert-community/depth-anything-v2-small`, validated per Section 4.7 | Our prepared conversion (DINOv2 rules apply) | CPU |
 | MI-GAN 512 Places2 (added 2026-10-24) | Infill: object removal and correction | CNN (mobile inpainting GAN) | small (size to confirm) | **GPU** | Published `litert-community/MI-GAN-512-Places2-LiteRT`, validated per Section 4.7 | TPU int8, if quality holds | CPU |
-| OWLv2 text tower | Phrase → embedding | Small text transformer | Small | CPU, or precomputed offline | CPU | — | — |
+| OWLv2 text tower | Phrase → embedding | Text transformer (CLIP) | ~63M params, 254 MB fp32 | **GPU + CPU**, or precomputed offline | **GPU+CPU split: 229 ms per 32 phrases, exact (measured)** | CPU (1.08 s per 32, exact) | — |
 
 The two models added on 2026-10-24 extend the design capabilities beyond
 segmentation — depth-aware edits and infill — and are tested after the
@@ -286,7 +286,12 @@ on this device:
    `[1,256,64,64]` dense prompt and `[4096,256]` positional table). Feed them
    as model inputs, written once per process — the fully GPU-resident decoder
    went from mask IoU ≈ 0 to exact. (Size/dtype threshold not established;
-   a 98K-element fp32 constant and fp16-cast constants were fine.)
+   a 98K-element fp32 constant and fp16-cast constants were fine.) OWLv2: a
+   baked `[1,3600,4]` box bias added to the box head's output came out with
+   the head's output broadcast from patch 0 — boxes collapsed to the patch
+   grid while every other output was right. Moved to the host step (not
+   bisected further; whether feeding it as an input also works is untested).
+   Size alone doesn't predict this defect: check every output, not just one.
 4. **No per-channel broadcast multiplies** (`[N, C] × [C]`). Fold them into the
    adjacent linear layer's weights (DINOv2's LayerScale into `o_proj` and
    `fc2`) — exact, since scaling a linear layer's output channels by λ is
@@ -643,6 +648,14 @@ for the cross-image use case.
 **Gate:** a measured answer to whether OWLv2 is usable on the Pixel, and at
 what latency — the bridge toward request-supplied vocabulary.
 
+**Status (2026-10-24): gate met.** OWLv2 is usable on the Pixel at FP32:
+4.53 s per image on the GPU (vs 35.9 s CPU), task-exact against the original
+for text queries, a 4,585-name vocabulary, and image exemplars; the text tower
+runs exactly in 229 ms per 32 phrases (GPU+CPU), so vocabulary can be
+supplied per request. Not a real-time model — seconds per image, run per
+request or per design session. Details: progress notes and
+[owlv2-gpu](../hosts/cerebrate-pixel6/spikes/owlv2-gpu/README.md).
+
 ## 7. Output contract (draft)
 
 For each source image, stored next to it, keyed by the image's SHA-256:
@@ -852,3 +865,19 @@ conditions in Section 4.4).
   five models in the GPU grid now have a validated FP32 path on the Pixel 6;
   how far precision can drop is model-specific (DINOv2: none; SAM: mixed at a
   small cost; RF-DETR and depth: mixed at ~no cost; MI-GAN: even pure FP16).
+- **2026-10-24** — **Step 5: OWLv2 characterized (our conversion; none was
+  published).** Image tower, text tower and a host step, so the vocabulary is
+  data. The image tower runs fully on the GPU at FP32 in **4.53 s end to end
+  (vs 35.9 s CPU), task-exact against the original**: 75/75 detections
+  matched (box IoU 1.0000), same best label for 355/355 candidate patches
+  over a 4,585-name vocabulary (YOLOE prompt-free's class list), and 79/79
+  detections matched for three image-exemplar queries. It needed one more G1
+  workaround: the baked `[1,3600,4]` box-bias add came out with the box
+  head's output broadcast from patch 0, so the add moved to the host
+  (Section 4.5, rule 3). FP16 and FP16+FP32 accumulation both fail (logit
+  errors ~60, ~8× the detections) — FP32 only, like DINOv2. The text tower is
+  exact on CPU (1.08 s per 32 phrases) and on a GPU+CPU split (229 ms; int
+  token ops stay on CPU). Host logits in the Debian guest: 8 ms for 24
+  queries, 882 ms for 4,585 — a candidate for its own small GPU graph if
+  large vocabularies are used per image. GPU 27 → 66 °C across each
+  8-image run. Step 5's gate is met.
