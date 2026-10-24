@@ -842,3 +842,13 @@ conditions in Section 4.4).
   mixed mode at a small cost, RF-DETR accepts it at no measurable cost,
   DINOv2 not at all; pure FP16 fails all three on the G1. Next: Depth Anything
   V2 Small and MI-GAN.
+- **2026-10-24** — **Depth Anything V2 Small and MI-GAN evaluated (published
+  conversions).** Depth: the published FP32 file is exact on the GPU at FP32
+  (661 ms vs 5.25 s CPU) and near-identical with FP16+FP32 accumulation
+  (340 ms; depth order kept for 99.98% of pixel pairs); pure FP16 degrades
+  moderately (2%). MI-GAN: correct at FP32 compute (147 ms vs 1.43 s CPU;
+  only its FP16-weight error, ≥ 58 dB in the infilled region), and even pure
+  FP16 stays ≥ 41 dB (79 ms) — the first model where pure FP16 holds up. All
+  five models in the GPU grid now have a validated FP32 path on the Pixel 6;
+  how far precision can drop is model-specific (DINOv2: none; SAM: mixed at a
+  small cost; RF-DETR and depth: mixed at ~no cost; MI-GAN: even pure FP16).

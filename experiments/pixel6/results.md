@@ -200,3 +200,44 @@ Graph A (1293/1293 on GPU) → host step on its device outputs → graph B
 For reference, ONNX Runtime ran the original fp32 RF-DETR on this phone's CPU
 in 483 ms (2026-10-23). Here FP16+FP32 accumulation is as good as FP32
 compute; pure FP16 loses one detection and badly displaces another.
+
+## 2026-10-24 — Published Depth Anything V2 Small (`litert-community/depth-anything-v2-small`, rev `178427e4`)
+
+Code: [published-litert-eval](../../hosts/cerebrate-pixel6/spikes/published-litert-eval/README.md).
+FP32 weights; fixed 518×686 input; eight photos against the original
+Transformers checkpoint (rev `5426e4f0`). Desktop LiteRT CPU: FP32 file exact
+(rel L2 8e-7); int8-weight file 2.5%. 494/494 ops on GPU. Depth metrics after
+least-squares scale+shift alignment; order agreement on 200k random pixel
+pairs per image.
+
+| File | Config | E2E | Raw rel L2 | AbsRel | δ<1.25 (worst) | Order agreement (worst) | Verdict |
+| --- | --- | --- | --- | --- | --- | --- | --- |
+| FP32 | CPU | 5.25 s | 1e-6 | 0.000 | 1.0000 | 1.00000 | reference |
+| **FP32** | **GPU fp32** | **661 ms** (~7.9×) | 1e-6 | 0.000 | 1.0000 | 1.00000 | **correct** |
+| **FP32** | **GPU fp16 + fp32 acc.** | **340 ms** | 0.66% | 0.005 | 0.9955 | 0.99978 | **near-identical** |
+| FP32 | GPU fp16 | 291 ms | 2.0% | 0.022 | 0.984 | 0.9948 | moderate degradation |
+| int8 weights | CPU | 3.03 s | 3.4% | 0.019 | 0.985 | 0.9988 | int8-weight error |
+| int8 weights | GPU fp32 | 664 ms | 2.8% | 0.021 | 0.986 | 0.9993 | no GPU speed gain |
+
+The card's warning that reduced GPU precision gives "substantially incorrect"
+depth came from native WebGPU testing; on this Pixel's LiteRT GPU, pure FP16
+degrades moderately and the mixed mode is near-identical.
+
+## 2026-10-24 — Published MI-GAN 512 Places2 (`litert-community/MI-GAN-512-Places2-LiteRT`, rev `179a35d8`)
+
+Code: [published-litert-eval](../../hosts/cerebrate-pixel6/spikes/published-litert-eval/README.md).
+FP16 weights; 509/509 ops on GPU. Reference: the FP32 generator extracted from
+co-author Andranik Sargsyan's `migan.onnx` (rev `406830d0`). Eight photos with
+object-removal masks (top RF-DETR reference instance, dilated; 1.7–62% of the
+image). Judged inside the removed region of the composite only; desktop LiteRT
+CPU: 58–71 dB.
+
+| Config | E2E | Worst PSNR | Mean PSNR | Worst SSIM | Worst rel L2 | Verdict |
+| --- | --- | --- | --- | --- | --- | --- |
+| CPU | 1.43 s | 58.4 dB | 64.4 dB | 0.9993 | 0.6% | fp16-weight error |
+| **GPU fp32 compute** | **147 ms** (~9.8×) | 58.4 dB | 64.4 dB | 0.9993 | 0.6% | **correct (fp16 weights)** |
+| GPU fp16 + fp32 acc. | 92 ms | 48.5 dB | 54.8 dB | 0.9983 | 1.9% | near-identical |
+| GPU fp16 (default) | 79 ms | 41.2 dB | 49.5 dB | 0.9938 | 4.3% | visually near-identical |
+
+The first model where pure FP16 holds up (PSNR ≥ 41 dB in the infilled region).
+CPU worked here despite the card's note that XNNPACK declines this graph.
