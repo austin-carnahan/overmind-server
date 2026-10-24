@@ -293,9 +293,23 @@ thermalservice`, "Current temperatures from HAL" section — not the cached one)
 
 ### 4.6 Standard model-preparation packaging (proposed)
 
-Section 4.5's rewrites shouldn't stay one-off scripts. Proposed shape, to be
-built when SAM 2.1 becomes the second model through the pipeline — so it's
-shaped by two real cases rather than one:
+**Revised 2026-10-24: start from what already exists.** Hugging Face
+`litert-community` publishes GPU-clean LiteRT conversions of SAM 2.1
+Hiera-Tiny (encoder and decoder), DINOv2-S/14 and RF-DETR-Seg-Nano, re-authored
+with the same kinds of exact rewrites found here (LayerScale folding, ≤4-D
+windowing, q/k/v split, baked position embeddings) plus others not yet hit
+(overflow-safe LayerNorm, tanh-GELU, rank-4 rather than rank-3 attention,
+large constants fed as inputs). The edge-compat project (`john-rocky/edge-compat`)
+already provides most of the proposal below: a measured op-compatibility matrix
+per LiteRT backend and version (with an *incorrect* status, not just
+delegated/not), `edge-lint` (static pre-flight that predicts fallback and known
+miscomputation from a `.tflite`), `edge-fix` (applies recorded rewrites), and
+model cards with dated device runs. Its fleet has no Tensor G1 / Mali-G78.
+
+So the standard becomes: **search published conversions and edge-compat
+first; run `edge-lint` as pre-flight; adopt and validate (Section 4.7) before
+writing anything.** The shape below applies only to gaps — models or rewrites
+nobody has published — and to recording our own results:
 
 - **A shared transform library**, one function per rewrite (for example
   `freeze_fixed_shape_inputs`, `fold_channel_scale_into_linear`). Each records
@@ -320,6 +334,69 @@ shaped by two real cases rather than one:
 The goal is that testing a new model is "write a recipe, run it, read the
 manifest" — and that removing a rewrite once a runtime fixes the underlying
 defect is a one-line recipe change, re-validated the same way.
+
+### 4.7 Model conversion and GPU validation policy
+
+Adopted 2026-10-24. Standing rules:
+
+1. **Discover before converting.** Search for published LiteRT conversions,
+   known GPU incompatibilities, and existing graph rewrites before
+   implementing custom solutions.
+2. **FP32 is the reference, not necessarily the deployment precision.**
+   Validate numerical and task-level correctness against the original model.
+   Pursue FP16 when its performance benefits justify the measured accuracy
+   trade-offs.
+3. **Distinguish weight, storage, compute, and accumulation precision.** FP16
+   weights cannot be restored to FP32 fidelity by changing runtime compute
+   settings. Rebuild from the original FP32 weights when necessary.
+4. **Successful delegation does not establish correctness.** Evaluate
+   converted models against original-model outputs, including downstream task
+   metrics. Published conversions without accessible source transformations
+   need particularly careful end-to-end validation.
+5. **Measure synchronized end-to-end performance**, including buffer
+   transfers, synchronization, and pre/post-processing as appropriate. Never
+   treat asynchronous dispatch timing as inference latency.
+6. **Preserve hardware-specific findings**: device, driver, LiteRT version,
+   precision configuration, tensor shapes, numerical errors, and reproducible
+   failures.
+7. **Prioritize model validation and GPU optimization** (see Step 3's
+   priority note). Correct CPU execution remains the baseline and fallback.
+
+**Validation stages** for every adopted or prepared model:
+
+| Stage | Comparison | Purpose |
+| --- | --- | --- |
+| 1. Graph equivalence | Rewritten PyTorch vs original PyTorch | Rewrites are faithful |
+| 2. Conversion | LiteRT CPU vs rewritten PyTorch | No conversion defects |
+| 3. Device execution | Pixel 6 GPU vs LiteRT CPU | No GPU-specific numerical problems |
+| 4. Application correctness | Pixel 6 outputs vs original-model task results | Errors that remain don't matter for the task |
+
+Published conversions without source can only go through stages 3 and 4, so
+stage 4 against the original model carries their weight. For segmentation,
+stage 4 means mask IoU, boundary agreement and flipped pixels across several
+images and prompts, including small objects and thin structures.
+
+**Failure classes**, kept distinct when diagnosing: *precision instability*
+(overflow, underflow, accumulation, approximate nonlinearities — e.g. our SAM
+decoder's fp16 collapse on an otherwise pixel-exact graph); *GPU kernel
+defects* that occur at any precision (e.g. LayerScale's broadcast multiply;
+the published decoder's rank-3 attention on a Pixel 8a); and *conversion or
+rewrite errors* (e.g. a mis-indexed bias fold, caught by stage 1).
+
+**Precision options in practice:** LiteRT exposes FP32, FP16, and one mixed
+mode — FP16 storage with FP32 accumulation (`Fp16WithFp32Accum`) — globally,
+not per op. Finer mixed precision means splitting a model into separately
+compiled graphs.
+
+Measured so far (DINOv2-small, end to end): FP32 68.6 ms, FP16 37.8 ms
+(~1.8×), with FP16 degrading the worst token to cosine 0.961 and one image's
+similarity ranking (7/8) despite an overall cosine of 0.9997. FP16 is worth
+pursuing, but acceptance depends on task-level correctness, not aggregate
+cosine.
+
+Contributing reproducible G1 findings upstream (edge-compat's matrix and
+cards) is opportunistic — after SAM runs correctly — and keeps measured
+Pixel 6 results distinct from inferences drawn from other devices.
 
 ## 5. Version 1 pipeline
 
@@ -448,6 +525,26 @@ fp32 (cosine 1.0, task-level ranking identical) vs 344 ms CPU**
 Next: SAM 2.1's decoder and Hiera encoder through the same preparation and
 check, a sustained-load thermal run (item 4), and the worker engine (item 5).
 
+**SAM 2.1 sequence (adopted 2026-10-24):**
+
+1. Published SAM encoder and v2 decoder (FP16) on the Pixel 6, evaluated
+   against the original model, including mask IoU across eight samples with
+   host-encoded box prompts.
+2. Our prepared FP32 Hiera encoder on the Pixel 6 GPU, against the original
+   reference, with synchronized end-to-end latency against the 10.2 s CPU
+   baseline.
+3. If the published FP16 models fail accuracy, try `Fp16WithFp32Accum`, then
+   bisect the earliest numerical divergence.
+4. An alternative FP32 decoder built from the published conversion script
+   with the original FP32 weights, compared against ours (82 ms with a CPU
+   split).
+
+If the published FP16 v2 decoder also fails on the Pixel 6, that suggests a
+device-specific problem but doesn't establish that G1 FP16 hardware is
+responsible — distinguish driver behavior, graph structure, precision, and
+input preparation before assigning a root cause. Then DINOv2 and
+RF-DETR-Seg-Nano's published conversions go through the same evaluation.
+
 **Gate:** at least one GPU path runs a transformer vision model correctly on
 the Pixel with measured latency and thermal behavior — or a documented,
 reproduced blocker for each path tried, leaving those models on CPU.
@@ -487,6 +584,13 @@ outputs `output0 1×4621×8400` and mask prototypes `output1 1×32×160×160`.
 Next: the output reduction above, then step 1's CPU check on the Pixel.
 
 ### Step 3 — Output contract and GIMP import
+
+**Priority (2026-10-24):** Step 3 follows the model-validation workstream.
+The immediate objective is several high-value vision models running correctly
+and efficiently on the Pixel 6 GPU, reusable model-preparation procedures, and
+documented hardware-specific findings — initially SAM 2.1, DINOv2 and RF-DETR.
+The correct CPU paths remain fallbacks; the GIMP workflow is not the immediate
+priority.
 
 Write masks and labels in the Section 7 format; the Mac GIMP worker turns each
 object into a named layer (source-layer copy plus layer mask, via
@@ -661,3 +765,14 @@ conditions in Section 4.4).
   The uint8 finding is now scoped to the tested quantized MobileNet. Recorded
   the key lesson (Section 1) and proposed standard packaging for graph
   rewrites (Section 4.6).
+- **2026-10-24** — **Published conversions found; validation policy
+  adopted.** SAM 2.1 work found the SAM decoder correct on GPU at FP32 with a
+  CPU split (82 ms vs 148 ms CPU; pixel-identical masks) but unusable at FP16
+  (worst mask IoU 0.58), and the Hiera encoder at 10.2 s on CPU with only 69 of
+  931 ops GPU-eligible. A prepared encoder (≤4-D windowing, q/k/v split, baked
+  position embedding, folded no-memory bias) verified exactly at FP32 before
+  `litert-community`'s published GPU-clean SAM 2.1, DINOv2 and RF-DETR
+  conversions — with the same kinds of rewrites — and the edge-compat tooling
+  came to light. Adopted: discover-before-converting, the FP32-reference
+  precision policy and four validation stages (Section 4.7), the SAM
+  evaluation sequence (Step 2A), and model validation ahead of Step 3.

@@ -8,10 +8,13 @@
 //   run   = LiteRtRunCompiledModel
 //   read  = Lock(output, read) + memcpy out + Unlock   (the lock is the sync
 //           point: the clock stops only once the result is on the host)
-// The first output for each input is written to <out_dir>/<i>.bin for offline
-// accuracy analysis, and outputs for different inputs are checked to differ.
+// Any number of input and output tensors: each line of inputs.txt is one
+// sample, a comma-separated file per model input (in signature order). The
+// first result for each sample is written to <out_dir>/<i>_o<k>.bin per output
+// k for offline accuracy analysis, and output 0 is checked to differ across
+// samples.
 //
-// usage: litert-e2e <model.tflite> <cpu|gpu> <req|host> <inputs.txt> <out_dir>
+// usage: litert-e2e <model.tflite> <cpu|gpu|gpu+cpu> <req|host> <inputs.txt> <out_dir>
 //                   <iterations> [sustain_seconds] [fp32|fp16|default]
 #include <math.h>
 #include <stdio.h>
@@ -59,14 +62,16 @@ int main(int argc, char** argv) {
     return 1;
   }
   const char* model_path = argv[1];
-  bool gpu = strcmp(argv[2], "gpu") == 0;
+  // "gpu" = GPU only; "gpu+cpu" = GPU with CPU fallback for ops the GPU can't take.
+  bool gpu = strncmp(argv[2], "gpu", 3) == 0;
+  bool gpu_cpu = strcmp(argv[2], "gpu+cpu") == 0;
   bool req = strcmp(argv[3], "req") == 0;
   std::string out_dir = argv[5];
   int iterations = atoi(argv[6]);
   int sustain_s = argc > 7 ? atoi(argv[7]) : 0;
   const char* prec = argc > 8 ? argv[8] : "fp32";
 
-  std::vector<std::vector<char>> inputs;
+  std::vector<std::vector<std::vector<char>>> inputs;  // [sample][input]
   {
     FILE* lst = fopen(argv[4], "r");
     if (!lst) { fprintf(stderr, "FATAL: cannot open %s\n", argv[4]); return 1; }
@@ -74,15 +79,19 @@ int main(int argc, char** argv) {
     while (fgets(line, sizeof(line), lst)) {
       line[strcspn(line, "\r\n")] = 0;
       if (!line[0]) continue;
-      FILE* f = fopen(line, "rb");
-      if (!f) { fprintf(stderr, "FATAL: cannot open %s\n", line); return 1; }
-      fseek(f, 0, SEEK_END);
-      long n = ftell(f);
-      fseek(f, 0, SEEK_SET);
-      std::vector<char> buf(n);
-      if (fread(buf.data(), 1, n, f) != (size_t)n) { fprintf(stderr, "FATAL: short read %s\n", line); return 1; }
-      fclose(f);
-      inputs.push_back(buf);
+      std::vector<std::vector<char>> sample;
+      for (char* tok = strtok(line, ","); tok; tok = strtok(NULL, ",")) {
+        FILE* f = fopen(tok, "rb");
+        if (!f) { fprintf(stderr, "FATAL: cannot open %s\n", tok); return 1; }
+        fseek(f, 0, SEEK_END);
+        long n = ftell(f);
+        fseek(f, 0, SEEK_SET);
+        std::vector<char> buf(n);
+        if (fread(buf.data(), 1, n, f) != (size_t)n) { fprintf(stderr, "FATAL: short read %s\n", tok); return 1; }
+        fclose(f);
+        sample.push_back(buf);
+      }
+      inputs.push_back(sample);
     }
     fclose(lst);
   }
@@ -94,7 +103,8 @@ int main(int argc, char** argv) {
   LiteRtOptions options;
   CHECK("CreateOptions", LiteRtCreateOptions(&options));
   CHECK("SetAccelerators", LiteRtSetOptionsHardwareAccelerators(
-                               options, gpu ? kLiteRtHwAcceleratorGpu : kLiteRtHwAcceleratorCpu));
+                               options, gpu_cpu ? (LiteRtHwAcceleratorSet)(kLiteRtHwAcceleratorGpu | kLiteRtHwAcceleratorCpu)
+                                     : gpu ? kLiteRtHwAcceleratorGpu : kLiteRtHwAcceleratorCpu));
   if (gpu && strcmp(prec, "default") != 0) {
     LrtGpuOptions* g;
     CHECK("LrtCreateGpuOptions", LrtCreateGpuOptions(&g));
@@ -115,40 +125,51 @@ int main(int argc, char** argv) {
 
   LiteRtSignature sig;
   CHECK("GetModelSignature", LiteRtGetModelSignature(model, 0, &sig));
-  LiteRtTensor in_t, out_t;
-  CHECK("GetInputTensor", LiteRtGetSignatureInputTensorByIndex(sig, 0, &in_t));
-  CHECK("GetOutputTensor", LiteRtGetSignatureOutputTensorByIndex(sig, 0, &out_t));
-  LiteRtRankedTensorType in_type, out_type;
-  CHECK("InType", LiteRtGetRankedTensorType(in_t, &in_type));
-  CHECK("OutType", LiteRtGetRankedTensorType(out_t, &out_type));
-  size_t in_size = 4, out_size = 4;
-  for (unsigned i = 0; i < in_type.layout.rank; i++) in_size *= in_type.layout.dimensions[i];
-  for (unsigned i = 0; i < out_type.layout.rank; i++) out_size *= out_type.layout.dimensions[i];
-  for (auto& in : inputs)
-    if (in.size() != in_size) { fprintf(stderr, "FATAL: input is %zu bytes, model wants %zu\n", in.size(), in_size); return 1; }
-
-  LiteRtTensorBuffer in_buf, out_buf;
-  if (req) {
-    LiteRtTensorBufferRequirements in_req, out_req;
-    CHECK("InRequirements", LiteRtGetCompiledModelInputBufferRequirements(compiled, 0, 0, &in_req));
-    CHECK("OutRequirements", LiteRtGetCompiledModelOutputBufferRequirements(compiled, 0, 0, &out_req));
-    CHECK("CreateIn", LiteRtCreateManagedTensorBufferFromRequirements(env, &in_type, in_req, &in_buf));
-    CHECK("CreateOut", LiteRtCreateManagedTensorBufferFromRequirements(env, &out_type, out_req, &out_buf));
-  } else {
-    void *ih, *oh;
-    if (posix_memalign(&ih, 64, in_size + 256) || posix_memalign(&oh, 64, out_size + 256)) return 1;
-    CHECK("HostIn", LiteRtCreateTensorBufferFromHostMemory(&in_type, ih, in_size, NULL, &in_buf));
-    CHECK("HostOut", LiteRtCreateTensorBufferFromHostMemory(&out_type, oh, out_size, NULL, &out_buf));
+  LiteRtParamIndex n_in = 0, n_out = 0;
+  CHECK("NumInputs", LiteRtGetNumSignatureInputs(sig, &n_in));
+  CHECK("NumOutputs", LiteRtGetNumSignatureOutputs(sig, &n_out));
+  std::vector<LiteRtRankedTensorType> in_types(n_in), out_types(n_out);
+  std::vector<size_t> in_sizes(n_in), out_sizes(n_out);
+  std::vector<LiteRtTensorBuffer> in_bufs(n_in), out_bufs(n_out);
+  for (int side = 0; side < 2; side++) {
+    LiteRtParamIndex n = side ? n_out : n_in;
+    for (LiteRtParamIndex i = 0; i < n; i++) {
+      LiteRtTensor t;
+      LiteRtRankedTensorType* type = side ? &out_types[i] : &in_types[i];
+      if (side) CHECK("OutTensor", LiteRtGetSignatureOutputTensorByIndex(sig, i, &t));
+      else CHECK("InTensor", LiteRtGetSignatureInputTensorByIndex(sig, i, &t));
+      CHECK("TensorType", LiteRtGetRankedTensorType(t, type));
+      size_t size = 4;
+      for (unsigned d = 0; d < type->layout.rank; d++) size *= type->layout.dimensions[d];
+      (side ? out_sizes : in_sizes)[i] = size;
+      LiteRtTensorBuffer* buf = side ? &out_bufs[i] : &in_bufs[i];
+      if (req) {
+        LiteRtTensorBufferRequirements r;
+        if (side) CHECK("OutRequirements", LiteRtGetCompiledModelOutputBufferRequirements(compiled, 0, i, &r));
+        else CHECK("InRequirements", LiteRtGetCompiledModelInputBufferRequirements(compiled, 0, i, &r));
+        CHECK("CreateFromRequirements", LiteRtCreateManagedTensorBufferFromRequirements(env, type, r, buf));
+      } else {
+        void* h;
+        if (posix_memalign(&h, 64, size + 256)) return 1;
+        CHECK("HostBuffer", LiteRtCreateTensorBufferFromHostMemory(type, h, size, NULL, buf));
+      }
+      LiteRtTensorBufferType bt;
+      LiteRtGetTensorBufferType(*buf, &bt);
+      printf("  %s %u: %zu bytes, buffer type %d\n", side ? "output" : "input", (unsigned)i, size, (int)bt);
+    }
   }
-  LiteRtTensorBufferType in_bt, out_bt;
-  LiteRtGetTensorBufferType(in_buf, &in_bt);
-  LiteRtGetTensorBufferType(out_buf, &out_bt);
-  printf("model=%s accel=%s buffers=%s precision=%s compile_us=%ld in_type=%d out_type=%d inputs=%zu\n",
-         model_path, gpu ? "gpu" : "cpu", req ? "req" : "host", gpu ? prec : "-", compile_us,
-         (int)in_bt, (int)out_bt, inputs.size());
+  for (auto& sample : inputs) {
+    if (sample.size() != n_in) { fprintf(stderr, "FATAL: sample has %zu files, model has %u inputs\n", sample.size(), (unsigned)n_in); return 1; }
+    for (size_t i = 0; i < n_in; i++)
+      if (sample[i].size() != in_sizes[i]) { fprintf(stderr, "FATAL: input %zu is %zu bytes, model wants %zu\n", i, sample[i].size(), in_sizes[i]); return 1; }
+  }
+  printf("model=%s accel=%s buffers=%s precision=%s compile_us=%ld inputs=%u outputs=%u samples=%zu\n",
+         model_path, argv[2], req ? "req" : "host", gpu ? prec : "-", compile_us,
+         (unsigned)n_in, (unsigned)n_out, inputs.size());
   fflush(stdout);
 
-  std::vector<char> out_host(out_size);
+  std::vector<std::vector<char>> out_host(n_out);
+  for (size_t k = 0; k < n_out; k++) out_host[k].resize(out_sizes[k]);
   std::vector<double> first_sum(inputs.size(), NAN);
   std::vector<long> tw, tr, tx, tt;
   long t_start = now_us(), window_start = t_start;
@@ -158,28 +179,34 @@ int main(int argc, char** argv) {
     size_t idx = (size_t)k % inputs.size();
     void* p;
     long t0 = now_us();
-    CHECK("LockIn", LiteRtLockTensorBuffer(in_buf, &p, kLiteRtTensorBufferLockModeWrite));
-    memcpy(p, inputs[idx].data(), in_size);
-    CHECK("UnlockIn", LiteRtUnlockTensorBuffer(in_buf));
+    for (size_t i = 0; i < n_in; i++) {
+      CHECK("LockIn", LiteRtLockTensorBuffer(in_bufs[i], &p, kLiteRtTensorBufferLockModeWrite));
+      memcpy(p, inputs[idx][i].data(), in_sizes[i]);
+      CHECK("UnlockIn", LiteRtUnlockTensorBuffer(in_bufs[i]));
+    }
     long t1 = now_us();
-    CHECK("Run", LiteRtRunCompiledModel(compiled, 0, 1, &in_buf, 1, &out_buf));
+    CHECK("Run", LiteRtRunCompiledModel(compiled, 0, n_in, in_bufs.data(), n_out, out_bufs.data()));
     long t2 = now_us();
-    CHECK("LockOut", LiteRtLockTensorBuffer(out_buf, &p, kLiteRtTensorBufferLockModeRead));
-    memcpy(out_host.data(), p, out_size);
-    CHECK("UnlockOut", LiteRtUnlockTensorBuffer(out_buf));
+    for (size_t o = 0; o < n_out; o++) {
+      CHECK("LockOut", LiteRtLockTensorBuffer(out_bufs[o], &p, kLiteRtTensorBufferLockModeRead));
+      memcpy(out_host[o].data(), p, out_sizes[o]);
+      CHECK("UnlockOut", LiteRtUnlockTensorBuffer(out_bufs[o]));
+    }
     long t3 = now_us();
     if (k >= (int)inputs.size()) {  // first pass over the inputs is warm-up
       tw.push_back(t1 - t0); tx.push_back(t2 - t1); tr.push_back(t3 - t2); tt.push_back(t3 - t0);
     }
     if (std::isnan(first_sum[idx])) {
       double s = 0;
-      const float* o = (const float*)out_host.data();
-      for (size_t i = 0; i < out_size / 4; i++) s += o[i];
+      const float* o = (const float*)out_host[0].data();
+      for (size_t i = 0; i < out_sizes[0] / 4; i++) s += o[i];
       first_sum[idx] = s;
-      std::string path = out_dir + "/" + std::to_string(idx) + ".bin";
-      FILE* f = fopen(path.c_str(), "wb");
-      fwrite(out_host.data(), 1, out_size, f);
-      fclose(f);
+      for (size_t o2 = 0; o2 < n_out; o2++) {
+        std::string path = out_dir + "/" + std::to_string(idx) + "_o" + std::to_string(o2) + ".bin";
+        FILE* f = fopen(path.c_str(), "wb");
+        fwrite(out_host[o2].data(), 1, out_sizes[o2], f);
+        fclose(f);
+      }
     }
     if (sustain_s > 0) {
       window.push_back(t3 - t0);
