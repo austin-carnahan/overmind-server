@@ -66,6 +66,15 @@ class and box IoU, plus a label-agnostic count; mask IoU).
   backbone via litert-torch PT2E (SiLU spelled out as `x * sigmoid(x)`, or
   it stays float); int8 input and outputs. [`yoloe_pt2e_debug.py`](yoloe_pt2e_debug.py)
   separates PT2E quantization error from conversion error.
+- **TensorFlow's classic full-integer quantizer** (the route Ultralytics'
+  Edge TPU export uses): `onnx2tf -i <backbone.onnx> -oiqt -qt per-channel
+  -cind images calib_nhwc.npy "[[[[0,0,0]]]]" "[[[[1,1,1]]]]"` with 150
+  letterboxed indoor photos (onnx2tf also wants a 20×128×128×3 sample file
+  in the working directory; its download of one failed, so we wrote our
+  own). Its `full_integer_quant` output is NHWC, int8 throughout, with no
+  requantizations. [`yoloe_tf_int8_check.py`](yoloe_tf_int8_check.py)
+  inspects it and runs the desktop chain; [`yoloe_tpu_chain.py`](yoloe_tpu_chain.py)
+  takes device outputs (TPU or CPU) through the fp32 head.
 - [`tflite-nnapi-bench/main.cc`](tflite-nnapi-bench/main.cc) — classic TFLite
   C API (2.16.1, same library as `cerebrate-infer`) on the CPU or through the
   NNAPI delegate pinned to `google-edgetpu` with NNAPI's CPU fallback

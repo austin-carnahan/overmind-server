@@ -553,3 +553,43 @@ PT2E quantizer and stays float. Status: the Edge TPU *can* run a YOLOE int8
 backbone (compiled, 90 ms partly on TPU) but not yet *correctly* or fully;
 the GPU fp32 path (186 ms whole model, exact) remains the reference.
 
+## 2026-10-24 — YOLOE backbone on the Edge TPU: TensorFlow full-integer (bounded round)
+
+The one bounded round decided on 2026-10-24: rebuild the int8 backbone with
+TensorFlow's classic full-integer quantizer (onnx2tf 1.28.8, TensorFlow
+2.19.0; per-channel weights; 150 indoor calibration photos) and measure TPU
+placement, latency and task accuracy once; stop unless it runs fully on the
+TPU within a few detections of fp32.
+
+The resulting YOLOE-v8s backbone + neck is exactly what the TPU wants: 182
+ops, all int8 (NHWC, int8 I/O), **no requantizations**, no float ops.
+
+| Config | Placement | Load | Median | Matched (of 132) | Any label | Mask IoU mean |
+| --- | --- | --- | --- | --- | --- | --- |
+| fp32 backbone (reference) | — | — | — | 132 | 132 | 1.000 |
+| int8, desktop | — | — | — | 82 | 100 | 0.939 |
+| int8, phone CPU (TFLite) | — | 4 ms | 125 ms | 82 (identical to desktop) | 100 | 0.939 |
+| **int8, Edge TPU** | **182/182 ops, 1 partition**; driver 182/182; compiled (status 0) | 2.34 s | **8.7 ms** | **84** | **105** | 0.922 |
+
+(The backbone's int8 feature maps go through the fp32 head on the desktop
+for scoring.) Minimum free memory during the compile: 3.4 GB.
+
+- **The Edge TPU runs the whole YOLOE backbone in 8.7 ms** — ~14× the CPU's
+  int8 kernels, and for scale, ~21× faster than the GPU's 186 ms for the
+  *whole* fp32 model.
+- **The TPU's arithmetic is not the problem:** its int8 values differ from
+  TFLite's CPU kernels in 42% of positions (up to 62 steps), yet task
+  accuracy is equal or slightly better (84 vs 82 matched).
+- **int8 quantization is:** about a third of exact-label detections are lost
+  (feature cosine vs fp32 0.59–0.87). YOLOE's prompt-free head picks among
+  4,585 near-synonymous classes, so small feature shifts flip labels; most
+  objects are still found (105/132 at any label).
+
+Gate not met → YOLOE stays on the GPU (fp32, exact, 186 ms). YOLOE-11 not
+taken through this round. For future TPU candidates: the toolchain that works
+is fp32 ONNX → onnx2tf full-integer → TFLite + NNAPI pinned to
+`google-edgetpu` (whole graph on the TPU, single partition); what decides a
+model's fit is how well it tolerates int8 — fixed-vocabulary or
+coarse-output models are better candidates than a 4,585-class
+open-vocabulary head.
+

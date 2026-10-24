@@ -1035,4 +1035,16 @@ conditions in Section 4.4).
   and the low-memory killer took the Terminal app — the Debian VM, MLServer
   and the tunnels were down ~7 minutes until the documented relaunch.
   TPU compiles stopped pending a decision on protecting the VM.
+- **2026-10-24** — **Step 2B: YOLOE on the GPU; the TPU runs it fast but
+  int8 isn't accurate enough.** YOLOE-v8s/11s run exactly on the GPU at fp32
+  (186/179 ms, all detections matched). With the VM watchdog installed, the
+  TPU work resumed on the backbone + neck only (class head excluded): through
+  TFLite + NNAPI, a TensorFlow full-integer backbone (onnx2tf) runs **entirely
+  on the Edge TPU in 8.7 ms** (182/182 ops, one partition), but int8 costs
+  about a third of exact-label detections (84/132; 105 at any label) — not
+  within a few detections of fp32, so YOLOE stays on the GPU. ORT + NNAPI
+  can't carry quantized SiLU; litert-torch PT2E left requantizations the TPU
+  rejects and lost more accuracy. The TPU itself matched the CPU int8
+  reference at task level. TPU offload stays a goal for models that quantize
+  well; the working toolchain is recorded in `yoloe-tpu`.
 
