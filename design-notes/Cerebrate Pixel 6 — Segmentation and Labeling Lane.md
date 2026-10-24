@@ -397,6 +397,28 @@ Adopted 2026-10-24. Standing rules:
    failures.
 7. **Prioritize model validation and GPU optimization** (see Step 3's
    priority note). Correct CPU execution remains the baseline and fallback.
+8. **Classify every preparation step as an exact equivalent rewrite or an
+   approximate functional rewrite** (added 2026-10-24, EdgeSAM). Exact
+   rewrites (EdgeSAM's bicubic restoration, constants as inputs, the
+   max-pool shift with a proved bound) must reproduce the original at stage
+   1 within float rounding. Approximate rewrites (EdgeSAM's tanh GELU)
+   change the function: they are recorded as preparation metadata, never
+   used in a `default` variant, and accepted only on stage-4 evidence. A
+   model that needed one is no longer purely a precision conversion.
+9. **Configuration identities are separate from selection aliases.** A
+   configuration is named for what runs where at which precision (e.g.
+   `tpu-fp16r-gpu-neck-fp32`); preparation details live in its metadata, not
+   its name. `default`, `fast` and `alternate` are aliases pointing at
+   validated configurations: `default` is the exact reference, `fast` a
+   validated performance/quality choice — the alias doesn't prescribe which
+   transformations are allowed; rule 8's classification and the stage-4
+   evidence do.
+10. **Precision-sensitive normalization can stay off the accelerator.**
+    When a TPU or fp16 path chokes on a normalization layer (EdgeSAM's
+    LayerNorm neck: rejected by the TPU, and squares of activations up to
+    ~1,600 overflow fp16), split the model — trunk on the accelerator, the
+    normalization tail on the GPU at fp32 (16 ms for EdgeSAM) — as YOLOE's
+    head split did.
 
 **Validation stages** for every adopted or prepared model:
 

@@ -90,6 +90,39 @@ synchronized end to end (input write through output read).
 | TPU fp16-relaxed (`tanh`), neck on CPU (2 partitions) | 196 ms | 0.9441 | 0.99829 | 1 | 7,441 |
 | **TPU stage (410/410 ops) → GPU fp32 neck (20 ops)** | **130 + 16 ms** | 0.9441 | 0.99830 | 1 | 7,393 |
 
-TPU compile 43 s per load (GPU 0.7 s). On the TPU, the fp16 relaxation's own
+TPU compile 43 s on first load; with NNAPI compilation caching (below)
+183 ms from a persistent cache in a new process (GPU 0.7 s). On the TPU, the fp16 relaxation's own
 error is ~5e-3 relative after the first stage; most flipped pixels come from
 the GELU approximation (6,116 already at fp32).
+
+## Variant registration (approved 2026-10-24)
+
+Encoder only — not yet a segmentation service (decoder and the comparison
+with SAM 2.1 follow).
+
+| Configuration | Alias | Status |
+| --- | --- | --- |
+| `gpu-fp32` | `default` (reference) | encoder validated: exact, 267 ms |
+| `gpu-mixed` (FP16 + FP32 acc.) | `alternate` | encoder validated: worst mask IoU 0.920, 169 ms |
+| `tpu-fp16r-gpu-neck-fp32` | `fast` (experimental) | encoder validated: worst mask IoU 0.944, 130 + 16 ms |
+
+`tpu-fp16r-gpu-neck-fp32` preparation metadata: `gelu: tanh-approximation`
+(an **approximate functional rewrite** — lane §4.7 rule 8), bicubic
+restoration (exact), elementwise formulas as single chains (TPU compiler
+op-order workaround), neck on the GPU at FP32 (LayerNorm).
+
+## Compilation caching
+
+The TFLite NNAPI delegate's `cache_dir` + `model_token` work on the G1
+driver: 42.9 s on an empty cache, then 88–100 ms when the interpreter is
+recreated in the same process and 183 ms from the persistent cache in a new
+process, outputs bit-identical every time. A reused token on a
+same-structure model with different constants is rejected by the driver and
+recompiled (not silently served). Tokens: artifact sha256 + precision +
+runtime version. Bench options `NNAPI_CACHE_DIR`, `NNAPI_MODEL_TOKEN`,
+`RELOADS` in [tflite-nnapi-bench](../yoloe-tpu/tflite-nnapi-bench/main.cc);
+runner `DEVENV`/`TAG`. Numbers in the
+[ledger](../../../../experiments/pixel6/results.md). `cerebrate-hetero`'s TPU
+stage doesn't set a cache yet (YOLOE compiles in ~3.8 s); an EdgeSAM serving
+worker needs it.
+

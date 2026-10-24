@@ -9,7 +9,14 @@
 // usage: tflite-nnapi-bench <model.tflite> <cpu|tpu|tpu16> <inputs.txt> <out_dir> <iterations>
 //   tpu16: as tpu, with the delegate's allow_fp16 (NNAPI relaxed fp32 -> fp16)
 //   inputs.txt: one sample per line, comma-separated files, one per input
+// Environment (added for the compilation-cache test, edgesam-tpu):
+//   NNAPI_CACHE_DIR, NNAPI_MODEL_TOKEN  set the delegate's cache_dir and
+//     model_token (NNAPI compilation caching); both or neither
+//   RELOADS=n  afterwards destroy and recreate interpreter + delegate n times
+//     in this process, timing each load, and write each reload's outputs for
+//     one pass over the inputs to <out_dir>/reload<r>/
 #include <stdio.h>
+#include <sys/stat.h>
 #include <stdlib.h>
 #include <string.h>
 #include <time.h>
@@ -60,25 +67,44 @@ int main(int argc, char** argv) {
   }
   fclose(lst);
 
+  const char* cache_dir = getenv("NNAPI_CACHE_DIR");
+  const char* model_token = getenv("NNAPI_MODEL_TOKEN");
+  if ((cache_dir == NULL) != (model_token == NULL)) { fprintf(stderr, "FATAL: set both NNAPI_CACHE_DIR and NNAPI_MODEL_TOKEN or neither\n"); return 1; }
+  int reloads = getenv("RELOADS") ? atoi(getenv("RELOADS")) : 0;
+
   long t0 = now_us();
   TfLiteModel* model = TfLiteModelCreateFromFile(model_path);
   if (!model) { fprintf(stderr, "FATAL: cannot load %s\n", model_path); return 1; }
-  TfLiteInterpreterOptions* options = TfLiteInterpreterOptionsCreate();
-  TfLiteInterpreterOptionsSetNumThreads(options, 4);
+  TfLiteInterpreterOptions* options = NULL;
   TfLiteDelegate* delegate = NULL;
-  if (tpu) {
-    TfLiteNnapiDelegateOptions o = TfLiteNnapiDelegateOptionsDefault();
-    o.accelerator_name = "google-edgetpu";
-    o.execution_preference = TfLiteNnapiDelegateOptions::kSustainedSpeed;
-    o.disallow_nnapi_cpu = 1;
-    o.allow_fp16 = fp16 ? 1 : 0;
-    delegate = TfLiteNnapiDelegateCreate(&o);
-    if (!delegate) { fprintf(stderr, "FATAL: NNAPI delegate creation failed\n"); return 1; }
-    TfLiteInterpreterOptionsAddDelegate(options, delegate);
-  }
-  TfLiteInterpreter* interp = TfLiteInterpreterCreate(model, options);
-  if (!interp) { fprintf(stderr, "FATAL: interpreter creation failed\n"); return 1; }
-  if (TfLiteInterpreterAllocateTensors(interp) != kTfLiteOk) { fprintf(stderr, "FATAL: AllocateTensors failed\n"); return 1; }
+  TfLiteInterpreter* interp = NULL;
+  auto create = [&]() -> bool {
+    options = TfLiteInterpreterOptionsCreate();
+    TfLiteInterpreterOptionsSetNumThreads(options, 4);
+    if (tpu) {
+      TfLiteNnapiDelegateOptions o = TfLiteNnapiDelegateOptionsDefault();
+      o.accelerator_name = "google-edgetpu";
+      o.execution_preference = TfLiteNnapiDelegateOptions::kSustainedSpeed;
+      o.disallow_nnapi_cpu = 1;
+      o.allow_fp16 = fp16 ? 1 : 0;
+      o.cache_dir = cache_dir;
+      o.model_token = model_token;
+      delegate = TfLiteNnapiDelegateCreate(&o);
+      if (!delegate) { fprintf(stderr, "FATAL: NNAPI delegate creation failed\n"); return false; }
+      TfLiteInterpreterOptionsAddDelegate(options, delegate);
+    }
+    interp = TfLiteInterpreterCreate(model, options);
+    if (!interp) { fprintf(stderr, "FATAL: interpreter creation failed\n"); return false; }
+    if (TfLiteInterpreterAllocateTensors(interp) != kTfLiteOk) { fprintf(stderr, "FATAL: AllocateTensors failed\n"); return false; }
+    return true;
+  };
+  auto destroy = [&]() {
+    TfLiteInterpreterDelete(interp);
+    TfLiteInterpreterOptionsDelete(options);
+    if (delegate) TfLiteNnapiDelegateDelete(delegate);
+    interp = NULL; options = NULL; delegate = NULL;
+  };
+  if (!create()) return 1;
   long load_us = now_us() - t0;
 
   int n_in = TfLiteInterpreterGetInputTensorCount(interp), n_out = TfLiteInterpreterGetOutputTensorCount(interp);
@@ -127,11 +153,33 @@ int main(int argc, char** argv) {
     else times.push_back(dt);
   }
   std::sort(times.begin(), times.end());
-  printf("model=%s accel=%s%s load_us=%ld first_us=%ld iters=%zu median_us=%ld\n", model_path, tpu ? "tpu" : "cpu", fp16 ? "16" : "", load_us,
-         first_us, times.size(), times.empty() ? -1L : times[times.size() / 2]);
-  TfLiteInterpreterDelete(interp);
-  TfLiteInterpreterOptionsDelete(options);
-  if (delegate) TfLiteNnapiDelegateDelete(delegate);
+  printf("model=%s accel=%s%s cache=%s load_us=%ld first_us=%ld iters=%zu median_us=%ld\n", model_path, tpu ? "tpu" : "cpu", fp16 ? "16" : "",
+         cache_dir ? cache_dir : "-", load_us, first_us, times.size(), times.empty() ? -1L : times[times.size() / 2]);
+  for (int r = 1; r <= reloads; r++) {
+    destroy();
+    long a = now_us();
+    if (!create()) return 1;
+    long reload_us = now_us() - a;
+    std::string dir = std::string(argv[4]) + "/reload" + std::to_string(r);
+    mkdir(dir.c_str(), 0777);
+    long b = now_us();
+    for (size_t s = 0; s < samples.size(); s++) {
+      for (int i = 0; i < n_in; i++)
+        TfLiteTensorCopyFromBuffer(TfLiteInterpreterGetInputTensor(interp, i), data[s][i].data(), data[s][i].size());
+      if (TfLiteInterpreterInvoke(interp) != kTfLiteOk) { fprintf(stderr, "FATAL: Invoke failed (reload %d)\n", r); return 1; }
+      for (int o = 0; o < n_out; o++) {
+        const TfLiteTensor* t = TfLiteInterpreterGetOutputTensor(interp, o);
+        std::vector<char> out(TfLiteTensorByteSize(t));
+        TfLiteTensorCopyToBuffer(t, out.data(), out.size());
+        char path[1024];
+        snprintf(path, sizeof(path), "%s/%zu_o%d.bin", dir.c_str(), s, o);
+        FILE* f = fopen(path, "wb");
+        if (f) { fwrite(out.data(), 1, out.size(), f); fclose(f); }
+      }
+    }
+    printf("reload=%d load_us=%ld pass_us=%ld\n", r, reload_us, now_us() - b);
+  }
+  destroy();
   TfLiteModelDelete(model);
   return 0;
 }

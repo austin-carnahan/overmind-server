@@ -33,7 +33,10 @@ FRAGS.update({"S2a1": ("tanh", "/features.4/token_mixer/token_mixer.2/c/Conv_out
 # the TPU rejects (19 ops fell to the CPU in F4t) and which would overflow
 # in fp16 anyway (squares of activations ~600); the neck runs exact on the GPU.
 FRAGS.update({"T1": ("tanh", "/Add_output_0", list(range(8))),
-              "N1": ("erfpoly", "image_embeddings", list(range(8)), "/Add_output_0")})   # the neck has no GELU
+              "N1": ("erfpoly", "image_embeddings", list(range(8)), "/Add_output_0"),   # the neck has no GELU
+              # T1 with the refitted GELU: identical structure, different constants -- for the
+              # compilation-cache collision test (a reused token must not serve T1's compilation)
+              "T1fit": ("fit", "/Add_output_0", [0, 1])})
 if len(sys.argv) > 3:
     FRAGS = {k: v for k, v in FRAGS.items() if k in sys.argv[3:]}
 inter = onnx.load(RAW)

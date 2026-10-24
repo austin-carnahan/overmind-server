@@ -307,6 +307,7 @@ original), **`fast`** a reduced-precision mode that passed the task checks.
 | DINOv2-S/14 | FP32 only | — (both reduced modes fail) |
 | OWLv2 B/16 (ours) | FP32 only, 4.53 s image tower | — (both reduced modes fail) |
 | YOLOE-v8s prompt-free (ours; added 2026-10-24) | FP32, 186 ms (exact: 132/132 detections, mask IoU 1.0000) | FP16 + FP32 acc., 108 ms (132/132 kept, plus one borderline extra; mask IoU ≥ 0.969, mean 0.996) |
+| EdgeSAM-3x image encoder (ours; added 2026-10-24, experimental; encoder only, not yet a segmentation service) | `gpu-fp32`: GPU FP32, 267 ms (exact) — also `alternate` `gpu-mixed`: FP16 + FP32 acc., 169 ms (worst mask IoU 0.920) | `tpu-fp16r-gpu-neck-fp32`: TPU fp16-relaxed trunk 130 ms + GPU FP32 neck 16 ms (worst mask IoU 0.944, mean 0.9983). Preparation metadata: `gelu: tanh-approximation` (approximate functional rewrite), bicubic restoration (exact), chain-form elementwise ops (TPU compiler op-order workaround) |
 | EfficientSAM3 RV-M (ours; added 2026-10-24, experimental) | FP32: vision 715 ms per image + grounding 3.28 s per prompt (exact) | FP16 + FP32 acc. grounding, 1.72 s per prompt (all detections kept, final-mask IoU ≥ 0.9986); vision stays FP32. Pure FP16 rejected (changes detections) |
 
 ## 2026-10-24 — EfficientSAM3 RV-M (our conversion, checkpoint rev `85b05896`)
@@ -794,4 +795,25 @@ timed out compiling); the TPU rejects the neck's LayerNorm; and a **TPU
 compiler defect**: the same eight ops (1×1 conv + tanh GELU at
 128×128×192) compile in 0.66 s or time out at the ~60 s deadline depending
 only on op order.
+
+## 2026-10-24 — NNAPI compilation caching on the Edge TPU (EdgeSAM TPU stage)
+
+TFLite 2.16.1 NNAPI delegate `cache_dir` + `model_token` (bench extended:
+`NNAPI_CACHE_DIR`, `NNAPI_MODEL_TOKEN`, `RELOADS`), the 410-op EdgeSAM TPU
+stage, token `edgesam3x-T1-<sha256[:16] of the .tflite>-fp16r-tflite2.16.1`.
+**The G1 driver reuses compilations effectively:**
+
+| Scenario | Load | Compiler spawned | Outputs (8 photos) |
+| --- | --- | --- | --- |
+| 1. Empty cache, first load | 42.9 s | yes; writes a 31.9 MB blob + TFLite's 1.6 KB index | bit-identical to an uncached run |
+| 2. Interpreter + delegate destroyed and recreated, same process (×2) | 100 ms, 88 ms | no ("prepareModelFromCache: successfully prepared") | bit-identical |
+| 3. New process, persistent cache | 183 ms (memory drop 49 MB vs ~1.1 GB compiling) | no | bit-identical |
+| Same token, same op structure, different constants (T1 with the refitted GELU) | 43.2 s | yes — the driver rejected the cached blob (`prepareModelFromCache failure`) | the new model's own results, not the cached model's |
+
+So a stale token degrades to a recompile rather than serving the wrong
+compilation (TFLite's own cache key hashes only the token and the
+partition's node/tensor indices). Tokens still derive from the artifact
+hash, precision and runtime version, so a changed graph never even tries
+the old blob; superseded blobs (~32 MB each) need pruning. Not tested:
+survival across reboots and driver updates.
 
