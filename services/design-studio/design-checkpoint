@@ -269,6 +269,7 @@ def load_project(project):
 
 
 def cmd_stage(args):
+    worker_path(args.src_dir.rstrip("/") + "/")
     root, _, proj = load_project(args.project)
     parent = proj["head"]
     number = len(proj["checkpoints"]) + 1
