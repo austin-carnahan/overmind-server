@@ -817,3 +817,46 @@ hash, precision and runtime version, so a changed graph never even tries
 the old blob; superseded blobs (~32 MB each) need pruning. Not tested:
 survival across reboots and driver updates.
 
+## 2026-10-24 — EdgeSAM box decoder on the GPU; complete pipelines; quality vs SAM 2.1 (ground truth)
+
+Code: [edgesam-tpu](../../hosts/cerebrate-pixel6/spikes/edgesam-tpu/README.md).
+
+**Decoder** (our litert-torch conversion, 305/305 ops on the GPU; inputs:
+NHWC embedding, the box's two corner tokens from the host, and the dense
+embedding, image positional encoding and output tokens as inputs). Stage 1
+vs the original on 132 boxes: thresholded IoU 1.000000; stage 2: 2e-5.
+From the reference embeddings, 132 YOLOE boxes on the 8 photos:
+
+| Decoder | Per box (sync. e2e) | Worst mask IoU | Mean | Flipped px |
+| --- | --- | --- | --- | --- |
+| CPU (XNNPACK) | 196 ms | 1.0000 | 1.00000 | 0 |
+| GPU fp32 | 66.6 ms | 1.0000 | 1.00000 | 2 |
+| GPU fp16 + fp32 acc. | 53.2 ms | 0.9709 | 0.99946 | 1,363 |
+
+**Complete pipelines on the device** (each decoder fed the device encoder's
+embeddings), vs the original EdgeSAM: `default` GPU fp32 → GPU fp32: worst
+1.0000 (1 px); `fast` TPU + GPU neck → GPU fp32: worst 0.9441, mean 0.99830;
+→ GPU fp16acc32 decoder: worst 0.9441, mean 0.99821.
+
+**Quality against ground truth** — browser-perception's object-selection set
+(126 LVIS objects, 118 photos, 18 indoor kinds incl. people), each object's
+ground-truth box as the prompt. Original models in fp32 (the devices'
+default configurations reproduce them exactly), plus EdgeSAM `fast` run on
+the Pixel:
+
+| Model / mask | Mean IoU | Median IoU | Missed (< 50% covered) | Mean spill |
+| --- | --- | --- | --- | --- |
+| SAM 2.1 Hiera-Tiny, single box mask | **88.3%** | 93.9% | 0.0% | 6.3% |
+| SAM 2.1, best of 3 | 87.6% | 92.6% | 0.0% | 6.6% |
+| EdgeSAM-3x, single box mask (official) | 87.1% | 93.4% | 3.2% | 6.5% |
+| EdgeSAM-3x, best of 3 | 87.3% | 93.0% | 2.4% | 7.7% |
+| **EdgeSAM `fast` on the Pixel** (TPU + GPU neck, GPU fp32 decoder) | **87.1%** | 93.4% | 3.2% | 6.5% |
+
+Harness check: SAM 2.1 best-of-3 here 87.6% (fp32) vs browser-perception's
+86.9% (WebGPU fp16). By size, EdgeSAM 83.0% large / 88.7% medium / 88.5%
+small vs SAM 2.1 87.6 / 89.7 / 86.8. EdgeSAM's misses: three beds and a
+blanket (SAM 2.1 on them: 0.54–0.71, 0.41). The device `fast` run is within
+2 points of the original EdgeSAM on every object (mask fidelity worst 0.987,
+mean 0.9989). Latency for one box: SAM 2.1 ~1.46 s, EdgeSAM `default` 0.33 s,
+`fast` 0.21 s (encoder + decoder, measured separately).
+

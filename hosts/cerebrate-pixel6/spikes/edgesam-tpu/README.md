@@ -126,3 +126,36 @@ runner `DEVENV`/`TAG`. Numbers in the
 stage doesn't set a cache yet (YOLOE compiles in ~3.8 s); an EdgeSAM serving
 worker needs it.
 
+## Decoder on the phone, and quality against ground truth
+
+- [`edgesam_decoder.py`](edgesam_decoder.py) — the box decoder for LiteRT:
+  the original prompt encoder runs on the host (box → two corner tokens);
+  the graph takes the NHWC embedding, those tokens and three constant inputs
+  (dense no-mask embedding, image positional encoding, output tokens — lane
+  §4.5 rule 3) and returns mask token 0's low-res logits and IoU score; the
+  host upscales with the original `postprocess_masks`. GPU-clean structure
+  from sam21-gpu. Exact at stage 1 (132 boxes) and 2; on the device
+  305/305 ops on the GPU, exact at fp32 (66.6 ms per box), worst mask IoU
+  0.971 at fp16 + fp32 acc. (53.2 ms); CPU 196 ms.
+  [`edgesam_decoder_accuracy.py`](edgesam_decoder_accuracy.py) scores device
+  outputs. `litert_e2e` now reads each distinct input file once (132 samples
+  share 8 embeddings and 3 constants).
+- [`lvis_compare.py`](lvis_compare.py) — EdgeSAM-3x vs SAM 2.1 Hiera-Tiny
+  (originals, fp32) against the ground truth of browser-perception's
+  126-object LVIS selection set, ground-truth boxes as prompts;
+  [`lvis_device_prep.py`](lvis_device_prep.py) +
+  [`lvis_device_run.sh`](lvis_device_run.sh) run EdgeSAM `fast` on the Pixel
+  over the same set in batches (TPU stage from the compilation cache),
+  [`lvis_device_score.py`](lvis_device_score.py) scores it.
+
+| | Mean IoU vs ground truth | Large / medium / small | Missed |
+| --- | --- | --- | --- |
+| SAM 2.1, single box mask | 88.3% | 87.6 / 89.7 / 86.8% | 0 |
+| EdgeSAM-3x original, single box mask | 87.1% | 83.0 / 88.7 / 88.5% | 4 (3 beds, a blanket) |
+| EdgeSAM `fast` on the Pixel | 87.1% | 82.9 / 88.7 / 88.5% | 4 (same) |
+
+The TPU variant costs nothing measurable in ground-truth quality (no object
+moves by more than 2 points). Fidelity ≠ quality: EdgeSAM reproduces itself
+exactly at `default` and nearly at `fast`, but is ~1 point below SAM 2.1 on
+this set, weaker on large deformable objects and better on small ones.
+

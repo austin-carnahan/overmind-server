@@ -23,6 +23,7 @@
 #include <time.h>
 
 #include <algorithm>
+#include <map>
 #include <string>
 #include <vector>
 
@@ -71,7 +72,11 @@ int main(int argc, char** argv) {
   int sustain_s = argc > 7 ? atoi(argv[7]) : 0;
   const char* prec = argc > 8 ? argv[8] : "fp32";
 
-  std::vector<std::vector<std::vector<char>>> inputs;  // [sample][input]
+  // [sample][input] -> file contents; each distinct file is read once (many
+  // samples can share a large tensor, e.g. one image embedding per photo
+  // across all its box prompts).
+  std::map<std::string, std::vector<char>> files;
+  std::vector<std::vector<const std::vector<char>*>> inputs;
   {
     FILE* lst = fopen(argv[4], "r");
     if (!lst) { fprintf(stderr, "FATAL: cannot open %s\n", argv[4]); return 1; }
@@ -79,8 +84,10 @@ int main(int argc, char** argv) {
     while (fgets(line, sizeof(line), lst)) {
       line[strcspn(line, "\r\n")] = 0;
       if (!line[0]) continue;
-      std::vector<std::vector<char>> sample;
+      std::vector<const std::vector<char>*> sample;
       for (char* tok = strtok(line, ","); tok; tok = strtok(NULL, ",")) {
+        auto it = files.find(tok);
+        if (it != files.end()) { sample.push_back(&it->second); continue; }
         FILE* f = fopen(tok, "rb");
         if (!f) { fprintf(stderr, "FATAL: cannot open %s\n", tok); return 1; }
         fseek(f, 0, SEEK_END);
@@ -89,7 +96,7 @@ int main(int argc, char** argv) {
         std::vector<char> buf(n);
         if (fread(buf.data(), 1, n, f) != (size_t)n) { fprintf(stderr, "FATAL: short read %s\n", tok); return 1; }
         fclose(f);
-        sample.push_back(buf);
+        sample.push_back(&files.emplace(tok, std::move(buf)).first->second);
       }
       inputs.push_back(sample);
     }
@@ -162,7 +169,7 @@ int main(int argc, char** argv) {
   for (auto& sample : inputs) {
     if (sample.size() != n_in) { fprintf(stderr, "FATAL: sample has %zu files, model has %u inputs\n", sample.size(), (unsigned)n_in); return 1; }
     for (size_t i = 0; i < n_in; i++)
-      if (sample[i].size() != in_sizes[i]) { fprintf(stderr, "FATAL: input %zu is %zu bytes, model wants %zu\n", i, sample[i].size(), in_sizes[i]); return 1; }
+      if (sample[i]->size() != in_sizes[i]) { fprintf(stderr, "FATAL: input %zu is %zu bytes, model wants %zu\n", i, sample[i]->size(), in_sizes[i]); return 1; }
   }
   printf("model=%s accel=%s buffers=%s precision=%s compile_us=%ld inputs=%u outputs=%u samples=%zu\n",
          model_path, argv[2], req ? "req" : "host", gpu ? prec : "-", compile_us,
@@ -182,7 +189,7 @@ int main(int argc, char** argv) {
     long t0 = now_us();
     for (size_t i = 0; i < n_in; i++) {
       CHECK("LockIn", LiteRtLockTensorBuffer(in_bufs[i], &p, kLiteRtTensorBufferLockModeWrite));
-      memcpy(p, inputs[idx][i].data(), in_sizes[i]);
+      memcpy(p, inputs[idx][i]->data(), in_sizes[i]);
       CHECK("UnlockIn", LiteRtUnlockTensorBuffer(in_bufs[i]));
     }
     long t1 = now_us();

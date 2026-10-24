@@ -675,6 +675,27 @@ path Step 2A established (CPU if none); decoders on CPU.
 
 **Gate:** a chosen refiner with measured quality and Pixel latency.
 
+**Status (2026-10-24): measured; choice pending.** Both complete pipelines
+run on the Pixel, and both were scored against the ground truth of
+browser-perception's 126-object LVIS selection set with each object's box
+(spike `edgesam-tpu`, `lvis_compare.py`, `lvis_device_score.py`):
+
+| Pipeline (Pixel 6) | Encoder | Decoder per box | 1 box | 10 boxes | Mean IoU vs ground truth | Large / small objects | Missed |
+| --- | --- | --- | --- | --- | --- | --- | --- |
+| SAM 2.1 Hiera-Tiny, GPU fp32 (exact) | 1.38 s | ~80 ms | ~1.46 s | ~2.2 s | **88.3%** | 87.6% / 86.8% | 0 |
+| EdgeSAM-3x `default`, GPU fp32 (exact) | 267 ms | 67 ms | 0.33 s | 0.94 s | 87.1% | 83.0% / 88.5% | 4 |
+| EdgeSAM-3x `fast`, TPU + GPU neck, GPU fp32 decoder | 146 ms | 67 ms | **0.21 s** | **0.81 s** | **87.1%** (identical to the original) | 82.9% / 88.5% | 4 |
+
+(Encoder and decoder measured separately and summed; decoder per-box times
+include rewriting its three resident 4 MB inputs, which a serving worker
+would keep. Fidelity numbers in the spike README.) EdgeSAM is within about
+a point of SAM 2.1 on average, ~7× faster for one box, better on small
+objects and weaker on large deformable ones: its four misses are three beds
+and a blanket, where SAM 2.1 is also weak (0.41–0.71). Candidate policy:
+EdgeSAM as the default box refiner, SAM 2.1 kept for large bedding/textile
+regions or when a mask looks wrong. A serving worker (embedding cached per
+image, decoder inputs resident) comes before production.
+
 ### Step 5 — OWLv2 characterization
 
 Measure OWLv2's image tower on the Pixel — on Step 2A's GPU path, fp16 first,
@@ -1139,4 +1160,15 @@ conditions in Section 4.4).
   on par with GPU fp16+fp32 acc. (169 ms, 0.920 / 0.9983) and better than
   the authors' ONNX; GPU fp32 is exact at 267 ms. Costs: a 43 s TPU compile
   per load, and the approximation (most of the flipped pixels).
+- **2026-10-24** — **EdgeSAM complete on the Pixel, and compared with SAM 2.1
+  against ground truth.** NNAPI compilation caching works on the G1 TPU
+  (42.9 s cold → 183 ms from the persistent cache in a new process,
+  bit-identical; a stale token is rejected and recompiled, not misused).
+  Our GPU box decoder (constants as inputs) is exact at fp32, 67 ms per box
+  (SAM 2.1's: ~80 ms). On the 126-object LVIS set with box prompts, EdgeSAM's
+  fast pipeline on the device scores 87.1% mean IoU — identical to the
+  original EdgeSAM — against SAM 2.1's 88.3%, at ~0.21 s vs ~1.46 s for one
+  box. EdgeSAM is weaker on large deformable objects (beds, blankets) and
+  better on small ones. Step 4 status has the table; the choice of default
+  refiner is pending.
 
