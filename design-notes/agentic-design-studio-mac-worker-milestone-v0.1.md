@@ -3,7 +3,8 @@
 **Status:** Implementation plan / not yet executed  
 **Version:** 0.1  
 **Date:** 2026-10-23  
-**Parent architecture:** `agentic-design-shopping-workbench.md`  
+**Parent architecture:** `agentic-design-shopping-workbench.md` (not written yet; not needed for this milestone)  
+**Environment report:** [agentic-design-studio-environment.md](agentic-design-studio-environment.md) (DESIGN-001)  
 **Primary execution adapter:** [GIMP Agent MCP](https://github.com/SarutobiSasuke8/gimp-agent-mcp), initial pinned package **0.5.0** (verify installed/available version before setup)  
 **Owners:** Overmind operator / Kerrigan (coordination); Design Agent (edits); Mac worker (GIMP runtime)  
 **Execution style:** short, independently verifiable spikes; stop and record observations at each gate.
@@ -273,6 +274,16 @@ A tiny script or CLI adapter for `checkout`, `stage`, `validate`, `commit`, `sta
 
 **Agreed:** GIMP Agent MCP is the first adapter; Mac is the first interactive worker; Overmind is authoritative for committed project artifacts; OpenClaw node-hosted MCP is the preferred transport; we prove checkpoint/resume before layering on Comfy Cloud.
 
+**Decided 2026-10-23 (DESIGN-001):**
+
+- The worker is this Mac (Apple M1, user `dev`), using the normal account for the spikes.
+- The Design Agent is a new, narrowly scoped OpenClaw agent named **Buckminster**.
+- `DESIGN_STORE` is `/mnt/substrate/design-studio`.
+- The Mac runs a headless node host (`openclaw node run`), not the macOS app.
+- The test image is `hotel-room.jpg`.
+
+See the [environment report](agentic-design-studio-environment.md).
+
 **To resolve during inventory, not by assumption:**
 
 - Exact Overmind storage mount and backup target; authorized transfer account/path.
@@ -286,7 +297,6 @@ A tiny script or CLI adapter for `checkout`, `stage`, `validate`, `commit`, `sta
 
 ## 8. Primary references (verified 2026-10-23)
 
-- [Parent architecture: Agentic Design & Shopping Workbench](agentic-design-shopping-workbench.md) (internal design note; not a software dependency)
 - [GIMP Agent MCP — GitHub](https://github.com/SarutobiSasuke8/gimp-agent-mcp)
 - [GIMP Agent MCP — PyPI v0.5.0](https://pypi.org/project/gimp-agent-mcp/0.5.0/)
 - [GIMP Agent MCP security notes](https://github.com/SarutobiSasuke8/gimp-agent-mcp/blob/main/SECURITY.md)
