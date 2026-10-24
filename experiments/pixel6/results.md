@@ -470,3 +470,46 @@ VM booted, tunnels and `cerebrate-mlserver` auto-started, all five models
 READY, `inference.home.arpa` 200. Outage ≈ 7 minutes. TPU compile
 experiments stopped pending a decision on how to protect the VM.
 
+## 2026-10-24 — YOLOE prompt-free on the GPU; int8 backbone partition (desktop)
+
+Code: [yoloe-tpu](../../hosts/cerebrate-pixel6/spikes/yoloe-tpu/README.md).
+Task check against Ultralytics' predictions from the original `.pt` on the
+eight letterboxed photos (v8s 132 detections, 11s 112): matched one-to-one by
+class (of 4,585) and box IoU ≥ 0.5; "any label" counts reference detections
+found at IoU ≥ 0.5 regardless of label.
+
+**GPU (float LiteRT, our `litert-torch` conversion; stage 2 cosine 1.000000):**
+
+| Model | Config | Placement | E2E | Matched | Box IoU min | Mask IoU min / mean | Verdict |
+| --- | --- | --- | --- | --- | --- | --- | --- |
+| v8s | CPU (ORT) | — | 727 ms | (raw outputs = desktop) | | | reference latency |
+| v8s | CPU (LiteRT XNNPACK) | 296/300 | 1,676 ms | 132/132 | 1.0000 | 1.0000 / 1.0000 | correct, slow |
+| **v8s** | **GPU fp32** | **300/300** | **186 ms** (~3.9× ORT CPU) | **132/132** | 1.0000 | 1.0000 / 1.0000 | **exact** |
+| v8s | GPU fp16 + fp32 acc. | 300/300 | 108 ms | 132/132 (+1 extra borderline) | 0.965 | 0.969 / 0.996 | near-identical |
+| v8s | GPU fp16 | 300/300 | 98 ms | 127/132 | 0.942 | 0.940 / 0.992 | degraded |
+| 11s | CPU (ORT) | — | 667 ms | | | | reference latency |
+| **11s** | **GPU fp32** | **399/399** | **179 ms** (~3.7×) | **112/112** | 1.0000 | 1.0000 / 1.0000 | **exact** |
+| 11s | GPU fp16 + fp32 acc. | 399/399 | 107 ms | 111/112 | 0.940 | 0.916 / 0.996 | one detection lost |
+| 11s | GPU fp16 | 399/399 | 90 ms | 109/112 | 0.812 | 0.785 / 0.992 | degraded |
+
+No preparation was needed for the GPU (unlike the transformers), and the
+best-class `ARG_MAX` over 4,585 classes runs on the GPU too. G3D 25 → 43 °C.
+
+**int8 backbone + neck (TPU partition), desktop ORT emulation, fp32 head:**
+the partition chained back is exact; quantized (QDQ, uint8 activations,
+int8 per-channel weights) with indoor COCO calibration:
+
+| Backbone | Matched | Any label | Score max diff | Mask IoU mean |
+| --- | --- | --- | --- | --- |
+| v8s fp32 | 132/132 | 132 | 0.0000 | 1.0000 |
+| v8s int8, MinMax (300 photos) | 80/132 | 104 | 0.31 | 0.932 |
+| v8s int8, percentile 99.999 (32 photos) | 101/132 | 119 | 0.23 | 0.956 |
+| 11s fp32 | 112/112 | 112 | 0.0000 | 1.0000 |
+| 11s int8, MinMax | 71/112 | 102 | 0.29 | 0.947 |
+| 11s int8, percentile | 85/112 | 104 | 0.32 | 0.961 |
+
+int8 costs roughly a fifth to a quarter of exact-label detections even with
+better calibration; many of the losses are label flips between near-synonyms
+among 4,585 classes rather than missed objects. TPU compile of the int8
+backbone (9 MB) not yet run — waiting for the VM watchdog on overmind-01.
+
