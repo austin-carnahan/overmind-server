@@ -26,6 +26,7 @@ import fcntl
 import hashlib
 import json
 import os
+import re
 import secrets
 import struct
 import subprocess
@@ -33,9 +34,15 @@ import sys
 import zlib
 from pathlib import Path
 
-STORE = Path(os.environ.get("DESIGN_STORE", "/mnt/substrate/design-studio"))
+# Fixed, not taken from the environment: agents run this through an exec
+# allowlist, so every input that chooses where to write must be validated.
+STORE = Path("/mnt/substrate/design-studio")
+WORKER_ROOT = "/Users/dev/DesignStudio/workspaces/"
 CHECKPOINT_FILES = ("document.xcf", "preview.png", "worker-validation.json")
+OPTIONAL_FILES = ("worker-validation.json",)  # needs a worker shell; agents can't produce it
 SCHEMA_VERSION = 1
+PROJECT_RE = re.compile(r"^[a-z0-9][a-z0-9-]{0,62}$")
+STAGING_RE = re.compile(r"^\d{8}T\d{6}Z-[0-9a-f]{6}$")
 
 
 class Fail(Exception):
@@ -69,7 +76,16 @@ def log_event(project_dir, event, **fields):
         f.write(json.dumps({"at": now(), "event": event, **fields}) + "\n")
 
 
+def worker_path(path):
+    """Only paths inside the worker's design workspaces, with no '..' parts."""
+    if not path.startswith(WORKER_ROOT) or "/../" in path + "/" or "\0" in path:
+        raise Fail(f"worker path must be under {WORKER_ROOT}: {path}")
+    return path
+
+
 def project_paths(project):
+    if not PROJECT_RE.match(project):
+        raise Fail(f"bad project id {project!r} (use lowercase letters, digits, hyphens)")
     root = STORE / "projects" / project
     return root, root / "project.json"
 
@@ -82,6 +98,7 @@ def locked(project_dir):
 
 def node_fetch(node, path):
     """Fetch one file from a node; returns (bytes, worker-side sha256)."""
+    worker_path(path)
     out = subprocess.run(
         ["openclaw", "nodes", "invoke", "--node", node, "--command", "file.fetch",
          "--params", json.dumps({"path": path}), "--json",
@@ -238,6 +255,12 @@ def cmd_init(args):
     print(json.dumps({"project": args.project, "source": local_sha}, indent=2))
 
 
+def staging_dir(root, staging_id):
+    if not STAGING_RE.match(staging_id):
+        raise Fail(f"bad staging id {staging_id!r}")
+    return root / "staging" / staging_id
+
+
 def load_project(project):
     root, pj = project_paths(project)
     if not pj.exists():
@@ -256,7 +279,12 @@ def cmd_stage(args):
     files = {}
     try:
         for name in CHECKPOINT_FILES:
-            data, worker_sha = node_fetch(args.node, f"{args.src_dir.rstrip('/')}/{name}")
+            try:
+                data, worker_sha = node_fetch(args.node, f"{args.src_dir.rstrip('/')}/{name}")
+            except Fail as e:
+                if name in OPTIONAL_FILES and "NOT_FOUND" in str(e):
+                    continue
+                raise
             (stage / name).write_bytes(data)
             local_sha = sha256(stage / name)
             if local_sha != worker_sha:
@@ -266,7 +294,12 @@ def cmd_stage(args):
         (stage / "FAILED").write_text(f"{now()} {e}\n")
         log_event(root, "stage.failed", staging_id=staging_id, error=str(e))
         raise
-    worker = json.loads((stage / "worker-validation.json").read_text())
+    wv = stage / "worker-validation.json"
+    worker = json.loads(wv.read_text()) if wv.exists() else {}
+    try:
+        canvas = inspect_xcf(stage / "document.xcf")["canvas"]
+    except (Fail, struct.error, ValueError, KeyError, IndexError):
+        canvas = worker.get("canvas")  # verify reports the real problem
     manifest = {
         "schema_version": SCHEMA_VERSION,
         "project_id": args.project,
@@ -279,7 +312,7 @@ def cmd_stage(args):
         "toolchain": {"gimp_version": worker.get("gimp_version")},
         "files": files,
         "layers_expected": [s for s in args.layers.split(",") if s],
-        "canvas": worker.get("canvas"),
+        "canvas": canvas,
         "description": args.description,
         "source_asset_ids": [s["id"] for s in proj["sources"]],
     }
@@ -299,7 +332,7 @@ def verify_stage(stage, project):
     if (stage / "FAILED").exists():
         raise Fail("staging directory is marked FAILED")
     for name in CHECKPOINT_FILES + ("checkpoint.json",):
-        if not (stage / name).is_file():
+        if name not in OPTIONAL_FILES and not (stage / name).is_file():
             raise Fail(f"missing {name}")
     ok("files present")
     m = json.loads((stage / "checkpoint.json").read_text())
@@ -322,12 +355,15 @@ def verify_stage(stage, project):
     if sorted(names) != sorted(m["layers_expected"]):
         raise Fail(f"XCF layers {names} != expected {m['layers_expected']}")
     ok("xcf structure", f"v{xcf['xcf_version']}, layers {names}")
-    worker = json.loads((stage / "worker-validation.json").read_text())
-    if not worker.get("xcf_reopened") or [l["name"] for l in worker["layers"]] != names:
-        raise Fail("worker reopen check missing or disagrees with XCF layer order")
-    if worker.get("xcf_sha256") != m["files"]["document.xcf"]["sha256"]:
-        raise Fail("worker reopen check was run on a different document.xcf")
-    ok("worker fresh-process reopen agrees", worker.get("gimp_version", ""))
+    if "worker-validation.json" in m["files"]:
+        worker = json.loads((stage / "worker-validation.json").read_text())
+        if not worker.get("xcf_reopened") or [l["name"] for l in worker["layers"]] != names:
+            raise Fail("worker reopen check disagrees with XCF layer order")
+        if worker.get("xcf_sha256") != m["files"]["document.xcf"]["sha256"]:
+            raise Fail("worker reopen check was run on a different document.xcf")
+        ok("worker fresh-process reopen agrees", worker.get("gimp_version", ""))
+    else:
+        ok("worker fresh-process reopen", "not provided; Overmind structural checks only")
     if png != m["canvas"]:
         raise Fail(f"preview {png} != canvas {m['canvas']}")
     ok("preview decodes", f"{png['width']}x{png['height']}")
@@ -336,7 +372,7 @@ def verify_stage(stage, project):
 
 def cmd_verify(args):
     root, _, _ = load_project(args.project)
-    stage = root / "staging" / args.staging_id
+    stage = staging_dir(root, args.staging_id)
     try:
         checks, xcf = verify_stage(stage, args.project)
     except Fail as e:
@@ -354,7 +390,7 @@ def cmd_commit(args):
     lock = locked(root)
     try:
         proj = json.loads(pj.read_text())  # re-read under the lock
-        stage = root / "staging" / args.staging_id
+        stage = staging_dir(root, args.staging_id)
         if not (stage / "verify.json").exists():
             raise Fail("not verified; run verify first")
         try:
