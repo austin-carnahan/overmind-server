@@ -189,7 +189,12 @@ int main(int argc, char** argv) {
     CHECK("Run", LiteRtRunCompiledModel(compiled, 0, n_in, in_bufs.data(), n_out, out_bufs.data()));
     long t2 = now_us();
     for (size_t o = 0; o < n_out; o++) {
-      CHECK("LockOut", LiteRtLockTensorBuffer(out_bufs[o], &p, kLiteRtTensorBufferLockModeRead));
+      LiteRtStatus ls = LiteRtLockTensorBuffer(out_bufs[o], &p, kLiteRtTensorBufferLockModeRead);
+      if (ls != kLiteRtStatusOk) {  // report and zero-fill, so the other outputs can still be inspected
+        if (k == 0) fprintf(stderr, "WARN: LockOut output %zu (status %d), zero-filled\n", o, (int)ls);
+        memset(out_host[o].data(), 0, out_sizes[o]);
+        continue;
+      }
       memcpy(out_host[o].data(), p, out_sizes[o]);
       CHECK("UnlockOut", LiteRtUnlockTensorBuffer(out_bufs[o]));
     }

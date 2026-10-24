@@ -306,3 +306,67 @@ original), **`fast`** a reduced-precision mode that passed the task checks.
 | MI-GAN 512 (published) | FP32 compute, 147 ms | FP16, 79 ms (≥ 41 dB in the infilled region) |
 | DINOv2-S/14 | FP32 only | — (both reduced modes fail) |
 | OWLv2 B/16 (ours) | FP32 only, 4.53 s image tower | — (both reduced modes fail) |
+
+## 2026-10-24 — EfficientSAM3 RV-M (our conversion, checkpoint rev `85b05896`)
+
+Code: [efficientsam3-gpu](../../hosts/cerebrate-pixel6/spikes/efficientsam3-gpu/README.md).
+Bounded spike: RV-M converted, EV-M inspected only, text prompts only. Three
+graphs: vision, text, grounding (fusion encoder + decoder + heads). Stage 1
+(wrappers vs the original `Sam3Processor` path): exact (0 difference);
+prepared grounding vs original: logits ≤ 1.9e-4, mask logits ≤ 7.4e-3.
+Stage 2 (converted vs eager): cosine 1.000000 for every output of every graph.
+
+**Desktop CPU baseline** (Mac, eight photos, 24 prompts): masks follow object
+boundaries closely; the correct phrase usually scores highest but competing
+phrases also clear 0.5 (details in the lane plan's spike section). Per stage:
+image backbone 1,070 ms (once per image), text encoder 114 ms (cacheable per
+phrase), fusion encoder 774 ms, decoder 185 ms, heads 1,076 ms (≈ 2.0 s per
+prompt, not cacheable — early fusion).
+
+**Operator inspection:** RV-M backbone 340 ops, convolutions only (no
+matmuls, nothing above 4-D; 42 unfused batch-norm multiplies). EV-M backbone
+297 ops with 14 matmuls and 7 divisions (linear attention). Text encoder: int32
+input and 32 ops above 4-D. Grounding: 2,642 ops; boolean padding-mask ops,
+5-D box-bias tensors, ops on constants.
+
+**Device, per graph** (G3D 25 → 42–51 °C across runs):
+
+| Graph | Config | Placement | E2E | Accuracy | Verdict |
+| --- | --- | --- | --- | --- | --- |
+| Vision | CPU | 340/340 XNNPACK | 10.47 s | rel L2 2e-6 | reference |
+| **Vision** | **GPU fp32** | **340/340** | **715 ms** (~14.6×) | rel L2 1.7–1.9e-6 (3 photos) | **exact, no preparation** |
+| **Text** | **CPU** | 268/270 XNNPACK | **17 ms / phrase** | worst token cosine 1.000000 (25 phrases) | **exact** |
+| Text | GPU only | 68/270 GPU-able | — | — | compile fails (5-D attention reshapes, int ops) |
+| Text | GPU + CPU | 68 GPU / 202 CPU | 20 ms | cosine 1.000000 | no gain |
+| Grounding, unprepared | CPU | 2,554/2,642 XNNPACK | 14.65 s | — | reference latency |
+| Grounding, unprepared | GPU only | 1,056/2,642 GPU-able | — | — | compile fails (`BROADCAST_TO`, 5-D, ops on constants) |
+| Grounding, unprepared | GPU + CPU | 1,056 GPU / 1,586 CPU | 4.0 s | — | mostly CPU |
+| Grounding, first prepared build (queries/presence still constants, 6-layer scoring) | GPU | all ops on GPU | 3.27 s | logits pinned at −12, masks cosine ~0.5 | **wrong** (bisected) |
+| **Grounding, prepared** | **GPU fp32** | **2,490/2,490** | **3.28 s / prompt** | 11 samples, 20 kept detections: same kept set, **mask IoU 1.0000, 0 flipped pixels**, kept score/box diff ~1e-7 | **exact** |
+| **Grounding, prepared** | **GPU fp16 + fp32 acc.** | 2,490/2,490 | **1.72 s / prompt** | 11 samples: same kept set (incl. scores 0.504, 0.51), kept score diff ≤ 1.9e-3, box ≤ 9.3e-4, mask IoU ≥ 0.9987 | **near-identical** |
+| Grounding, prepared | GPU fp16 | 2,490/2,490 | 1.73 s | 3 samples: one kept detection replaced (mask IoU 0.24), others ≥ 0.9907 | fails |
+
+Grounding inputs on the device were the desktop FPN features (the device
+vision graph matches them to rel L2 2e-6); the full on-device chain was not
+run end to end.
+
+**Grounding per stage on the GPU** (nested variants: encoder only, + decoder
+and scoring, + heads): fusion encoder 2,627 ms fp32 / 1,321 ms mixed (80%;
+self-attention over 5,184 image tokens), decoder + scoring 264 / 153 ms,
+segmentation heads 386 / 244 ms. On the desktop CPU the heads were the
+largest piece; on the Pixel GPU the convolution-heavy heads are cheap and the
+encoder dominates.
+
+**Bisect record (G1 defects found):** (1) layer 0's attention value
+projection of the 200×256 learned query embeddings (a weight used as an
+activation, fed as a constant) computed wrongly — cosine 0.86 — fixed by
+feeding the queries and presence token as inputs; (2) reshaping the scores
+`[1200,1]` into `[6,1,200,1]` produced wrong values with every input exact —
+fixed by scoring only the last decoder layer (the only one the outputs use).
+Ops on constants (`SIGN`, `MEAN`, `FLOOR_DIV`) were rejected rather than
+miscomputed. One transient run failure (OpenCL `-14`, a kernel execution
+error) on an intermediate build did not recur on the final graph.
+
+**Per image + per prompt, Pixel GPU:** 715 ms vision once per image, text
+17 ms per phrase on CPU (cacheable), then 3.28 s (fp32) or 1.72 s (mixed) per
+prompt.

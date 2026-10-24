@@ -237,6 +237,7 @@ evidence showing what actually ran on the accelerator.
 | DINOv2-small (test model, not in the pipeline) | GPU path proof | Transformer (ViT-S/14) | 22M params, 87 MB fp32 | **GPU** | **LiteRT GPU, prepared: 68.6 ms end to end at fp32, cosine 1.0 (measured)** | CPU (344 ms, measured) | — |
 | Depth Anything V2 Small (added 2026-10-24) | Depth-aware edits: relative depth map | Transformer (DINOv2 ViT-S + DPT head) | ~25M params | **GPU** | Published `litert-community/depth-anything-v2-small`, validated per Section 4.7 | Our prepared conversion (DINOv2 rules apply) | CPU |
 | MI-GAN 512 Places2 (added 2026-10-24) | Infill: object removal and correction | CNN (mobile inpainting GAN) | small (size to confirm) | **GPU** | Published `litert-community/MI-GAN-512-Places2-LiteRT`, validated per Section 4.7 | TPU int8, if quality holds | CPU |
+| EfficientSAM3 RV-M (spike, added 2026-10-24) | Text-prompted concept segmentation: every instance of a phrase, with masks | RepViT CNN + MobileCLIP-S0 text + SAM 3 fusion transformer and heads | 92.7M params | **GPU** (vision, grounding) + CPU (text) | **Our prepared conversion: vision 715 ms per image, grounding 3.28 s per prompt at fp32, task-exact (measured)**; fp16+fp32 acc. 1.72 s, near-identical | CPU (10.5 s + 14.7 s per prompt) | — |
 | OWLv2 text tower | Phrase → embedding | Text transformer (CLIP) | ~63M params, 254 MB fp32 | **GPU + CPU**, or precomputed offline | **GPU+CPU split: 229 ms per 32 phrases, exact (measured)** | CPU (1.08 s per 32, exact) | — |
 
 The two models added on 2026-10-24 extend the design capabilities beyond
@@ -292,11 +293,22 @@ on this device:
    grid while every other output was right. Moved to the host step (not
    bisected further; whether feeding it as an input also works is untested).
    Size alone doesn't predict this defect: check every output, not just one.
+   EfficientSAM3 widened the rule to **any constant used as an activation**:
+   ops with only constant inputs were either rejected (`SIGN`, `MEAN`) or
+   accepted and computed wrongly — the decoder's 200×256 learned query
+   embeddings, fed straight into an attention projection, gave cosine 0.86.
+   Feed every such constant (learned queries, reference boxes, constant
+   tokens) as an input; then no op computes on constants alone.
 4. **No per-channel broadcast multiplies** (`[N, C] × [C]`). Fold them into the
    adjacent linear layer's weights (DINOv2's LayerScale into `o_proj` and
    `fc2`) — exact, since scaling a linear layer's output channels by λ is
    scaling its weight rows and bias by λ.
-5. **Verify twice.** The prepared model against the unmodified original in
+5. **Keep batch at 1 inside GPU graphs.** Reshaping EfficientSAM3's scores
+   `[1200,1]` into `[6,1,200,1]` (batch 6, one channel) gave wrong values
+   with every input exact. Fold extra leading dimensions into the spatial
+   ones, or compute only what the outputs use (there: the last of six
+   decoder layers).
+6. **Verify twice.** The prepared model against the unmodified original in
    PyTorch, then the converted `.tflite` against CPU on the device, with
    element-wise comparison — never trust a GPU run that merely completes.
 
@@ -717,6 +729,27 @@ even if first exported as one graph. Batching prompts may raise
 throughput, but early fusion still does substantial work per prompt —
 batching is not assumed to cut total computation or memory.
 
+**Status (2026-10-24): questions 1–4 answered, within the bound.** All three
+graphs exported with FP32 weights (cosine 1.000000 against eager). On the
+GPU, the RV-M vision graph is exact with no preparation (340/340 ops,
+715 ms vs 10.5 s CPU) — the RepViT hypothesis held, and EV-M's linear
+attention (14 matmuls, 7 divisions) was not needed. The text encoder runs
+exactly on the CPU in 17 ms per phrase (its 5-D attention reshapes keep it
+off the GPU; it is cacheable anyway). The grounding graph needed six exact
+rewrites ([efficientsam3-gpu](../hosts/cerebrate-pixel6/spikes/efficientsam3-gpu/README.md))
+— two of them for values the GPU computed wrongly rather than rejected
+(Section 4.5, rules 3 and 5) — and is then fully on the GPU and **task-exact
+at FP32**: 11 samples, 20 detections, mask IoU 1.0000, 0 flipped pixels, at
+3.28 s per prompt (vs 14.65 s CPU). FP16 with FP32 accumulation keeps every
+detection (mask IoU ≥ 0.9987) at 1.72 s; pure FP16 fails. Per-stage on the
+GPU: fusion encoder 80% (2.63 s), decoder and scoring 0.26 s, heads 0.39 s —
+so the encoder's self-attention over 5,184 image tokens is the target for any
+further speed-up (one candidate, untested: if its first layer's
+self-attention runs before any text is fused in, that layer could be cached
+per image). Not done: the on-device chain end to end (grounding was fed the
+desktop features, which the device vision graph reproduces to rel L2 2e-6),
+vision at reduced precision, and question 5 (dropped by decision).
+
 ## 7. Output contract (draft)
 
 For each source image, stored next to it, keyed by the image's SHA-256:
@@ -948,3 +981,16 @@ conditions in Section 4.4).
   accumulation (340 ms); MI-GAN `default` FP32 compute (147 ms) / `fast` pure
   FP16 (79 ms). DINOv2 and OWLv2 are FP32 only. Registered under these names
   when the models are cataloged and served.
+- **2026-10-24** — **EfficientSAM3 RV-M spike: correct on the GPU at FP32.**
+  Three graphs from the fine-tuned RV-M checkpoint (no published LiteRT
+  conversion): vision exact on the GPU unprepared (715 ms vs 10.5 s CPU),
+  text exact on the CPU (17 ms per phrase), grounding task-exact on the GPU
+  after six exact rewrites (3.28 s per prompt vs 14.65 s CPU; 11 samples, 20
+  detections, mask IoU 1.0000, 0 flipped pixels). Two new G1 defects, both
+  silent wrong values found by on-device bisection: a constant used as an
+  activation (learned query embeddings) and a reshape into batch 6 with one
+  channel — Section 4.5 rules 3 and 5. FP16+FP32 accumulation: same
+  detections, mask IoU ≥ 0.9987, 1.72 s per prompt; pure FP16 fails. The
+  fusion encoder is 80% of GPU time per prompt. Desktop findings preserved:
+  masks strong, label calibration weak (evaluated as four separate
+  properties); early fusion makes ~2 s per prompt non-cacheable on the CPU.
