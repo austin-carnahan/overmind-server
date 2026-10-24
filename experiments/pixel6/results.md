@@ -433,3 +433,40 @@ about 11% per prompt (3.28 → ~2.9 s default, 1.72 → ~1.53 s fast) for a
 one-time per-image cost of the same and 5.3 MB of state. Everything after it
 is prompt-dependent (from layer 0's cross-attention on, every image token
 carries the text). Not implemented.
+
+## 2026-10-24 — YOLOE prompt-free (v8s, 11s): step 1 and first TPU attempts
+
+Code: [yoloe-tpu](../../hosts/cerebrate-pixel6/spikes/yoloe-tpu/README.md).
+Ultralytics 8.4.184 fp32 ONNX exports, prepared (reduced outputs, Split →
+Slice, DFL as a 2-D softmax — all exact: 0 difference from the unmodified
+ONNX). Same-input check: on 640×640 letterboxed photos the ONNX export and
+the original `.pt` give identical predictions. Task evaluator (Ultralytics'
+NMS and masks, class-agnostic as YOLOE's predictor sets) reproduces the `.pt`
+predictions on 8/8 photos for both models.
+
+| Model | Config | Result |
+| --- | --- | --- |
+| v8s | CPU (ORT) | **727 ms**; outputs cosine 1.000000 vs desktop (best-class index differs on 85/8,400 low-score anchors — near-ties) |
+| 11s | CPU (ORT) | **667 ms** |
+| v8s | `nnapi` (fp32) | Edge TPU driver: **0 / 292 ops supported** — as expected, no strict fp32 |
+| v8s | `nnapi16` (fp32 relaxed to fp16), unprepared head | driver: 291 / 292 supported; DFL softmax rejected (`axis == -1 \|\| axis == input_rank - 1`) |
+| v8s | `nnapi16`, prepared | driver: **288 / 288 supported**; Edge TPU compiler **crashed** (SIGSEGV in `libdarwinn_hal.so`) |
+| 11s | `nnapi16`, prepared | driver: **425 / 425 supported** (C2PSA attention included); compiler crashed the same way |
+| v8s | `nnapi16`, class head removed | compile timed out (`Deadline exceeded`) |
+| 11s | `nnapi16`, class head removed | **memory exhaustion: the low-memory killer killed the Terminal app and the Debian VM** |
+
+With fp16 relaxation the Edge TPU *accepts* every op of both models
+(earlier "the TPU takes no fp32 work" holds for strict fp32 only), but its
+compiler can't build them: it crashes with the 4,585-class head and runs out
+of time and then memory without it.
+
+**Incident (04:26:54):** during the last compile the phone's low-memory
+killer ran a mass kill (167 processes in three minutes) that included
+`com.android.virtualization.terminal` and its `VmService` — the Debian VM,
+MLServer and the reverse tunnels went down; the Android-side workers kept
+running. Restored at 04:32 with the documented relaunch
+(`adb shell am start -n com.android.virtualization.terminal/.new2.ui.MainActivity`):
+VM booted, tunnels and `cerebrate-mlserver` auto-started, all five models
+READY, `inference.home.arpa` 200. Outage ≈ 7 minutes. TPU compile
+experiments stopped pending a decision on how to protect the VM.
+

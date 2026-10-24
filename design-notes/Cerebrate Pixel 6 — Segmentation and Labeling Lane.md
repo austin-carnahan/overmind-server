@@ -1025,3 +1025,14 @@ conditions in Section 4.4).
   `[6,1,200,256]`×`[256,1]`, wrong as a single op. First-fusion-layer caching
   verified possible (bit-identical across prompts) and worth ~11% per prompt;
   not implemented.
+- **2026-10-24** — **Step 2B started; TPU compile caused a production
+  outage.** YOLOE v8s/11s prepared (reduced outputs, Split → Slice, DFL as a
+  2-D softmax; exact) with references and an evaluator that reproduces
+  Ultralytics' predictions. CPU: 727 ms (v8s), 667 ms (11s). With fp16
+  relaxation the Edge TPU driver accepts every op of both models, YOLOE-11's
+  attention included, but its compiler crashes (with the 4,585-class head)
+  or times out (without it); one such compile exhausted the phone's memory
+  and the low-memory killer took the Terminal app — the Debian VM, MLServer
+  and the tunnels were down ~7 minutes until the documented relaunch.
+  TPU compiles stopped pending a decision on protecting the VM.
+
