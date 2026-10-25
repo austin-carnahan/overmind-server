@@ -19,7 +19,7 @@ GOLDEN = {
     ("prompt-free-segmentation", "fallback"): ("yoloe-v8s-pf/gpu-fp32", "hetero1", "yoloe-v8s-default", None),
     ("box-refinement", "default"): ("edgesam-3x/tpu-fp16r-gpu-neck-fp32", "hetero2", "edgesam3x-fast", "edgesam3x-box"),
     ("box-refinement", "fallback"): ("edgesam-3x/gpu-fp32", "hetero2", "edgesam3x-default", None),
-    ("box-refinement", "quality"): ("sam2.1-hiera-tiny/gpu-fp32", None, None, None),
+    ("box-refinement", "quality"): ("sam2.1-hiera-tiny/gpu-fp32", "gpu-sam2", "sam2.1-hiera-tiny-default", "sam2.1-hiera-tiny"),   # promoted 2026-10-25
     # promoted after the registry-serving cutover (2026-10-25)
     ("relative-depth", "default"): ("depth-anything-v2-small/gpu-fp16acc32", "gpu-depth", "depth-anything-v2-small-fast", "depth-anything-v2-small"),
     ("relative-depth", "quality"): ("depth-anything-v2-small/gpu-fp32", "gpu-depth", "depth-anything-v2-small-default", None),
@@ -29,6 +29,7 @@ GOLDEN = {
     # yoloe-11s-pf/gpu-fp32: production endpoint, not selected by a task
     ("fixed-class-segmentation", "default"): ("rf-detr-seg-nano/gpu-fp16acc32", "gpu-rfdetr", "rf-detr-seg-nano-fast", "rf-detr-seg-nano"),
     ("fixed-class-segmentation", "quality"): ("rf-detr-seg-nano/gpu-fp32", "gpu-rfdetr", "rf-detr-seg-nano-default", None),
+    # sam2.1-hiera-tiny/gpu-fp32: box-refinement quality (above); reduced precision stays serving_blocked
 }
 AVAILABLE = {"prompt-free-segmentation", "box-refinement", "relative-depth", "inpainting", "image-embedding", "fixed-class-segmentation"}
 

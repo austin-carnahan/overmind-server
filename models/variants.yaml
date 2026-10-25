@@ -238,7 +238,7 @@ variants:
 
   # ---- SAM 2.1 Hiera-Tiny ----------------------------------------------------
   sam2.1-hiera-tiny/gpu-fp32:
-    status: staged
+    status: production
     stages:
       - {name: encoder, artifact: tflite_gpu_encoder, accelerator: gpu, precision: fp32, runtime: litert-2.3.0, phase: image}
       - {name: prompt encoder, accelerator: host, precision: n/a, runtime: numpy, phase: prompt, notes: "box -> sparse embedding [1,3,256] (two corner tokens + padding)"}
