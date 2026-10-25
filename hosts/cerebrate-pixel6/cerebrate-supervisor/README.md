@@ -913,3 +913,41 @@ Authorized by the user ("roll this out").
 
 Rollback is not needed. The `.transport` files, the rollback set and the
 Pillow backup stay in place until the promotions are done.
+
+### Promotion record (2026-10-25, after the cutover)
+
+One endpoint at a time, each loaded with no MLServer restart and passed
+through the promotion gate in production
+(`mlserver_staged_test.py --only <m>`, `SUPERVISOR_PORT=8767`).
+
+| Endpoint | Gate | Result | YOLOE median alone → beside it | Worker peak | Free min |
+| --- | --- | --- | --- | --- | --- |
+| `depth-anything-v2-small` | 5/5 | raw 8/8 bit-identical | 306 → 426 ms | 463 MB | 2.9 GB |
+| `mi-gan-512` | 5/5 | PSNR ≥ 44.6 dB | 291 → 316 ms | 278 MB | 2.7 GB |
+| `dinov2-s14` | 5/5 | raw 8/8 bit-identical | 307 → 348 ms | 392 MB | 2.5 GB |
+| `yoloe-11s-pf` | 5/5 | raw 8/8 bit-identical | 268 → 283 ms | 608 MB | 2.1 GB |
+| `rf-detr-seg-nano` | 5/5 | graphs A and B 8/8, 26 detections | 296 → 347 ms | 387 MB | 1.8 GB |
+| `sam2.1-hiera-tiny` (FP32) | 5/5 | masks exact (IoU 1.0000, 0 px) | 322 → 560 ms | 1,213 MB | 2.1 GB |
+
+- Each gate also checked unload then reload.
+- MobileNet returned 795 throughout.
+- MLServer was never restarted (MainPID 13755, NRestarts 0).
+- TPU and GPU stayed at or below 36 °C.
+- The "free min" column includes earlier gates' idle workers that were still
+  resident.
+
+**EfficientSAM3 and OWLv2 are held, not promoted.** Their admission floors
+gate only their own start. Production YOLOE and EdgeSAM (`hetero1`,
+`hetero2`) have no floor:
+
+| | Measured |
+| --- | --- |
+| YOLOE worker | 717 MB RSS, 751 MB peak |
+| YOLOE + EdgeSAM | ≈ 1.36 GB |
+| EfficientSAM3 | drop 2,365 MB |
+| OWLv2 | drop 1,924 MB |
+
+With either resident, a YOLOE request takes the phone to about 1 GB free or
+below. Adding EdgeSAM brings it to 0.3–0.7 GB, inside the low-memory killer's
+reach toward the Debian VM. This needs a co-residency policy before
+promotion; the user is to decide.
