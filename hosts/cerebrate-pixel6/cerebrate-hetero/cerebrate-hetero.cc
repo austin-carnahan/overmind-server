@@ -324,39 +324,78 @@ static void append_json_string(std::string* out, const char* s) {
   out->push_back('"');
 }
 
-// A model on the GPU: compiled once, with persistent requirement-based
-// input/output buffers.
+// A model on the GPU (or, in graph mode, the CPU): compiled once, with
+// persistent requirement-based input/output buffers.
 struct GpuModel {
   LiteRtCompiledModel compiled = nullptr;
   std::vector<LiteRtTensorBuffer> in, out;
   std::vector<size_t> in_bytes, out_bytes;
   std::vector<std::vector<int64_t>> in_dims, out_dims;
+  std::vector<int> in_type, out_type;  // LiteRtElementType
 };
 
-static int gpu_load(LiteRtEnvironment env, const char* path, const char* prec, GpuModel* m) {
+// Bytes per element of a LiteRT element type; 0 = not carried.
+static size_t litert_element_size(int t) {
+  switch (t) {
+    case kLiteRtElementTypeFloat32: case kLiteRtElementTypeInt32: case kLiteRtElementTypeUInt32: return 4;
+    case kLiteRtElementTypeInt64: case kLiteRtElementTypeUInt64: case kLiteRtElementTypeFloat64: return 8;
+    case kLiteRtElementTypeFloat16: case kLiteRtElementTypeInt16: case kLiteRtElementTypeUInt16: case kLiteRtElementTypeBFloat16: return 2;
+    case kLiteRtElementTypeUInt8: case kLiteRtElementTypeInt8: case kLiteRtElementTypeBool: return 1;
+    default: return 0;
+  }
+}
+
+// LiteRT element type -> the wire protocol's dtype code (ONNX numbering).
+static int wire_dtype(int t) {
+  switch (t) {
+    case kLiteRtElementTypeFloat32: return 1;
+    case kLiteRtElementTypeUInt8: return 2;
+    case kLiteRtElementTypeInt8: return 3;
+    case kLiteRtElementTypeUInt16: return 4;
+    case kLiteRtElementTypeInt16: return 5;
+    case kLiteRtElementTypeInt32: return 6;
+    case kLiteRtElementTypeInt64: return 7;
+    case kLiteRtElementTypeBool: return 9;
+    case kLiteRtElementTypeFloat16: return 10;
+    case kLiteRtElementTypeFloat64: return 11;
+    case kLiteRtElementTypeUInt32: return 12;
+    case kLiteRtElementTypeUInt64: return 13;
+    default: return 0;
+  }
+}
+
+static int gpu_load(LiteRtEnvironment env, const char* path, const char* prec, GpuModel* m, const char* accel = "gpu") {
 #define LR(label, expr) do { LiteRtStatus s_ = (expr); if (s_ != kLiteRtStatusOk) { fprintf(stderr, "FATAL: %s %s (status %d)\n", path, label, (int)s_); return 1; } } while (0)
   LiteRtModel model; LR("model", LiteRtCreateModelFromFile(env, path, &model));
   LiteRtOptions options; LR("options", LiteRtCreateOptions(&options));
-  LR("accelerators", LiteRtSetOptionsHardwareAccelerators(options, kLiteRtHwAcceleratorGpu));
-  LrtGpuOptions* g; LR("gpu options", LrtCreateGpuOptions(&g));
-  LR("precision", LrtSetGpuAcceleratorCompilationOptionsPrecision(
-      g, strcmp(prec, "fp16acc32") == 0 ? kLiteRtDelegatePrecisionFp16WithFp32Accum : kLiteRtDelegatePrecisionFp32));
-  const char* id; void* payload; void (*deleter)(void*);
-  LR("opaque data", LrtGetOpaqueGpuOptionsData(g, &id, &payload, &deleter));
-  LiteRtOpaqueOptions opaque; LR("opaque", LiteRtCreateOpaqueOptions(id, payload, deleter, &opaque));
-  LR("add opaque", LiteRtAddOpaqueOptions(options, opaque)); LrtDestroyGpuOptions(g);
+  bool on_gpu = strcmp(accel, "cpu") != 0;
+  LR("accelerators", LiteRtSetOptionsHardwareAccelerators(options,
+      strcmp(accel, "gpu+cpu") == 0 ? (LiteRtHwAcceleratorSet)(kLiteRtHwAcceleratorGpu | kLiteRtHwAcceleratorCpu)
+      : on_gpu ? kLiteRtHwAcceleratorGpu : kLiteRtHwAcceleratorCpu));
+  if (on_gpu) {
+    LrtGpuOptions* g; LR("gpu options", LrtCreateGpuOptions(&g));
+    LR("precision", LrtSetGpuAcceleratorCompilationOptionsPrecision(
+        g, strcmp(prec, "fp16acc32") == 0 ? kLiteRtDelegatePrecisionFp16WithFp32Accum
+           : strcmp(prec, "fp16") == 0 ? kLiteRtDelegatePrecisionFp16 : kLiteRtDelegatePrecisionFp32));
+    const char* id; void* payload; void (*deleter)(void*);
+    LR("opaque data", LrtGetOpaqueGpuOptionsData(g, &id, &payload, &deleter));
+    LiteRtOpaqueOptions opaque; LR("opaque", LiteRtCreateOpaqueOptions(id, payload, deleter, &opaque));
+    LR("add opaque", LiteRtAddOpaqueOptions(options, opaque)); LrtDestroyGpuOptions(g);
+  }
   LR("compile", LiteRtCreateCompiledModel(env, model, options, &m->compiled));
   LiteRtSignature sig; LR("signature", LiteRtGetModelSignature(model, 0, &sig));
   LiteRtParamIndex n_in = 0, n_out = 0;
   LR("inputs", LiteRtGetNumSignatureInputs(sig, &n_in)); LR("outputs", LiteRtGetNumSignatureOutputs(sig, &n_out));
   m->in.resize(n_in); m->out.resize(n_out); m->in_bytes.resize(n_in); m->out_bytes.resize(n_out);
-  m->in_dims.resize(n_in); m->out_dims.resize(n_out);
+  m->in_dims.resize(n_in); m->out_dims.resize(n_out); m->in_type.resize(n_in); m->out_type.resize(n_out);
   for (int side = 0; side < 2; side++) {
     for (LiteRtParamIndex i = 0; i < (side ? n_out : n_in); i++) {
       LiteRtTensor t; LiteRtRankedTensorType type;
       if (side) LR("out tensor", LiteRtGetSignatureOutputTensorByIndex(sig, i, &t)); else LR("in tensor", LiteRtGetSignatureInputTensorByIndex(sig, i, &t));
       LR("type", LiteRtGetRankedTensorType(t, &type));
-      size_t bytes = 4;
+      size_t bytes = litert_element_size(type.element_type);
+      if (bytes == 0) { fprintf(stderr, "FATAL: %s %s %u: unsupported element type %d\n", path, side ? "output" : "input", (unsigned)i, (int)type.element_type); return 1; }
+      (side ? m->out_type : m->in_type)[i] = type.element_type;
       for (unsigned d = 0; d < type.layout.rank; d++) {
         bytes *= type.layout.dimensions[d];
         (side ? m->out_dims : m->in_dims)[i].push_back(type.layout.dimensions[d]);
@@ -455,10 +494,17 @@ struct Config {
   std::vector<PromptInput> prompt_inputs;
   std::vector<std::string> prompt_outputs;
   int cache_entries = 4;
-  // uint8 input: 0 = off, 1 = x / divide, 2 = (x - mean[c]) / std[c]
+  // uint8 input: 0 = off, 1 = x / divide, 2 = (x - mean[c]) / std[c],
+  // 3 = (x / 255 - mean[c]) / std[c], 4 = (x * (1 / 255) - mean[c]) / std[c]
+  // (graph mode: numpy-style and torchvision-style references; they differ by
+  // an ulp)
   int u8_mode = 0;
   float u8_divide = 255.0f, u8_mean[3] = {0, 0, 0}, u8_std[3] = {1, 1, 1};
   std::string u8_spec, extent_name;
+  // Graph mode (any graph.<name>.<field> key): declarative stages.
+  std::vector<std::vector<std::string>> graph_decl;  // {name, field, value}, in file order
+  std::string input_layout = "nhwc";
+  int share_buffers = 1;
 };
 
 static bool parse_floats(const std::string& s, float* out, int n) {
@@ -500,13 +546,25 @@ static int parse_config(const char* path, Config* c) {
     else if (k == "prompt_outputs") c->prompt_outputs = split(v);
     else if (k == "cache_entries") c->cache_entries = atoi(v.c_str());
     else if (k == "input_extent") c->extent_name = v;
+    else if (k == "input_layout") {
+      if (v != "nhwc" && v != "nchw") { fprintf(stderr, "FATAL: input_layout %s (nhwc or nchw)\n", v.c_str()); fclose(f); return 1; }
+      c->input_layout = v;
+    }
+    else if (k == "share_buffers") c->share_buffers = atoi(v.c_str());
+    else if (k.compare(0, 6, "graph.") == 0) {
+      size_t dot = k.find('.', 6);
+      if (dot == std::string::npos || dot == 6 || dot + 1 >= k.size()) { fprintf(stderr, "FATAL: config key %s is not graph.<name>.<field>\n", k.c_str()); fclose(f); return 1; }
+      c->graph_decl.push_back({k.substr(6, dot - 6), k.substr(dot + 1), v});
+    }
     else if (k == "input_uint8") {
       c->u8_spec = v;
       std::vector<std::string> parts = split(v, ':');
       bool ok = false;
       if (parts[0] == "divide" && parts.size() == 2) { c->u8_mode = 1; ok = parse_floats(parts[1], &c->u8_divide, 1); }
       else if (parts[0] == "mean_std" && parts.size() == 3) { c->u8_mode = 2; ok = parse_floats(parts[1], c->u8_mean, 3) && parse_floats(parts[2], c->u8_std, 3); }
-      if (!ok) { fprintf(stderr, "FATAL: input_uint8 '%s' (divide:<d> or mean_std:m0,m1,m2:s0,s1,s2)\n", v.c_str()); fclose(f); return 1; }
+      else if (parts[0] == "unit_mean_std" && parts.size() == 3) { c->u8_mode = 3; ok = parse_floats(parts[1], c->u8_mean, 3) && parse_floats(parts[2], c->u8_std, 3); }
+      else if (parts[0] == "recip_mean_std" && parts.size() == 3) { c->u8_mode = 4; ok = parse_floats(parts[1], c->u8_mean, 3) && parse_floats(parts[2], c->u8_std, 3); }
+      if (!ok) { fprintf(stderr, "FATAL: input_uint8 '%s' (divide:<d>, mean_std:m0,m1,m2:s0,s1,s2, unit_mean_std:... or recip_mean_std:...)\n", v.c_str()); fclose(f); return 1; }
     }
     else if (k == "prompt_inputs") {
       for (const std::string& item : split(v)) {
@@ -525,6 +583,7 @@ static int parse_config(const char* path, Config* c) {
 }
 
 static bool valid_precision(const std::string& p) { return p == "fp32" || p == "fp16acc32"; }
+static bool valid_graph_precision(const std::string& p) { return p == "fp32" || p == "fp16acc32" || p == "fp16"; }
 
 struct CacheEntry {
   int64_t id;
@@ -549,6 +608,467 @@ static void append_dims(std::string* out, const std::vector<int64_t>& dims) {
   out->push_back(']');
 }
 
+// ---------------------------------------------------------------------------
+// Graph mode: a declarative chain of LiteRT graphs (any graph.<name>.<field>
+// key in the config selects it; the TPU/stage2/fallback/prompt keys are then
+// not used). Each graph names its model, accelerator, precision and phase,
+// and binds every input, in signature order, to a source:
+//   input                  the request's main tensor (`input=`): float32 as
+//                          is, or uint8 NHWC normalized here (input_uint8,
+//                          input_layout=nchw for an NCHW graph input,
+//                          input_extent)
+//   request:<name>         a request tensor (prompt phase: [N, ...] stacked,
+//                          one slice per prompt)
+//   file:<path>            a constant, read and written once at load
+//   <graph>.<output>       an earlier graph's output; GPU -> GPU in the same
+//                          phase shares the buffer (no copy, no sync between
+//                          the two runs; share_buffers=0 copies instead)
+// Phases: image graphs run once per request carrying `input` (results cached
+// per image_id, LRU, when prompt graphs read them); prompt graphs run once per
+// prompt. outputs= / prompt_outputs= name the <graph>.<output>s returned
+// (image-only requests: outputs [+ image_id]; requests with prompts: the
+// prompt outputs stacked [N, ...]). Requests without `input` run only the
+// prompt phase (against the cache, or with no image dependency at all).
+//
+//   graph.<name>.model=<path>               required
+//   graph.<name>.accelerator=gpu|cpu|gpu+cpu  (default gpu)
+//   graph.<name>.precision=fp32|fp16acc32|fp16 (GPU; default fp32)
+//   graph.<name>.phase=image|prompt         (default image)
+//   graph.<name>.inputs=<label>=<source>,...  one per model input, in order
+//   graph.<name>.outputs=a,b,...            names for the model's outputs
+struct GraphIn {
+  std::string label, spec;
+  int kind = 0;           // 0 input, 1 request, 2 file, 3 graph output
+  std::string ref;        // request name or file path
+  int g = -1, k = -1;     // producer graph / output (kind 3)
+  bool shared = false;    // buffer shared with the producer
+  std::vector<char> file_data;
+};
+
+struct Graph {
+  std::string name, model, accel = "gpu", precision = "fp32", phase = "image";
+  std::vector<GraphIn> inputs;
+  std::vector<std::string> outputs;
+  GpuModel m;
+  bool prompt = false;
+  std::vector<bool> read_out;  // outputs copied to the host after each run
+};
+
+struct OutRef { int g, k; std::string name; };
+
+static int find_graph_output(const std::vector<Graph>& gs, const std::string& qual, int* g, int* k) {
+  size_t dot = qual.find('.');
+  if (dot == std::string::npos) return 1;
+  for (size_t i = 0; i < gs.size(); i++) {
+    if (gs[i].name != qual.substr(0, dot)) continue;
+    for (size_t j = 0; j < gs[i].outputs.size(); j++)
+      if (gs[i].outputs[j] == qual.substr(dot + 1)) { *g = (int)i; *k = (int)j; return 0; }
+  }
+  return 1;
+}
+
+static int run_graph_mode(int port, Config& cfg) {
+  // ---- declarations -> graphs, in first-mention order
+  std::vector<Graph> gs;
+  for (const auto& d : cfg.graph_decl) {
+    Graph* g = nullptr;
+    for (Graph& x : gs) if (x.name == d[0]) g = &x;
+    if (!g) { gs.push_back(Graph()); g = &gs.back(); g->name = d[0]; }
+    const std::string& f = d[1]; const std::string& v = d[2];
+    if (f == "model") g->model = v;
+    else if (f == "accelerator") g->accel = v;
+    else if (f == "precision") g->precision = v;
+    else if (f == "phase") g->phase = v;
+    else if (f == "outputs") g->outputs = split(v);
+    else if (f == "inputs") {
+      for (const std::string& item : split(v)) {
+        size_t e = item.find('=');
+        if (e == std::string::npos) { fprintf(stderr, "FATAL: graph %s input '%s' is not <label>=<source>\n", g->name.c_str(), item.c_str()); return 1; }
+        GraphIn in; in.label = trim(item.substr(0, e)); in.spec = trim(item.substr(e + 1));
+        g->inputs.push_back(in);
+      }
+    } else { fprintf(stderr, "FATAL: unknown graph field %s\n", f.c_str()); return 1; }
+  }
+  for (Graph& g : gs) {
+    if (g.model.empty()) { fprintf(stderr, "FATAL: graph %s has no model\n", g.name.c_str()); return 1; }
+    if (g.accel != "gpu" && g.accel != "cpu" && g.accel != "gpu+cpu") { fprintf(stderr, "FATAL: graph %s accelerator %s\n", g.name.c_str(), g.accel.c_str()); return 1; }
+    if (!valid_graph_precision(g.precision)) { fprintf(stderr, "FATAL: graph %s precision %s\n", g.name.c_str(), g.precision.c_str()); return 1; }
+    if (g.phase != "image" && g.phase != "prompt") { fprintf(stderr, "FATAL: graph %s phase %s\n", g.name.c_str(), g.phase.c_str()); return 1; }
+    g.prompt = g.phase == "prompt";
+  }
+  if (cfg.cache_entries < 1) cfg.cache_entries = 1;
+
+  long load_t0 = now_us();
+  LiteRtEnvironment env;
+  if (LiteRtCreateEnvironment(0, NULL, &env) != kLiteRtStatusOk) { fprintf(stderr, "FATAL: LiteRT environment\n"); return 1; }
+  std::string config_desc;
+  for (size_t gi = 0; gi < gs.size(); gi++) {
+    Graph& g = gs[gi];
+    if (gpu_load(env, g.model.c_str(), g.precision.c_str(), &g.m, g.accel.c_str())) return 1;
+    if (g.inputs.size() != g.m.in.size()) { fprintf(stderr, "FATAL: graph %s: %zu inputs bound, the model has %zu\n", g.name.c_str(), g.inputs.size(), g.m.in.size()); return 1; }
+    if (g.outputs.size() != g.m.out.size()) { fprintf(stderr, "FATAL: graph %s: %zu output names, the model has %zu\n", g.name.c_str(), g.outputs.size(), g.m.out.size()); return 1; }
+    g.read_out.assign(g.m.out.size(), false);
+    config_desc += (gi ? " ; " : "") + g.name + "[" + g.phase + "] " + g.accel + (g.accel == "cpu" ? "" : "(" + g.precision + ")") + ":" + g.model;
+  }
+  // ---- bind inputs
+  int input_g = -1, input_i = -1;
+  for (size_t gi = 0; gi < gs.size(); gi++) {
+    Graph& g = gs[gi];
+    for (size_t i = 0; i < g.inputs.size(); i++) {
+      GraphIn& in = g.inputs[i];
+      if (in.spec == "input") {
+        if (g.prompt) { fprintf(stderr, "FATAL: graph %s: the request input feeds image graphs only\n", g.name.c_str()); return 1; }
+        if (input_g >= 0) { fprintf(stderr, "FATAL: the request input is bound twice\n"); return 1; }
+        in.kind = 0; input_g = (int)gi; input_i = (int)i;
+      } else if (in.spec.compare(0, 8, "request:") == 0) {
+        in.kind = 1; in.ref = in.spec.substr(8);
+      } else if (in.spec.compare(0, 5, "file:") == 0) {
+        in.kind = 2; in.ref = in.spec.substr(5);
+        if (!read_file(in.ref, &in.file_data) || in.file_data.size() != g.m.in_bytes[i]) { fprintf(stderr, "FATAL: graph %s input %s: %s missing or not %zu bytes\n", g.name.c_str(), in.label.c_str(), in.ref.c_str(), g.m.in_bytes[i]); return 1; }
+        if (gpu_write_input(&g.m, i, in.file_data.data())) { fprintf(stderr, "FATAL: graph %s input %s: buffer write\n", g.name.c_str(), in.label.c_str()); return 1; }
+      } else {
+        in.kind = 3;
+        if (find_graph_output(gs, in.spec, &in.g, &in.k) || in.g >= (int)gi) { fprintf(stderr, "FATAL: graph %s input %s: %s is not an earlier graph's output\n", g.name.c_str(), in.label.c_str(), in.spec.c_str()); return 1; }
+        Graph& p = gs[in.g];
+        if (p.prompt && !g.prompt) { fprintf(stderr, "FATAL: graph %s (image) can't read prompt output %s\n", g.name.c_str(), in.spec.c_str()); return 1; }
+        if (p.m.out_bytes[in.k] != g.m.in_bytes[i] || p.m.out_type[in.k] != g.m.in_type[i]) { fprintf(stderr, "FATAL: graph %s input %s: %s is %zu bytes (type %d), the model wants %zu (type %d)\n", g.name.c_str(), in.label.c_str(), in.spec.c_str(), p.m.out_bytes[in.k], p.m.out_type[in.k], g.m.in_bytes[i], g.m.in_type[i]); return 1; }
+        // Same phase, GPU to GPU: the consumer reads the producer's buffer.
+        if (cfg.share_buffers && p.prompt == g.prompt && p.accel == "gpu" && g.accel == "gpu") { in.shared = true; g.m.in[i] = p.m.out[in.k]; }
+        else p.read_out[in.k] = true;
+      }
+    }
+  }
+  bool any_prompt = false;
+  for (const Graph& g : gs) any_prompt |= g.prompt;
+  // Image outputs that prompt graphs read: cached per image_id.
+  bool prompts_need_image = false;
+  for (const Graph& g : gs) if (g.prompt) for (const GraphIn& in : g.inputs) if (in.kind == 3 && !gs[in.g].prompt) prompts_need_image = true;
+  std::vector<OutRef> outs_ret, pouts_ret;
+  for (const std::string& q : cfg.outputs) {
+    OutRef r{-1, -1, q.substr(q.find('.') + 1)};
+    if (find_graph_output(gs, q, &r.g, &r.k) || gs[r.g].prompt) { fprintf(stderr, "FATAL: outputs: %s is not an image graph's output\n", q.c_str()); return 1; }
+    gs[r.g].read_out[r.k] = true; outs_ret.push_back(r);
+  }
+  for (const std::string& q : cfg.prompt_outputs) {
+    OutRef r{-1, -1, q.substr(q.find('.') + 1)};
+    if (find_graph_output(gs, q, &r.g, &r.k) || !gs[r.g].prompt) { fprintf(stderr, "FATAL: prompt_outputs: %s is not a prompt graph's output\n", q.c_str()); return 1; }
+    gs[r.g].read_out[r.k] = true; pouts_ret.push_back(r);
+  }
+  if (any_prompt && pouts_ret.empty()) { fprintf(stderr, "FATAL: prompt graphs need prompt_outputs\n"); return 1; }
+  // The request input's normalization.
+  std::vector<int64_t> in_dims; size_t in_bytes = 0; int in_type = 0;
+  int64_t H = 0, Wd = 0;
+  if (input_g >= 0) {
+    in_dims = gs[input_g].m.in_dims[input_i]; in_bytes = gs[input_g].m.in_bytes[input_i]; in_type = gs[input_g].m.in_type[input_i];
+    if (cfg.u8_mode) {
+      bool nchw = cfg.input_layout == "nchw";
+      if (in_type != kLiteRtElementTypeFloat32 || in_dims.size() != 4 || in_dims[0] != 1 || in_dims[nchw ? 1 : 3] != 3) { fprintf(stderr, "FATAL: input_uint8 needs a float32 [1,H,W,3] (or, nchw, [1,3,H,W]) input\n"); return 1; }
+      H = in_dims[nchw ? 2 : 1]; Wd = in_dims[nchw ? 3 : 2];
+    }
+  } else if (cfg.u8_mode) { fprintf(stderr, "FATAL: input_uint8 without a graph input bound to 'input'\n"); return 1; }
+  if (!cfg.extent_name.empty() && cfg.u8_mode < 2) { fprintf(stderr, "FATAL: input_extent goes with input_uint8=mean_std or unit_mean_std\n"); return 1; }
+  std::vector<float> normalized(cfg.u8_mode ? in_bytes / 4 : 0);
+  long load_us = now_us() - load_t0;
+
+  // ---- DESCRIBE (static part)
+  std::string describe;
+  {
+    char buf[200];
+    const char* model_env = getenv("CEREBRATE_HETERO_MODEL");
+    const char* profile_env = getenv("CEREBRATE_HETERO_PROFILE");
+    describe.append("{\"worker\":\"cerebrate-hetero\",\"model\":");
+    append_json_string(&describe, model_env && *model_env ? model_env : gs[0].model.c_str());
+    describe.append(",\"backend\":");
+    append_json_string(&describe, profile_env && *profile_env ? profile_env : "graphs");
+    describe.append(",\"mode\":\"graphs\",\"config\":");
+    append_json_string(&describe, config_desc.c_str());
+    snprintf(buf, sizeof(buf), ",\"load_us\":%ld,\"share_buffers\":%s,\"inputs\":[", load_us, cfg.share_buffers ? "true" : "false");
+    describe.append(buf);
+    bool first = true;
+    auto add_in = [&](const std::string& name, int dtype, std::vector<int64_t> dims, size_t bytes) {
+      if (!first) describe.push_back(',');
+      first = false;
+      describe.append("{\"name\":"); append_json_string(&describe, name.c_str());
+      snprintf(buf, sizeof(buf), ",\"dtype\":%d,\"shape\":", dtype); describe.append(buf); append_dims(&describe, dims);
+      if (bytes) { snprintf(buf, sizeof(buf), ",\"bytes\":%zu", bytes); describe.append(buf); }
+      describe.append("}");
+    };
+    if (input_g >= 0) {
+      add_in(cfg.input, wire_dtype(in_type), in_dims, in_bytes);
+      if (cfg.u8_mode) {
+        describe.pop_back();
+        describe.append(",\"uint8\":"); append_json_string(&describe, cfg.u8_spec.c_str());
+        snprintf(buf, sizeof(buf), ",\"uint8_shape\":[1,%lld,%lld,3],\"layout\":\"%s\"}", (long long)H, (long long)Wd, cfg.input_layout.c_str()); describe.append(buf);
+      }
+    }
+    if (!cfg.extent_name.empty()) add_in(cfg.extent_name, 7, {2}, 16);
+    if (prompts_need_image) add_in("image_id", 7, {1}, 8);
+    for (const Graph& g : gs)
+      for (size_t i = 0; i < g.inputs.size(); i++) {
+        if (g.inputs[i].kind != 1) continue;
+        std::vector<int64_t> d = g.m.in_dims[i];
+        if (g.prompt) d.insert(d.begin(), -1);
+        add_in(g.inputs[i].ref, wire_dtype(g.m.in_type[i]), d, 0);
+      }
+    describe.append("],\"outputs\":[");
+    for (size_t r = 0; r < outs_ret.size(); r++) {
+      const Graph& g = gs[outs_ret[r].g];
+      if (r) describe.push_back(',');
+      describe.append("{\"name\":"); append_json_string(&describe, outs_ret[r].name.c_str());
+      snprintf(buf, sizeof(buf), ",\"dtype\":%d,\"shape\":", wire_dtype(g.m.out_type[outs_ret[r].k])); describe.append(buf);
+      append_dims(&describe, g.m.out_dims[outs_ret[r].k]); describe.append("}");
+    }
+    describe.append("]");
+    if (any_prompt) {
+      describe.append(",\"prompt_outputs\":[");
+      for (size_t r = 0; r < pouts_ret.size(); r++) {
+        const Graph& g = gs[pouts_ret[r].g];
+        if (r) describe.push_back(',');
+        describe.append("{\"name\":"); append_json_string(&describe, pouts_ret[r].name.c_str());
+        std::vector<int64_t> d = g.m.out_dims[pouts_ret[r].k]; d.insert(d.begin(), -1);
+        snprintf(buf, sizeof(buf), ",\"dtype\":%d,\"shape\":", wire_dtype(g.m.out_type[pouts_ret[r].k])); describe.append(buf);
+        append_dims(&describe, d); describe.append("}");
+      }
+      snprintf(buf, sizeof(buf), "],\"cache_entries\":%d", prompts_need_image ? cfg.cache_entries : 0); describe.append(buf);
+    }
+  }
+
+  int srv = socket(AF_INET, SOCK_STREAM, 0);
+  int yes = 1;
+  setsockopt(srv, SOL_SOCKET, SO_REUSEADDR, &yes, sizeof(yes));
+  struct sockaddr_in addr = {};
+  addr.sin_family = AF_INET;
+  addr.sin_addr.s_addr = INADDR_ANY;
+  addr.sin_port = htons(port);
+  if (bind(srv, (struct sockaddr*)&addr, sizeof(addr)) < 0) { perror("bind"); return 1; }
+  listen(srv, 4);
+  fprintf(stderr, "READY worker=cerebrate-hetero mode=graphs graphs=%zu prompts=%d load_us=%ld port=%d config=%s\n",
+          gs.size(), any_prompt, load_us, port, config_desc.c_str());
+
+  // host copies of graph outputs: [graph][output]
+  std::vector<std::vector<std::vector<char>>> host(gs.size());
+  for (size_t gi = 0; gi < gs.size(); gi++) host[gi].resize(gs[gi].m.out.size());
+  struct Cached { int64_t id; long last_use; std::vector<std::vector<std::vector<char>>> outs; };
+  std::vector<Cached> cache;
+  int64_t resident_id = 0; bool resident_valid = false;  // whose image outputs the prompt graphs' input buffers hold
+  long request_id = 0, image_runs = 0, prompt_runs = 0, cache_hits = 0, cache_misses = 0, errors = 0;
+  std::string last_error;
+
+  auto run_graph = [&](size_t gi, const std::vector<const void*>& src) -> int {
+    Graph& g = gs[gi];
+    for (size_t i = 0; i < g.m.in.size(); i++) if (src[i] && gpu_write_input(&g.m, i, src[i])) return 1;
+    if (LiteRtRunCompiledModel(g.m.compiled, 0, g.m.in.size(), g.m.in.data(), g.m.out.size(), g.m.out.data()) != kLiteRtStatusOk) return 1;
+    for (size_t k = 0; k < g.m.out.size(); k++) {
+      if (!g.read_out[k]) continue;
+      void* p;
+      if (LiteRtLockTensorBuffer(g.m.out[k], &p, kLiteRtTensorBufferLockModeRead) != kLiteRtStatusOk) return 1;
+      host[gi][k].assign((const char*)p, (const char*)p + g.m.out_bytes[k]);
+      LiteRtUnlockTensorBuffer(g.m.out[k]);
+    }
+    return 0;
+  };
+
+  while (1) {
+    int client = accept(srv, NULL, NULL);
+    if (client < 0) continue;
+    struct timeval recv_timeout = {30, 0};
+    setsockopt(client, SOL_SOCKET, SO_RCVTIMEO, &recv_timeout, sizeof(recv_timeout));
+    setsockopt(client, IPPROTO_TCP, TCP_NODELAY, &yes, sizeof(yes));
+    while (1) {
+      std::vector<InputTensor> inputs;
+      char err[512];
+      int r = read_request(client, &inputs, err, sizeof(err));
+      if (r == -1) break;
+      if (r == -2) { send_error(client, err); break; }
+      request_id++;
+      long handle_t0 = now_us();
+      auto fail = [&](const char* msg) { errors++; last_error = msg; return send_error(client, msg); };
+      if (inputs.empty()) {
+        std::string d = describe;
+        char buf[320];
+        snprintf(buf, sizeof(buf), ",\"health\":{\"requests\":%ld,\"image_runs\":%ld,\"prompt_runs\":%ld,\"cache_hits\":%ld,\"cache_misses\":%ld,\"cached_images\":%zu,\"errors\":%ld,\"last_error\":",
+                 request_id, image_runs, prompt_runs, cache_hits, cache_misses, cache.size(), errors);
+        d.append(buf); append_json_string(&d, last_error.c_str()); d.append("}}");
+        if (send_frame(client, FRAME_DATA, d.data(), d.size()) != 0) break;
+        char done[96]; snprintf(done, sizeof(done), "request_id=%ld inference_us=0 handle_us=%ld", request_id, now_us() - handle_t0);
+        if (send_frame(client, FRAME_DONE, done, strlen(done)) != 0) break;
+        continue;
+      }
+      std::map<std::string, const InputTensor*> by_name;
+      for (const InputTensor& t : inputs) by_name[t.name] = &t;
+      if (by_name.size() != inputs.size()) { if (fail("duplicate input names") != 0) break; continue; }
+      const InputTensor* image = by_name.count(cfg.input) && input_g >= 0 ? by_name[cfg.input] : nullptr;
+      const InputTensor* image_id_t = prompts_need_image && by_name.count("image_id") ? by_name["image_id"] : nullptr;
+      const InputTensor* extent_t = !cfg.extent_name.empty() && by_name.count(cfg.extent_name) ? by_name[cfg.extent_name] : nullptr;
+      size_t known = (image ? 1 : 0) + (image_id_t ? 1 : 0) + (extent_t ? 1 : 0);
+      bool bad = false; int64_t n_prompts = -1;
+      // request-bound inputs: image graphs take the whole tensor, prompt graphs [N, ...]
+      std::map<std::string, bool> counted;
+      for (size_t gi = 0; gi < gs.size() && !bad; gi++) {
+        const Graph& g = gs[gi];
+        for (size_t i = 0; i < g.inputs.size() && !bad; i++) {
+          const GraphIn& in = g.inputs[i];
+          if (in.kind != 1 || !by_name.count(in.ref)) continue;
+          const InputTensor* t = by_name[in.ref];
+          if (!counted[in.ref]) { known++; counted[in.ref] = true; }
+          if (t->dtype != wire_dtype(g.m.in_type[i])) { snprintf(err, sizeof(err), "input '%s': dtype %d, the model wants %d", in.ref.c_str(), t->dtype, wire_dtype(g.m.in_type[i])); bad = true; break; }
+          if (!g.prompt) {
+            if (t->data.size() != g.m.in_bytes[i]) { snprintf(err, sizeof(err), "input '%s': %zu bytes, the model wants %zu", in.ref.c_str(), t->data.size(), g.m.in_bytes[i]); bad = true; }
+          } else {
+            int64_t n = t->dims.empty() ? -1 : t->dims[0];
+            if (n < 1 || t->data.size() != (size_t)n * g.m.in_bytes[i] || (n_prompts >= 0 && n != n_prompts)) { snprintf(err, sizeof(err), "prompt input '%s': [N, ...] of N x %zu bytes, the same N for every prompt input", in.ref.c_str(), g.m.in_bytes[i]); bad = true; }
+            else n_prompts = n;
+          }
+        }
+      }
+      if (!bad && known != inputs.size()) { snprintf(err, sizeof(err), "unknown input name(s); DESCRIBE lists the inputs"); bad = true; }
+      // every request-bound input of a phase that runs must be present
+      bool image_request_inputs = false;  // image graphs fed only by request tensors (no `input` bound)
+      for (const Graph& g : gs) if (!g.prompt) for (const GraphIn& in : g.inputs) if (in.kind == 1 && by_name.count(in.ref)) image_request_inputs = true;
+      bool run_image = image != nullptr || (input_g < 0 && image_request_inputs), run_prompts = n_prompts > 0;
+      for (size_t gi = 0; gi < gs.size() && !bad; gi++)
+        for (const GraphIn& in : gs[gi].inputs)
+          if (in.kind == 1 && !by_name.count(in.ref) && (gs[gi].prompt ? run_prompts : run_image)) { snprintf(err, sizeof(err), "input '%s' missing", in.ref.c_str()); bad = true; break; }
+      bool u8 = image && image->dtype == DTYPE_UINT8;
+      if (!bad && image && !(image->dtype == wire_dtype(in_type) && image->data.size() == in_bytes) && !(u8 && cfg.u8_mode && image->data.size() == in_bytes / 4)) {
+        snprintf(err, sizeof(err), "input '%s': %zu bytes of dtype %d%s", cfg.input.c_str(), in_bytes, wire_dtype(in_type), cfg.u8_mode ? ", or uint8 NHWC of a quarter of that" : ""); bad = true;
+      }
+      int64_t ext_h = H, ext_w = Wd;
+      if (!bad && extent_t) {
+        if (extent_t->dtype != DTYPE_INT64 || extent_t->data.size() != 16) { snprintf(err, sizeof(err), "%s: two int64 (h, w)", cfg.extent_name.c_str()); bad = true; }
+        else {
+          memcpy(&ext_h, extent_t->data.data(), 8); memcpy(&ext_w, extent_t->data.data() + 8, 8);
+          if (ext_h < 1 || ext_w < 1 || ext_h > H || ext_w > Wd) { snprintf(err, sizeof(err), "%s out of range", cfg.extent_name.c_str()); bad = true; }
+        }
+      }
+      if (!bad && u8 && !cfg.extent_name.empty() && !extent_t) { snprintf(err, sizeof(err), "uint8 '%s' needs '%s'", cfg.input.c_str(), cfg.extent_name.c_str()); bad = true; }
+      if (!bad && image_id_t && (image_id_t->dtype != DTYPE_INT64 || image_id_t->data.size() != 8)) { snprintf(err, sizeof(err), "image_id: one int64"); bad = true; }
+      if (!bad && !run_image && !run_prompts) { snprintf(err, sizeof(err), "send '%s'%s", cfg.input.c_str(), any_prompt ? " and/or prompt inputs" : ""); bad = true; }
+      if (!bad && run_prompts && prompts_need_image && !run_image && !image_id_t) { snprintf(err, sizeof(err), "prompts need '%s' or a cached image_id", cfg.input.c_str()); bad = true; }
+      if (bad) { if (fail(err) != 0) break; continue; }
+      int64_t image_id = 0;
+      if (image_id_t) memcpy(&image_id, image_id_t->data.data(), 8);
+
+      long t0 = now_us(), image_us = 0, prompt_us = 0;
+      int cache_state = 0;
+      bool ok = true;
+      // ---- image phase
+      if (run_image) {
+        const void* in_ptr = image ? (const void*)image->data.data() : nullptr;
+        if (u8) {
+          const unsigned char* src = image->data.data();
+          float* dst = normalized.data();
+          bool nchw = cfg.input_layout == "nchw";
+          for (int64_t y = 0; y < H; y++)
+            for (int64_t x = 0; x < Wd; x++) {
+              size_t o = ((size_t)y * Wd + x) * 3;
+              bool inside = y < ext_h && x < ext_w;
+              for (int c = 0; c < 3; c++) {
+                // One rounding per operation, as numpy/torch: the scaled value
+                // is its own statement, so clang can't contract x * r - m into
+                // a fused multiply-add (it may within one expression).
+                float v;
+                if (cfg.u8_mode == 1) v = (float)src[o + c] / cfg.u8_divide;
+                else if (!inside) v = 0.0f;
+                else if (cfg.u8_mode == 3) v = ((float)src[o + c] / 255.0f - cfg.u8_mean[c]) / cfg.u8_std[c];
+                else if (cfg.u8_mode == 4) {
+                  volatile float scaled = (float)src[o + c] * (1.0f / 255.0f);
+                  v = (scaled - cfg.u8_mean[c]) / cfg.u8_std[c];
+                } else v = ((float)src[o + c] - cfg.u8_mean[c]) / cfg.u8_std[c];
+                dst[nchw ? ((size_t)c * H + y) * Wd + x : o + c] = v;
+              }
+            }
+          in_ptr = normalized.data();
+        }
+        for (size_t gi = 0; gi < gs.size() && ok; gi++) {
+          if (gs[gi].prompt) continue;
+          std::vector<const void*> src(gs[gi].inputs.size(), nullptr);
+          for (size_t i = 0; i < src.size(); i++) {
+            const GraphIn& in = gs[gi].inputs[i];
+            if (in.kind == 0) src[i] = in_ptr;
+            else if (in.kind == 1) src[i] = by_name[in.ref]->data.data();
+            else if (in.kind == 3 && !in.shared) src[i] = host[in.g][in.k].data();
+          }
+          ok = run_graph(gi, src) == 0;
+        }
+        if (!ok) { if (fail("image graph failed") != 0) break; continue; }
+        image_runs++;
+        image_us = now_us() - t0;
+        resident_valid = false;
+        if (prompts_need_image && image_id_t) {
+          size_t slot = cache.size();
+          for (size_t c = 0; c < cache.size(); c++) if (cache[c].id == image_id) slot = c;
+          if (slot == cache.size()) {
+            if ((int)cache.size() < cfg.cache_entries) cache.push_back(Cached());
+            else { slot = 0; for (size_t c = 1; c < cache.size(); c++) if (cache[c].last_use < cache[slot].last_use) slot = c; }
+          }
+          cache[slot].id = image_id; cache[slot].last_use = now_us(); cache[slot].outs = host;
+          cache_state = 1;
+        }
+      }
+      // ---- prompt phase
+      std::string payload;
+      if (run_prompts) {
+        long tp = now_us();
+        const std::vector<std::vector<std::vector<char>>>* img = &host;
+        if (prompts_need_image && !run_image) {
+          img = nullptr;
+          for (Cached& c : cache) if (c.id == image_id) { img = &c.outs; c.last_use = now_us(); }
+          if (!img) {
+            cache_misses++;
+            snprintf(err, sizeof(err), "image_id %lld not cached; send the image again", (long long)image_id);
+            if (fail(err) != 0) break;
+            continue;
+          }
+          cache_hits++; cache_state = 2;
+        }
+        // image outputs already in the prompt graphs' buffers (same image as last time)?
+        bool resident = prompts_need_image && resident_valid && !run_image && resident_id == image_id;
+        std::vector<std::string> stacked(pouts_ret.size());
+        for (int64_t n = 0; n < n_prompts && ok; n++) {
+          for (size_t gi = 0; gi < gs.size() && ok; gi++) {
+            if (!gs[gi].prompt) continue;
+            const Graph& g = gs[gi];
+            std::vector<const void*> src(g.inputs.size(), nullptr);
+            for (size_t i = 0; i < src.size(); i++) {
+              const GraphIn& in = g.inputs[i];
+              if (in.kind == 1) src[i] = by_name[in.ref]->data.data() + (size_t)n * g.m.in_bytes[i];
+              else if (in.kind == 3 && !gs[in.g].prompt) { if (n == 0 && !resident) src[i] = (*img)[in.g][in.k].data(); }
+              else if (in.kind == 3 && !in.shared) src[i] = host[in.g][in.k].data();
+            }
+            ok = run_graph(gi, src) == 0;
+          }
+          for (size_t r2 = 0; ok && r2 < pouts_ret.size(); r2++) stacked[r2].append(host[pouts_ret[r2].g][pouts_ret[r2].k].data(), host[pouts_ret[r2].g][pouts_ret[r2].k].size());
+        }
+        if (!ok) { resident_valid = false; if (fail("prompt graph failed") != 0) break; continue; }
+        // Only an identified image can be recognized as resident next time.
+        if (prompts_need_image) { resident_valid = image_id_t != nullptr; resident_id = image_id; }
+        prompt_runs += n_prompts;
+        prompt_us = now_us() - tp;
+        put_u32(&payload, (uint32_t)pouts_ret.size());
+        for (size_t r2 = 0; r2 < pouts_ret.size(); r2++) {
+          const Graph& g = gs[pouts_ret[r2].g];
+          std::vector<int64_t> d = g.m.out_dims[pouts_ret[r2].k]; d.insert(d.begin(), n_prompts);
+          put_tensor(&payload, pouts_ret[r2].name, wire_dtype(g.m.out_type[pouts_ret[r2].k]), d, stacked[r2].data(), stacked[r2].size());
+        }
+      } else {
+        put_u32(&payload, (uint32_t)(outs_ret.size() + (image_id_t ? 1 : 0)));
+        for (const OutRef& o : outs_ret)
+          put_tensor(&payload, o.name, wire_dtype(gs[o.g].m.out_type[o.k]), gs[o.g].m.out_dims[o.k], host[o.g][o.k].data(), host[o.g][o.k].size());
+        if (image_id_t) put_tensor(&payload, "image_id", DTYPE_INT64, {1}, (const char*)image_id_t->data.data(), 8);
+      }
+      long inference_us = now_us() - t0;
+      if (send_frame(client, FRAME_DATA, payload.data(), payload.size()) != 0) break;
+      char done[256];
+      snprintf(done, sizeof(done), "request_id=%ld inference_us=%ld handle_us=%ld backend=3 tpu_us=0 gpu_us=%ld prompts=%lld prompt_us=%ld cache=%d uint8=%d",
+               request_id, inference_us, now_us() - handle_t0, image_us, (long long)(n_prompts > 0 ? n_prompts : 0), prompt_us, cache_state, u8 ? 1 : 0);
+      if (send_frame(client, FRAME_DONE, done, strlen(done)) != 0) break;
+    }
+    close(client);
+  }
+  return 0;
+}
+
 int main(int argc, char** argv) {
   if (argc < 4) {
     fprintf(stderr,
@@ -562,6 +1082,7 @@ int main(int argc, char** argv) {
   Config cfg;
   if (strcmp(argv[2], "--config") == 0) {
     if (parse_config(argv[3], &cfg)) return 1;
+    if (!cfg.graph_decl.empty()) return run_graph_mode(port, cfg);
   } else {
     const char* in_env = getenv("CEREBRATE_HETERO_INPUT");
     const char* out_env = getenv("CEREBRATE_HETERO_OUTPUTS");
@@ -583,6 +1104,7 @@ int main(int argc, char** argv) {
   for (const std::string* p : {&cfg.stage2_precision, &cfg.fallback_precision, &cfg.prompt_precision})
     if (!valid_precision(*p)) { fprintf(stderr, "FATAL: precision %s (fp32 or fp16acc32)\n", p->c_str()); return 1; }
   if (cfg.cache_entries < 1) cfg.cache_entries = 1;
+  if (cfg.u8_mode >= 3 || cfg.input_layout != "nhwc") { fprintf(stderr, "FATAL: input_uint8=unit_mean_std/recip_mean_std and input_layout are graph-mode options\n"); return 1; }
 
   long load_t0 = now_us();
   LiteRtEnvironment env;

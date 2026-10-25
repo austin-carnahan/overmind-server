@@ -53,6 +53,8 @@ __pycache__/
 *.chd
 *.cue
 *.bin
+# small model constants the MLServer adapter needs (sha256 in models/catalog.yaml)
+!/hosts/cerebrate-pixel6/mlserver/models/cerebrate-graph/assets/*.bin
 *.z64
 *.n64
 *.nes

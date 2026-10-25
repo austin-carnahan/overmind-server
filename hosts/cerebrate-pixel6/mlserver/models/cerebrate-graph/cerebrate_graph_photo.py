@@ -138,3 +138,11 @@ class SamHooks:
 
 
 HOOKS = {"yoloe": YoloeHooks, "sam": SamHooks}
+
+# The registry's GPU models (model_hooks.py), registered here so the adapter
+# keeps one lookup table.
+import model_hooks  # noqa: E402
+
+HOOKS.update({"depth": model_hooks.DepthHooks, "migan": model_hooks.MiganHooks, "dinov2": model_hooks.Dinov2Hooks,
+              "sam2": model_hooks.Sam2Hooks, "rfdetr": model_hooks.RfdetrHooks, "esam3": model_hooks.Esam3Hooks,
+              "owlv2": model_hooks.Owlv2Hooks})
