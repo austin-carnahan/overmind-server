@@ -9,7 +9,8 @@
       "cerebrate_graph_model_path": "/data/local/tmp/yoloe-v8s-pf-backbone-tpu-fp32.tflite",
       "cerebrate_graph_backend": "yoloe-v8s-fast",
       "cerebrate_graph_residency": "on_demand",
-      "cerebrate_graph_idle_stop_s": 600
+      "cerebrate_graph_idle_stop_s": 600,
+      "cerebrate_graph_photo": "yoloe"
     }
   }
 }

@@ -74,7 +74,9 @@
 #include <time.h>
 #include <unistd.h>
 
-#define STAGING_DIR "/data/local/tmp"
+#ifndef STAGING_DIR
+#define STAGING_DIR "/data/local/tmp"  // overridable at build time for a side-by-side test instance
+#endif
 #ifndef CONTROL_PORT
 #define CONTROL_PORT 8767  // overridable at build time for a side-by-side test instance
 #endif

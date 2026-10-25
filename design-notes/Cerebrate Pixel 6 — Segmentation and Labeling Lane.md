@@ -1241,4 +1241,11 @@ conditions in Section 4.4).
   full-size gRPC requests bit-identical, 78–81 ms in the worker, 2.2 s cold
   start from the compilation cache); MLServer downtime ~70 s. EdgeSAM is
   deployed but unserved until the transport work.
+- **2026-10-25** — **Image transport step 1 validated** (photo in, uint8 to
+  the worker): preprocessing stays on the guest with the reference
+  libraries (OpenCV added: its ARM resize couldn't be reproduced in numpy),
+  the worker normalizes; outputs bit-identical for both models; payload
+  123 KB instead of 4.9/12.6 MB; MLServer memory per image request
+  +125–196 MB → +13–14 MB. The per-box raw response cost remains for step 2
+  (compact final results), after which EdgeSAM can be released.
 

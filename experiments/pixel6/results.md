@@ -925,3 +925,17 @@ cold start on demand 2.16 s from the compilation cache; MobileNet 20/20
 correct. Registry: YOLOE's three configurations are now `production`;
 EdgeSAM's stay `staged` until the image-transport work.
 
+## 2026-10-25 — Image transport step 1: photo in, uint8 to the worker (validated, not deployed)
+
+Photo (encoded JPEG/PNG, BYTES) → MLServer adapter (OpenCV decode +
+reference preprocessing) → uint8 → worker (float32 normalization). Outputs
+bit-identical to the validated fp32 path for both models (worker protocol and
+through MLServer, EdgeSAM from the cache too). Payload 123 KB instead of
+4.9 MB (YOLOE) / 12.6 MB (EdgeSAM); worker-level EdgeSAM image + 1 box
+~465 → 288 ms; through MLServer YOLOE ~600 → 412 ms and MLServer peak memory
+per request +125–133 → +14 MB (YOLOE), +196 → +13 MB (EdgeSAM, 1 box). The
+remaining cost is the raw responses (~3.5 MB of MLServer memory per EdgeSAM
+box; YOLOE's 4.6 MB) — step 2. A numpy port of OpenCV's bilinear resize
+failed bit-exactness (ARM NEON HAL rounding), so the guest gets
+`opencv-python-headless` (the references' version, +14 MB).
+

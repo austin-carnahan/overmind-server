@@ -18,6 +18,10 @@ parameters.extra:
   cerebrate_graph_request_timeout_s  optional; default 120
   cerebrate_graph_residency   optional; pinned (default) | on_demand
   cerebrate_graph_idle_stop_s optional, on_demand only; default 600
+  cerebrate_graph_photo       optional; yoloe | sam: accept the encoded photo
+                              ("photo", BYTES) and preprocess it here into
+                              the worker's uint8 input (see
+                              cerebrate_graph_photo.py); needs OpenCV
 
 Residency (catalog v4 Section 9). pinned: START at load, STOP at unload --
 the worker runs for as long as the MLServer model is loaded. on_demand:
@@ -46,6 +50,7 @@ import fcntl
 import os
 import socket
 import subprocess
+import sys
 import time
 
 from mlserver import MLModel
@@ -142,6 +147,21 @@ class CerebrateGraphRuntime(MLModel):
             self.ready = False
             return self.ready
         self._idle_stop_s = float(extra.get("cerebrate_graph_idle_stop_s", DEFAULT_IDLE_STOP_S))
+        self._hooks = None
+        photo = extra.get("cerebrate_graph_photo")
+        if photo:
+            # Imported only for models that take photos (it needs OpenCV); it
+            # lives beside this module's real file (model folders symlink it).
+            here = os.path.dirname(os.path.realpath(__file__))
+            if here not in sys.path:
+                sys.path.insert(0, here)
+            try:
+                import cerebrate_graph_photo
+                self._hooks = cerebrate_graph_photo.HOOKS[photo]()
+            except (ImportError, KeyError) as exc:
+                print(f"cerebrate-graph ({self.name}): cerebrate_graph_photo {photo!r} unavailable: {exc}")
+                self.ready = False
+                return self.ready
         self._refcount_path = REFCOUNT_PATH_TEMPLATE.format(worker=self._worker)
         self._lock = asyncio.Lock()
         self._start_lock = asyncio.Lock()
@@ -291,7 +311,16 @@ class CerebrateGraphRuntime(MLModel):
     async def predict(self, payload: InferenceRequest) -> InferenceResponse:
         if not payload.inputs:
             raise MLServerError("no inputs provided")
-        inputs = {request_input.name: NumpyCodec.decode_input(request_input) for request_input in payload.inputs}
+        inputs, ctx = None, None
+        if self._hooks is not None:
+            try:
+                prepared = self._hooks.prepare({request_input.name: request_input for request_input in payload.inputs})
+            except ValueError as exc:
+                raise MLServerError(f"{self.name}: {exc}") from exc
+            if prepared is not None:
+                inputs, ctx = prepared
+        if inputs is None:
+            inputs = {request_input.name: NumpyCodec.decode_input(request_input) for request_input in payload.inputs}
         await self._ensure_started()
         try:
             outputs, done = await self._call(inputs)
@@ -306,6 +335,8 @@ class CerebrateGraphRuntime(MLModel):
             raise
         except TypeError as exc:
             raise MLServerError(str(exc)) from exc
+        if ctx is not None:
+            outputs = self._hooks.finish(outputs, ctx)
         return InferenceResponse(
             model_name=self.name,
             model_version=self.version,

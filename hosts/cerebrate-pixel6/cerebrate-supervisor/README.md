@@ -384,6 +384,15 @@ Superseded by the combined YOLOE + EdgeSAM deployment below (same window,
 newer worker and supervisor builds); its rollback A returns to this
 YOLOE-only state.
 
+## Test builds
+
+`CONTROL_PORT` and (since 2026-10-25) `STAGING_DIR` are `#ifndef`-guarded:
+`-DCONTROL_PORT=8777 '-DSTAGING_DIR="/data/local/tmp/edgesam/worker"'` gives a
+side-by-side supervisor whose fixed profiles, worker binary, configs and logs
+all live in a test directory (symlinks to the staged model files satisfy the
+flat-path rule). The default build is unchanged: byte-identical to the
+deployed `bad5bed3`.
+
 ## Combined deployment: YOLOE + EdgeSAM (deployed 2026-10-25, YOLOE served)
 
 **Deployed 2026-10-25 03:43–03:45 UTC** (record at the end of this section).

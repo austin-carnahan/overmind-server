@@ -751,3 +751,49 @@ refcounts 0. Through MLServer, an EdgeSAM request with 21 boxes takes ~3.1 s
 round trip against ~1.8 s in the worker (~13 MB in, ~6 MB out through
 MLServer's encode/decode) — part of the transport work after deployment.
 
+## Image transport, step 1: photo input (validated 2026-10-25, not deployed)
+
+Models with `cerebrate_graph_photo` in their settings (`yoloe` for
+`yoloe-v8s-pf`, `sam` for the held `edgesam3x-box`) accept the **encoded
+photo** — a `photo` input, datatype BYTES, one element (the JPEG/PNG file) —
+and the adapter turns it into the worker's **uint8** input with the reference
+preprocessing ([`photo_preprocess.py`](models/cerebrate-graph/photo_preprocess.py);
+hooks in [`cerebrate_graph_photo.py`](models/cerebrate-graph/cerebrate_graph_photo.py)):
+OpenCV decode (the references read photos with `cv2.imread`), YOLOE's
+letterbox (`cv2.resize`, padding 114) or SAM's ResizeLongestSide (Pillow
+bilinear, zero padding plus the valid extent); the worker normalizes in
+float32 (`input_uint8` in its config). EdgeSAM boxes come in photo pixels and
+are rescaled as SAM's `apply_boxes` does; the hook remembers each
+`image_id`'s size so later box requests can skip the photo. Requests without
+a photo pass through unchanged (raw/debug path). Step 1 still returns the
+raw tensors, plus the geometry to map them back (`letterbox`,
+`original_size`; `input_size`, `original_size`); step 2 returns final
+results.
+
+- **New dependency: `opencv-python-headless==5.0.0.93`** (the references'
+  OpenCV; 82 MB on disk, +14 MB in the MLServer process). On ARM, OpenCV's
+  8-bit bilinear resize goes through a NEON HAL with its own rounding; numpy
+  re-implementations of OpenCV's generic code paths were off by 1–2 levels,
+  so a "small exact implementation" wasn't viable. The guest's OpenCV and
+  Pillow produce the decoded image and both models' uint8 inputs
+  bit-identically to the Mac references on 26 test images (JPEG and PNG,
+  upscale and downscale; `photo_preprocess_check.py`).
+- **Clients send everything raw over gRPC** (`raw_input_contents`; BYTES
+  elements prefixed with their 4-byte little-endian length): MLServer replies
+  with raw outputs only to raw requests.
+
+Measured on a test MLServer beside production (gRPC):
+
+| | Before (fp32 tensor) | Photo input |
+| --- | --- | --- |
+| YOLOE request in | 4.9 MB | 123 KB |
+| YOLOE MLServer peak memory | +125–133 MB | **+14 MB** |
+| YOLOE round trip | ~600 ms | **412 ms** (the 4.6 MB raw response is most of what's left) |
+| EdgeSAM MLServer peak, image + 1 box | +196 MB | **+13 MB** |
+| EdgeSAM MLServer peak, + 24 boxes | +279 MB | +95 MB (~3.5 MB per box of raw logits in the response) |
+| outputs vs the validated runs | — | bit-identical: YOLOE 8/8, EdgeSAM 8/8 photos with all boxes, and from the cache |
+
+The image-side memory is gone; the per-box response cost (MLServer
+list-converts the raw 256 × 256 logits) is step 2's, so EdgeSAM stays held
+until then.
+

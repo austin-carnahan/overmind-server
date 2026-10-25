@@ -40,6 +40,17 @@
 //                                    file:<path> (constant, read once)
 //   prompt_outputs=mask_logits,iou   names of the prompt model's outputs
 //   cache_entries=4                  pipeline results kept per image_id (LRU)
+//   input_uint8=divide:255           also accept the input as uint8 (NHWC, 3
+//   input_uint8=mean_std:m0,m1,m2:s0,s1,s2   channels, a quarter of the bytes)
+//                                    and normalize it here in float32 --
+//                                    x / 255, or (x - mean[c]) / std[c] --
+//                                    exactly as the reference preprocessing
+//                                    does in numpy/torch; float32 input stays
+//                                    accepted as is (raw/debug path)
+//   input_extent=extent              (with mean_std) request tensor, int64
+//                                    [2] = valid h, w from the top-left:
+//                                    pixels outside stay 0 after
+//                                    normalization (SAM normalizes, then pads)
 //   tpu_lock=<path>                  flock() held around each TPU run, to
 //                                    serialize the TPU among workers that share
 //                                    the path (bounded contention); optional
@@ -63,10 +74,11 @@
 // cerebrate-supervisor, from the slot's fixed profile), otherwise the TPU (or
 // only GPU) model path and the mode. DONE carries
 // "request_id inference_us handle_us backend tpu_us gpu_us prompts prompt_us
-// cache" -- every value an integer, as the shared protocol parser expects;
+// cache uint8" -- every value an integer, as the shared protocol parser expects;
 // backend: 0 = none (prompts against the cache), 1 = tpu+gpu, 2 = gpu-fallback
 // (TPU configured but unavailable or failed), 3 = gpu (GPU-only); cache: 0 =
-// not used, 1 = stored, 2 = hit.
+// not used, 1 = stored, 2 = hit; uint8: 1 when the input came as uint8 and
+// was normalized here (inference_us includes that).
 // Same posture as its siblings: serial, one model per process, fixed port,
 // SO_RCVTIMEO against dead peers, TCP_NODELAY, binds only after loading
 // (supervisor readiness = models compiled and ready to serve).
@@ -111,6 +123,7 @@ extern "C" int tpu_run(const void* in, void* const* outs);
 #define FRAME_DONE 1
 #define FRAME_ERROR 2
 #define DTYPE_FLOAT 1
+#define DTYPE_UINT8 2
 #define DTYPE_INT64 7
 
 static const uint32_t kMaxInputs = 16;
@@ -442,7 +455,22 @@ struct Config {
   std::vector<PromptInput> prompt_inputs;
   std::vector<std::string> prompt_outputs;
   int cache_entries = 4;
+  // uint8 input: 0 = off, 1 = x / divide, 2 = (x - mean[c]) / std[c]
+  int u8_mode = 0;
+  float u8_divide = 255.0f, u8_mean[3] = {0, 0, 0}, u8_std[3] = {1, 1, 1};
+  std::string u8_spec, extent_name;
 };
+
+static bool parse_floats(const std::string& s, float* out, int n) {
+  std::vector<std::string> v = split(s);
+  if ((int)v.size() != n) return false;
+  for (int i = 0; i < n; i++) {
+    char* end;
+    out[i] = strtof(v[i].c_str(), &end);  // float32, as numpy/torch hold these constants
+    if (end == v[i].c_str() || *end) return false;
+  }
+  return true;
+}
 
 static int parse_config(const char* path, Config* c) {
   FILE* f = fopen(path, "r");
@@ -471,6 +499,15 @@ static int parse_config(const char* path, Config* c) {
     else if (k == "prompt_precision") c->prompt_precision = v;
     else if (k == "prompt_outputs") c->prompt_outputs = split(v);
     else if (k == "cache_entries") c->cache_entries = atoi(v.c_str());
+    else if (k == "input_extent") c->extent_name = v;
+    else if (k == "input_uint8") {
+      c->u8_spec = v;
+      std::vector<std::string> parts = split(v, ':');
+      bool ok = false;
+      if (parts[0] == "divide" && parts.size() == 2) { c->u8_mode = 1; ok = parse_floats(parts[1], &c->u8_divide, 1); }
+      else if (parts[0] == "mean_std" && parts.size() == 3) { c->u8_mode = 2; ok = parse_floats(parts[1], c->u8_mean, 3) && parse_floats(parts[2], c->u8_std, 3); }
+      if (!ok) { fprintf(stderr, "FATAL: input_uint8 '%s' (divide:<d> or mean_std:m0,m1,m2:s0,s1,s2)\n", v.c_str()); fclose(f); return 1; }
+    }
     else if (k == "prompt_inputs") {
       for (const std::string& item : split(v)) {
         size_t e = item.find('='), colon = item.find(':', e == std::string::npos ? 0 : e);
@@ -609,6 +646,12 @@ int main(int argc, char** argv) {
     fprintf(stderr, "FATAL: fallback input (%zu bytes) differs from the TPU stage input (%zu bytes)\n", fallback.in_bytes[0], input_bytes);
     return 1;
   }
+  if (cfg.u8_mode && (input_dims.size() != 4 || input_dims[3] != 3 || input_dims[0] != 1)) {
+    fprintf(stderr, "FATAL: input_uint8 needs an NHWC [1,H,W,3] input\n");
+    return 1;
+  }
+  if (!cfg.extent_name.empty() && cfg.u8_mode != 2) { fprintf(stderr, "FATAL: input_extent goes with input_uint8=mean_std\n"); return 1; }
+  std::vector<float> normalized(cfg.u8_mode ? input_bytes / 4 : 0);
   if (have_prompt) {
     if (gpu_load(env, cfg.prompt_model.c_str(), cfg.prompt_precision.c_str(), &prompt)) return 1;
     if (cfg.prompt_inputs.size() != prompt.in.size()) { fprintf(stderr, "FATAL: %zu prompt inputs configured, the prompt model has %zu\n", cfg.prompt_inputs.size(), prompt.in.size()); return 1; }
@@ -653,7 +696,16 @@ int main(int argc, char** argv) {
     describe.append(buf);
     append_json_string(&describe, cfg.input.c_str());
     describe.append(",\"dtype\":1,\"shape\":"); append_dims(&describe, input_dims);
-    snprintf(buf, sizeof(buf), ",\"bytes\":%zu}", input_bytes); describe.append(buf);
+    snprintf(buf, sizeof(buf), ",\"bytes\":%zu", input_bytes); describe.append(buf);
+    if (cfg.u8_mode) {
+      describe.append(",\"uint8\":"); append_json_string(&describe, cfg.u8_spec.c_str());
+      snprintf(buf, sizeof(buf), ",\"uint8_bytes\":%zu", input_bytes / 4); describe.append(buf);
+    }
+    describe.append("}");
+    if (!cfg.extent_name.empty()) {
+      describe.append(",{\"name\":"); append_json_string(&describe, cfg.extent_name.c_str());
+      describe.append(",\"dtype\":7,\"shape\":[2]}");
+    }
     if (have_prompt) {
       describe.append(",{\"name\":\"image_id\",\"dtype\":7,\"shape\":[1]}");
       for (size_t i = 0; i < cfg.prompt_inputs.size(); i++) {
@@ -735,6 +787,8 @@ int main(int argc, char** argv) {
       size_t known = 0; int64_t n_prompts = -1; bool bad = false;
       if (by_name.count(cfg.input)) { image = by_name[cfg.input]; known++; }
       if (have_prompt && by_name.count("image_id")) { image_id_t = by_name["image_id"]; known++; }
+      const InputTensor* extent_t = nullptr;
+      if (!cfg.extent_name.empty() && by_name.count(cfg.extent_name)) { extent_t = by_name[cfg.extent_name]; known++; }
       for (size_t i = 0; have_prompt && i < cfg.prompt_inputs.size(); i++) {
         const PromptInput& p = cfg.prompt_inputs[i];
         if (p.source != "request" || !by_name.count(p.ref)) continue;
@@ -750,7 +804,21 @@ int main(int argc, char** argv) {
       if (!bad && n_prompts > 0)
         for (size_t i = 0; i < cfg.prompt_inputs.size(); i++)
           if (cfg.prompt_inputs[i].source == "request" && !prompt_src[i]) { snprintf(err, sizeof(err), "prompt input '%s' missing", cfg.prompt_inputs[i].ref.c_str()); bad = true; break; }
-      if (!bad && image && (image->dtype != DTYPE_FLOAT || image->data.size() != input_bytes)) { snprintf(err, sizeof(err), "input '%s': float32 of %zu bytes", cfg.input.c_str(), input_bytes); bad = true; }
+      bool u8 = image && image->dtype == DTYPE_UINT8;
+      if (!bad && image && !(image->dtype == DTYPE_FLOAT && image->data.size() == input_bytes) &&
+          !(u8 && cfg.u8_mode && image->data.size() == input_bytes / 4)) {
+        snprintf(err, sizeof(err), "input '%s': float32 of %zu bytes%s", cfg.input.c_str(), input_bytes, cfg.u8_mode ? ", or uint8 of a quarter of that" : "");
+        bad = true;
+      }
+      int64_t ext_h = cfg.u8_mode ? input_dims[1] : 0, ext_w = cfg.u8_mode ? input_dims[2] : 0;
+      if (!bad && extent_t) {
+        if (extent_t->dtype != DTYPE_INT64 || extent_t->data.size() != 16) { snprintf(err, sizeof(err), "%s: two int64 (h, w)", cfg.extent_name.c_str()); bad = true; }
+        else {
+          memcpy(&ext_h, extent_t->data.data(), 8); memcpy(&ext_w, extent_t->data.data() + 8, 8);
+          if (ext_h < 1 || ext_w < 1 || ext_h > input_dims[1] || ext_w > input_dims[2]) { snprintf(err, sizeof(err), "%s out of range", cfg.extent_name.c_str()); bad = true; }
+        }
+      }
+      if (!bad && u8 && !cfg.extent_name.empty() && !extent_t) { snprintf(err, sizeof(err), "uint8 '%s' needs '%s'", cfg.input.c_str(), cfg.extent_name.c_str()); bad = true; }
       if (!bad && image_id_t && (image_id_t->dtype != DTYPE_INT64 || image_id_t->data.size() != 8)) { snprintf(err, sizeof(err), "image_id: one int64"); bad = true; }
       if (!bad && !image && (n_prompts < 1 || !image_id_t)) { snprintf(err, sizeof(err), "send '%s', or image_id with prompts", cfg.input.c_str()); bad = true; }
       if (bad) { if (fail(err) != 0) break; continue; }
@@ -760,11 +828,30 @@ int main(int argc, char** argv) {
       long t0 = now_us(), tpu_us = 0, gpu_us = 0, prompt_us = 0;
       int backend = 0, cache_state = 0;
       const std::vector<std::vector<char>>* pipe = nullptr;
+      const void* in_ptr = image ? (const void*)image->data.data() : nullptr;
+      if (u8) {
+        // The reference preprocessing's arithmetic, in float32: x / d, or
+        // (x - mean[c]) / std[c] inside the extent and 0 outside it.
+        const unsigned char* src = image->data.data();
+        float* dst = normalized.data();
+        const int64_t H = input_dims[1], Wd = input_dims[2];
+        if (cfg.u8_mode == 1) {
+          for (size_t k = 0; k < normalized.size(); k++) dst[k] = (float)src[k] / cfg.u8_divide;
+        } else {
+          for (int64_t y = 0; y < H; y++)
+            for (int64_t x = 0; x < Wd; x++) {
+              size_t o = ((size_t)y * Wd + x) * 3;
+              bool in = y < ext_h && x < ext_w;
+              for (int c = 0; c < 3; c++) dst[o + c] = in ? ((float)src[o + c] - cfg.u8_mean[c]) / cfg.u8_std[c] : 0.0f;
+            }
+        }
+        in_ptr = normalized.data();
+      }
       if (image) {
         int ok = 0;
         if (have_tpu) {
           if (lock_fd >= 0) flock(lock_fd, LOCK_EX);
-          int tr = tpu_run(image->data.data(), feat_ptr.data());
+          int tr = tpu_run(in_ptr, feat_ptr.data());
           if (lock_fd >= 0) flock(lock_fd, LOCK_UN);
           if (tr == 0) {
             long t1 = now_us(); tpu_us = t1 - t0;
@@ -778,7 +865,7 @@ int main(int argc, char** argv) {
         }
         if (!ok && have_fallback) {
           long t1 = now_us();
-          if (gpu_run(&fallback, {image->data.data()}, &outs) == 0) { gpu_us = now_us() - t1; backend = cfg.mode == "tpu+gpu" ? 2 : 3; ok = 1; if (backend == 2) fallback_runs++; }
+          if (gpu_run(&fallback, {in_ptr}, &outs) == 0) { gpu_us = now_us() - t1; backend = cfg.mode == "tpu+gpu" ? 2 : 3; ok = 1; if (backend == 2) fallback_runs++; }
         }
         if (!ok) { if (fail("inference failed on every configured backend") != 0) break; continue; }
         pipeline_runs++;
@@ -840,8 +927,8 @@ int main(int argc, char** argv) {
       long inference_us = now_us() - t0;
       if (send_frame(client, FRAME_DATA, payload.data(), payload.size()) != 0) break;
       char done[256];
-      snprintf(done, sizeof(done), "request_id=%ld inference_us=%ld handle_us=%ld backend=%d tpu_us=%ld gpu_us=%ld prompts=%lld prompt_us=%ld cache=%d",
-               request_id, inference_us, now_us() - handle_t0, backend, tpu_us, gpu_us, (long long)(n_prompts > 0 ? n_prompts : 0), prompt_us, cache_state);
+      snprintf(done, sizeof(done), "request_id=%ld inference_us=%ld handle_us=%ld backend=%d tpu_us=%ld gpu_us=%ld prompts=%lld prompt_us=%ld cache=%d uint8=%d",
+               request_id, inference_us, now_us() - handle_t0, backend, tpu_us, gpu_us, (long long)(n_prompts > 0 ? n_prompts : 0), prompt_us, cache_state, u8 ? 1 : 0);
       if (send_frame(client, FRAME_DONE, done, strlen(done)) != 0) break;
     }
     close(client);

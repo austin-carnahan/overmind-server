@@ -25,6 +25,7 @@ ml-dtypes==0.5.4
 mlserver==1.7.1
 multidict==6.8.0
 numpy==2.5.3
+opencv-python-headless==5.0.0.93
 opentelemetry-api==1.44.0
 opentelemetry-exporter-otlp-proto-common==1.44.0
 opentelemetry-exporter-otlp-proto-grpc==1.44.0

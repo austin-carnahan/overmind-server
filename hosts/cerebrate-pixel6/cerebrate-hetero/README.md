@@ -151,6 +151,23 @@ size.
 The ~260 ms between worker time and round trip is the 12.6 MB fp32 image over
 the AVF path — the transport item (uint8 input) is still open.
 
+## uint8 input (image transport step 1, 2026-10-25)
+
+`input_uint8` (config) lets a request send the input as uint8 NHWC — a
+quarter of the float bytes — which the worker normalizes in float32 with the
+reference formula: `divide:255` (YOLOE) or `mean_std:...` with
+`input_extent` (SAM: `(x − mean) / std` inside the valid extent, 0 in the
+padding, because SAM normalizes before padding). Float32 input is still
+accepted (raw/debug path). DONE gains `uint8=1`. No fast-math, and the
+expressions have nothing to contract, so the float32 results equal numpy's.
+
+| Check (worker protocol from the guest; [`uint8_input_check.py`](tests/uint8_input_check.py), [`transport_bench.py`](tests/transport_bench.py), [`transport_decompose.py`](tests/transport_decompose.py)) | Result |
+| --- | --- |
+| outputs, uint8 from the photo vs the validated fp32 input | bit-identical: YOLOE 8/8, EdgeSAM 8/8 photos with all their boxes |
+| YOLOE round trip | 207 → 163 ms (outside the worker 126 → 79 ms; the rest is mostly the 4.6 MB response); normalization +2.4 ms |
+| EdgeSAM image + 1 box round trip | ~465 → 288 ms (outside the worker ~270 → 81 ms); normalization +11 ms |
+| base round trip / uint8 image alone | 0.4–0.6 ms; 3.15 MB in ~53 ms (~60 MB/s) + ~2–9 ms client encode |
+
 ## Build
 
 See [`CMakeLists.fragment.txt`](CMakeLists.fragment.txt). Push the binary,
