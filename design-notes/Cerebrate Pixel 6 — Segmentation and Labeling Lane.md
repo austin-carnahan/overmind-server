@@ -1235,4 +1235,10 @@ conditions in Section 4.4).
   (+3.6 MB per box); a 120-box request OOM-killed a test MLServer. EdgeSAM's
   MLServer model is held until the image-transport work (compressed image as
   BYTES, compact masks), which is now also a memory fix.
+- **2026-10-25** — **Deployed: YOLOE-v8s prompt-free is live** on
+  `cerebrate-hetero` (`hetero1`, on demand, MLServer `yoloe-v8s-pf`), the
+  first TPU-accelerated model of the lane in production. Gate passed (8/8
+  full-size gRPC requests bit-identical, 78–81 ms in the worker, 2.2 s cold
+  start from the compilation cache); MLServer downtime ~70 s. EdgeSAM is
+  deployed but unserved until the transport work.
 

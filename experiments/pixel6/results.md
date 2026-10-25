@@ -916,3 +916,12 @@ beside production (test supervisor on 8777, test MLServer on 18080–18082).
 | edgesam3x | gpu-mixed | alternate | validated | — | 169 ms encoder |
 | sam2.1-hiera-tiny | gpu-fp32 | box-refinement quality | validated | — (no worker) | ~1.46 s one box |
 
+## 2026-10-25 — Deployed: YOLOE-v8s on cerebrate-hetero (EdgeSAM staged, MLServer model held)
+
+Production since 03:45 UTC (MLServer downtime ~70 s). Gate: 8/8 full-size
+YOLOE requests through production gRPC bit-identical to the validated
+outputs; worker 78–81 ms (TPU + GPU), ~0.6 s round trip through MLServer;
+cold start on demand 2.16 s from the compilation cache; MobileNet 20/20
+correct. Registry: YOLOE's three configurations are now `production`;
+EdgeSAM's stay `staged` until the image-transport work.
+

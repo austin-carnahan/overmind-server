@@ -384,10 +384,10 @@ Superseded by the combined YOLOE + EdgeSAM deployment below (same window,
 newer worker and supervisor builds); its rollback A returns to this
 YOLOE-only state.
 
-## Combined deployment: YOLOE + EdgeSAM (prepared 2026-10-24, deploy scheduled)
+## Combined deployment: YOLOE + EdgeSAM (deployed 2026-10-25, YOLOE served)
 
-**Staged and tested beside production; not deployed. Decision 2026-10-24:
-the window releases YOLOE; EdgeSAM stays staged** — its worker profiles,
+**Deployed 2026-10-25 03:43–03:45 UTC** (record at the end of this section).
+**Decision 2026-10-24: the window releases YOLOE; EdgeSAM stays staged** — its worker profiles,
 supervisor slot and files ship (inert), but its MLServer model waits in
 `mlserver/held-models/` until the image-transport work removes MLServer's
 per-request memory cost (see "MLServer memory per image request" below). One worker binary
@@ -521,3 +521,35 @@ outputs. **Decided 2026-10-24: YOLOE ships in the window (one request's
 +125–133 MB fits; no consumer sends concurrent YOLOE requests yet);
 EdgeSAM's MLServer model waits for the transport fix** — no production
 consumer uses it yet, so serving it now would add risk without benefit.
+
+### Deploy record (2026-10-25)
+
+Run from the Mac over overmind-01's ADB pairing and the guest, per the
+runbook:
+
+1. Pre-flight: staged files re-verified by hash; running supervisor
+   `908f5620`, deploy binary `bad5bed3`; guest clean at `248c6e3`,
+   fast-forwardable to `a3b4fc3`. `LIST`: `infer`, `generate`, `gguf`,
+   `graph3` RUNNING (configs as in the catalog / model settings).
+2. 03:43:30 `systemctl stop cerebrate-mlserver`. **MLServer's shutdown
+   left all four workers running** (its unloads didn't STOP them), so they
+   were stopped through the supervisor, as the runbook allows.
+3. Supervisor swapped: `908f5620` saved as `cerebrate-supervisor.prev` (rollback
+   B), `bad5bed3` in place, READY with `…,graph3,hetero1,hetero2`.
+4. Unit: `Environment=MLSERVER_GRPC_MAX_MESSAGE_LENGTH=33554432` added
+   (previous unit saved as `/home/droid/cerebrate-mlserver.service.pre-hetero-2026-10-24`),
+   `daemon-reload`.
+5. Guest `git pull --ff-only` → `a3b4fc3`.
+6. 03:44:39 MLServer active: six models READY including `yoloe-v8s-pf`, no
+   `edgesam3x-box`; the pinned models restarted their workers through the
+   new supervisor on fresh PIDs. **MLServer downtime ~70 s.**
+7. Gate — **PASS**: 8/8 full-size YOLOE requests through production gRPC
+   (32 MiB client limit; 4.9 MB in, 4.6 MB out) bit-identical to the
+   validated outputs, backend 1 (TPU + GPU), worker 78–81 ms, round trip
+   ~0.6 s; `hetero1` started on demand from the compilation cache
+   (`load_us` 2.16 s); MobileNet 20/20 classified 795; catalog valid;
+   TPU 24 °C, GPU 25 °C, big cores 29 °C.
+
+Rollback A (YOLOE-only build) and B (pre-deployment, `.prev` + guest
+`248c6e3` + the saved unit) remain available.
+

@@ -5,7 +5,8 @@
 MLServer model `yoloe-v8s-pf` (on demand) and the catalog entry are built and
 tested side by side with production; the production swap waits for its
 window ([runbook](../cerebrate-supervisor/README.md#scheduled-deploy-runbook)).
-**Combined deployment staged (2026-10-24):** the serving-worker build
+**Deployed 2026-10-25 for YOLOE** (EdgeSAM's MLServer model held until the
+image-transport work). **Combined deployment (2026-10-24):** the serving-worker build
 (`fad6e56c`) for both YOLOE (`hetero1`) and EdgeSAM (`hetero2`), one process
 per model, config-file profiles with compilation caching — see the
 supervisor README's "Combined deployment"; the first build (`bfcb8e8b`)

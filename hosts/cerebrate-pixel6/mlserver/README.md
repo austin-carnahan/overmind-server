@@ -124,6 +124,7 @@ Environment=MLSERVER_HTTP_PORT=8080
 Environment=MLSERVER_GRPC_PORT=8081
 Environment=MLSERVER_METRICS_PORT=8082
 Environment=MLSERVER_GZIP_ENABLED=false
+Environment=MLSERVER_GRPC_MAX_MESSAGE_LENGTH=33554432
 ExecStart=/home/droid/mlserver17-venv/bin/mlserver start /home/droid/code/overmind-server/hosts/cerebrate-pixel6/mlserver/models
 Restart=on-failure
 RestartSec=5
@@ -135,7 +136,10 @@ WantedBy=multi-user.target
 (`MLSERVER_HOST=127.0.0.1` was added in Stage 5 Phase 4 to keep MLServer
 off the LAN-facing interface; `MLSERVER_GZIP_ENABLED=false` was added
 for streaming, in the MLServer 1.7.1 upgrade above — gzip middleware
-doesn't work with streaming responses.)
+doesn't work with streaming responses. `MLSERVER_GRPC_MAX_MESSAGE_LENGTH`
+(32 MiB) was added in the combined cerebrate-hetero deployment, 2026-10-25:
+the default 4 MiB refuses full-size image requests; clients raise their own
+receive limit to match.)
 
 ## Verified (2026-09-16)
 

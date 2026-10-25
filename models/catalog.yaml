@@ -137,10 +137,9 @@ models:
       yoloe-v8s-seg-pf): boxes, masks and one of 4,585 built-in labels per
       object, no prompt. Segmentation and Labeling Lane, Step 2B. Served by
       cerebrate-hetero through the supervisor's hetero1 slot as MLServer
-      model yoloe-v8s-pf. Deployment staged with EdgeSAM (combined worker
-      build fad6e56c, config-file profiles with the NNAPI compilation cache)
-      and tested beside production 2026-10-24; not yet live -- see
-      cerebrate-supervisor's README, "Combined deployment".
+      model yoloe-v8s-pf. Live since 2026-10-25 (combined worker build
+      fad6e56c, config-file profiles with the NNAPI compilation cache,
+      on demand) -- see cerebrate-supervisor's README, "Combined deployment".
     # Capability names beyond catalog v4's initial list, introduced by the
     # lane for prompt-free detection and masks.
     capabilities:
@@ -193,7 +192,7 @@ models:
     variants:
       tpu-fp16r-gpu-head-fp16acc32:
         role: fast
-        status: staged
+        status: production
         serving: {slot: hetero1, profile: yoloe-v8s-fast}
         latency_ms: 78
         benchmark: >-
@@ -204,13 +203,13 @@ models:
         notes: TPU backbone with the max-pool padding correction; GPU-only mixed model inside as the fallback.
       gpu-fp32:
         role: default
-        status: staged
+        status: production
         serving: {slot: hetero1, profile: yoloe-v8s-default}
         latency_ms: 202
         benchmark: Worker-side inference; exact (132/132, box and mask IoU 1.0000).
       gpu-mixed:
         role: fallback-internal
-        status: staged
+        status: production
         latency_ms: 107
         benchmark: Worker-side inference, fp16 + fp32 accumulation; 132/132 plus one extra detection.
         notes: Not a profile -- loaded inside tpu-fp16r-gpu-head-fp16acc32 and used when its TPU stage can't load or fails (DONE backend code 2).
