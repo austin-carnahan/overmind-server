@@ -23,8 +23,10 @@ GOLDEN = {
     # promoted after the registry-serving cutover (2026-10-25)
     ("relative-depth", "default"): ("depth-anything-v2-small/gpu-fp16acc32", "gpu-depth", "depth-anything-v2-small-fast", "depth-anything-v2-small"),
     ("relative-depth", "quality"): ("depth-anything-v2-small/gpu-fp32", "gpu-depth", "depth-anything-v2-small-default", None),
+    ("inpainting", "default"): ("mi-gan-512/gpu-fp16", "gpu-migan", "mi-gan-512-fast", "mi-gan-512"),
+    ("inpainting", "quality"): ("mi-gan-512/gpu-fp32", "gpu-migan", "mi-gan-512-default", None),
 }
-AVAILABLE = {"prompt-free-segmentation", "box-refinement", "relative-depth"}
+AVAILABLE = {"prompt-free-segmentation", "box-refinement", "relative-depth", "inpainting"}
 
 
 class RealRegistry(unittest.TestCase):

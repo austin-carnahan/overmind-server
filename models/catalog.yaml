@@ -745,7 +745,7 @@ tasks:
   inpainting:
     default: mi-gan-512/gpu-fp16
     quality: mi-gan-512/gpu-fp32
-    available: false
+    available: true
   open-vocabulary-detection:
     default: owlv2-b16/gpu-fp32
     available: false

@@ -480,7 +480,7 @@ variants:
 
   # ---- MI-GAN 512 -----------------------------------------------------------
   mi-gan-512/gpu-fp32:
-    status: staged
+    status: production
     stages:
       - {name: generator, artifact: tflite_gpu, accelerator: gpu, precision: fp32, weights: fp16, runtime: litert-2.3.0, phase: image}
     validation:
@@ -499,7 +499,7 @@ variants:
       profile: mi-gan-512-default
       worker_config: hosts/cerebrate-pixel6/cerebrate-hetero/configs/mi-gan-512-default.conf
   mi-gan-512/gpu-fp16:
-    status: staged
+    status: production
     stages:
       - {name: generator, artifact: tflite_gpu, accelerator: gpu, precision: fp16, weights: fp16, runtime: litert-2.3.0, phase: image}
     validation:
