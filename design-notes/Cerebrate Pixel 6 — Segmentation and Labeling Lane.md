@@ -236,7 +236,7 @@ evidence showing what actually ran on the accelerator.
 | OWLv2 image tower | Open-vocabulary detection | ViT-B/16 at 960×960 | ~155M params, 354 MB fp32 | **GPU** | **LiteRT GPU, prepared (box bias on host): 4.53 s end to end at fp32, task-exact (measured)**; fp16 modes fail | CPU (35.9 s, measured) | — |
 | DINOv2-small (test model, not in the pipeline) | GPU path proof | Transformer (ViT-S/14) | 22M params, 87 MB fp32 | **GPU** | **LiteRT GPU, prepared: 68.6 ms end to end at fp32, cosine 1.0 (measured)** | CPU (344 ms, measured) | — |
 | Depth Anything V2 Small (added 2026-10-24) | Depth-aware edits: relative depth map | Transformer (DINOv2 ViT-S + DPT head) | ~25M params | **GPU** | Published `litert-community/depth-anything-v2-small`, validated per Section 4.7 | Our prepared conversion (DINOv2 rules apply) | CPU |
-| MI-GAN 512 Places2 (added 2026-10-24) | Infill: object removal and correction | CNN (mobile inpainting GAN) | small (size to confirm) | **GPU** | Published `litert-community/MI-GAN-512-Places2-LiteRT`, validated per Section 4.7 | TPU int8, if quality holds | CPU |
+| MI-GAN 512 Places2 (added 2026-10-24) | Infill: object removal and correction | CNN (mobile inpainting GAN) | 28 MB fp32 | **GPU** | Published `litert-community/MI-GAN-512-Places2-LiteRT`, validated per Section 4.7: FP32 compute 147 ms, FP16 79 ms (measured) | — (TPU ruled out 2026-10-25: first block slower than the GPU, encoder compile exhausts memory) | CPU |
 | EfficientSAM3 RV-M (spike, added 2026-10-24) | Text-prompted concept segmentation: every instance of a phrase, with masks | RepViT CNN + MobileCLIP-S0 text + SAM 3 fusion transformer and heads | 92.7M params | **GPU** (vision, grounding) + CPU (text) | **Our prepared conversion: vision 715 ms per image, grounding 3.28 s per prompt at fp32, task-exact (measured)**; fp16+fp32 acc. 1.72 s, near-identical | CPU (10.5 s + 14.7 s per prompt) | — |
 | OWLv2 text tower | Phrase → embedding | Text transformer (CLIP) | ~63M params, 254 MB fp32 | **GPU + CPU**, or precomputed offline | **GPU+CPU split: 229 ms per 32 phrases, exact (measured)** | CPU (1.08 s per 32, exact) | — |
 
@@ -1258,4 +1258,10 @@ conditions in Section 4.4).
   takes photos and returns JSON results for YOLOE (prompt-free detection
   and masks) and EdgeSAM (box refinement, the task default); gate passed
   on production gRPC, MLServer downtime ~61 s. Next: MI-GAN on the TPU.
-
+- **2026-10-25** — **MI-GAN on the TPU: stopped.** The fp16-relaxed TPU
+  runs the generator's first encoder block accurately but slower than the
+  GPU (34 vs 23.5 ms at FP16); compiling the whole encoder (168 ops) took
+  the TPU compiler past 3 GB and into the driver deadline, with the
+  low-memory killer taking cached apps (VM and MLServer unaffected). The
+  memory guard can't stop that compiler. MI-GAN stays on the GPU
+  (`default` 147 ms, `fast` 79 ms).

@@ -959,3 +959,24 @@ photo + 1 box 438 ms, cached box 121 ms; both workers start on demand in
 are now `production` in the catalog: the `box-refinement` task default is
 served.
 
+
+## 2026-10-25 — MI-GAN generator on the Edge TPU (fp16-relaxed): stopped
+
+Code: [migan-tpu](../../hosts/cerebrate-pixel6/spikes/migan-tpu/README.md).
+The question was whether the TPU beats the GPU `fast` configuration (FP16,
+79 ms) at the same quality. Answer: no. The original fp32 generator (fixed
+input, simplified, all 425 ops builtin) was run as growing fragments, each
+matching the original to ≤ 2e-5 on the desktop.
+
+| Fragment | Config | Placement | Compile | E2E median | Rel L2 vs original |
+| --- | --- | --- | --- | --- | --- |
+| F1: encoder b512 (22 ops) | TPU fp16-relaxed | 22/22 TPU | 2.6 s | 34.1 ms | 7.6e-4 |
+| F1 | GPU FP16 | 22/22 GPU | — | 23.5 ms | 1.7e-3 |
+| F1 | GPU FP32 | 22/22 GPU | — | 39.7 ms | 1.2e-7 |
+| F2: whole encoder (168 ops) | TPU fp16-relaxed | all ops accepted | deadline exceeded | — | — |
+
+The F2 compile reached 3.09 GB RSS. Free memory fell to 840 MB, and the
+low-memory killer took four cached apps. The memory guard can't stop that
+compiler (a `system` process; it ran until the driver's ~60 s deadline). The
+VM and production MLServer were unaffected. MI-GAN stays GPU-only:
+`default` FP32 compute 147 ms, `fast` FP16 79 ms.

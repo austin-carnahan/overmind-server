@@ -44,6 +44,14 @@ the linear term first and times out with x², x³ first (same ops, any
 weights). Write elementwise formulas as single dependency chains. At
 1024×1024 inputs compile time grows with graph size (430 ops ≈ 43 s).
 
+**Compile memory depends on the graph, not just the op count, and the guard
+can't cap it** ([migan-tpu](../migan-tpu/README.md)): MI-GAN's encoder (168
+ops, mostly 512-channel convolutions) took the compiler past 3.09 GB RSS
+until the deadline, while EdgeSAM's 410 ops needed ≈1.2 GB. The compiler is a
+`system`-owned child of the darwinn HAL; killing the bench client doesn't
+stop it, and the shell can't. Grow fragments in small steps and stop at the
+first large footprint.
+
 ## Scripts
 
 - [`tpu_probe_models.py`](tpu_probe_models.py) — conv and attention blocks in
