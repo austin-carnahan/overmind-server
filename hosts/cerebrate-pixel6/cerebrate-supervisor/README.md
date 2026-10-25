@@ -735,6 +735,41 @@ runbook covers it:
 **Pre-flight.** None of this affects production and it can be done before the
 window.
 
+**Pre-flight status (2026-10-25): all done.** Release candidate
+`cerebrate-registry-rc1`, pushed with authorization.
+
+- On the phone, verified by sha256:
+  - `cerebrate-hetero.registry` (`e06a906e`);
+  - `cerebrate-supervisor.registry` (`05ad7e0d`);
+  - `cerebrate-profiles.conf`, with 11 profiles;
+  - the 11 configs.
+- The eight models' device files pass `check-artifacts --device` (28/28).
+- The store passes `check-artifacts --store` (46/46).
+- The Pillow wheel on the guest is `8bf295fe`.
+
+**Rollback set preserved:**
+
+- On the phone, `/data/local/tmp/rollback-transport-2026-10-25/`:
+  - the running `cerebrate-supervisor` (`bad5bed3`) and `cerebrate-hetero`
+    (`7554324e`);
+  - the four YOLOE/EdgeSAM configs;
+  - `SHA256SUMS`.
+- In the guest, `~/rollback-transport-2026-10-25/`:
+  - `mlserver17-venv.tar.gz`, the whole venv: Pillow 12.3.0, OpenCV
+    5.0.0.93, MLServer 1.7.1;
+  - the package list;
+  - `cerebrate-mlserver.service`;
+  - the checkout commit (`8015575`).
+- Both are also copied to the Mac under
+  `~/Backups/cerebrate/rollback-transport-2026-10-25/`.
+- The converted models are backed up and a restore was tested
+  ([models README](../../../models/README.md#artifact-store-mntmodels-on-overmind-01)).
+
+**Gate principle (decision 2026-10-25):** the existing production models
+must behave exactly as before the cutover: MobileNet, YOLOE and EdgeSAM,
+bit for bit where the gate says so. Any failure aborts the window and rolls
+back. No promotion happens in the cutover window unless that gate passed.
+
 1. The branch is pushed, which needs authorization, so the guest can fast-forward.
 2. Phone, model files: `scripts/stage-model depth-anything-v2-small mi-gan-512
    dinov2-s14 yoloe-11s-pf sam2.1-hiera-tiny rf-detr-seg-nano efficientsam3-rvm
@@ -817,8 +852,15 @@ window.
 3. In the guest:
    1. Check out `8015575`.
    2. Move Pillow 13's three entries out of `site-packages` and the 12.3.0
-      backup back in.
+      backup back in. If the venv is in doubt, restore it whole instead:
+      `rm -rf ~/mlserver17-venv && tar -C ~ -xzf
+      ~/rollback-transport-2026-10-25/mlserver17-venv.tar.gz`. It must go back
+      to the same path, because the scripts embed it.
    3. Start MLServer.
+
+If the `.transport` copies from step 3 of the window are missing, the same
+binaries and configs are in `/data/local/tmp/rollback-transport-2026-10-25/`.
+Check them against its `SHA256SUMS`.
 
 The new configs, the profiles file and the model files are inert without the
 new supervisor; `bad5bed3` doesn't read the profiles file. The earlier rollbacks

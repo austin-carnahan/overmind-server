@@ -473,7 +473,10 @@ models:
       host_tokenizer:
         # OpenAI CLIP's BPE merges (MIT), for the guest's stdlib tokenizer
         # (mlserver/models/cerebrate-graph/clip_bpe.py; also OWLv2's)
-        source: {repo: Simon7108528/EfficientSAM3, revision: 85b05896928f974e308f889d7ccb2eefc069de98}
+        # The EfficientSAM3 code repository's copy (sam3/assets/), pinned to a
+        # commit; it isn't in the Hugging Face weights repository. Store:
+        # direct/efficientsam3-rvm/.
+        source: {url: "https://raw.githubusercontent.com/SimonZeng7108/efficientsam3/bd0936c788fed8d51fa799437f05abd97b401b06/sam3/assets/bpe_simple_vocab_16e6.txt.gz", sha256: 924691ac288e54409236115652ad4aa250f48203de50a9e4722a6ecd48d6804a}
         target: guest
         files:
           - {name: bpe_simple_vocab_16e6.txt.gz, sha256: 924691ac288e54409236115652ad4aa250f48203de50a9e4722a6ecd48d6804a, bytes: 1356917}

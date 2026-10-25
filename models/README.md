@@ -111,9 +111,33 @@ sha256, bytes) and kept in the store before it reaches the phone:
 those files come from the spike scripts named in `produced_by`, with specific
 tool versions, after hours of validation — treat them as unique generated
 data (back them up; see AGENTS.md). `scripts/cerebrate-models
-check-artifacts --store` verifies every recorded file (43 files, all
-matching, 2026-10-25). The guest adapter's few small assets (`target:
-guest`) live in the repo next to the adapter.
+check-artifacts --store` verifies every recorded file: 46 files, all
+matching, on 2026-10-25. The guest adapter's few small assets (`target:
+guest`) live in the repo next to the adapter, and their sources are in the
+store like every other file.
+
+**Backup of `derived/`** (2026-10-25, before the registry-serving
+deployment). B2/restic isn't set up yet ([backup-restore](../runbooks/backup-restore.md)),
+so the copy is on an independent device, the Mac:
+`~/Backups/cerebrate/models-derived-2026-10-25/`.
+
+- It holds 33 files and 1.4 GB, with `SHA256SUMS.source` (taken on
+  overmind-01) and `SHA256SUMS.backup` (taken on the Mac). The two are
+  identical.
+- `check-artifacts --store --store-root <backup>` passes 33/33 against the
+  catalog.
+- A restore test from the Mac to an alternate location on overmind-01
+  passed: identical to the live store, and 33/33 against the catalog.
+- To restore:
+
+  ```bash
+  rsync -a ~/Backups/cerebrate/models-derived-2026-10-25/derived/ overmind-01:/mnt/models/derived/
+  ```
+
+  Then run `check-artifacts --store`.
+
+Replace this copy with the restic backup once it exists. Back up again
+after any new conversion.
 
 `huggingface_hub` lives in a `uv`-managed venv at `~/hf-cache-venv` on
 overmind-01. To add published files:

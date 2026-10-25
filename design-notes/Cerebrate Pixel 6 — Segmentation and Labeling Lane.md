@@ -1324,3 +1324,38 @@ conditions in Section 4.4).
   - **Production** was untouched.
   - **Next:** the registry-serving deployment window, then promotion of the
     endpoints one at a time ([runbook](../runbooks/cerebrate-pixel6-models.md)).
+- **2026-10-25** — **Release candidate `cerebrate-registry-rc1`.** The
+  engineering milestones are complete; what remains is release management.
+  - **Decisions:**
+    - EfficientSAM3 FP32 and SAM 2.1's reduced precision are
+      `serving_blocked`, with the validator enforcing it. A model's default
+      may be unservable, but a task's default and fallback may not.
+    - SAM 2.1 serves FP32, the exact configuration, as box-refinement
+      quality.
+  - **Clean-checkout walkthrough** with Depth Anything, from a fresh clone of
+    the release candidate. The steps were: discover, resolve, check hashes in
+    the store and on the device, dry-run the staging, validate, then serve
+    through the test supervisor and a test MLServer built from the clone.
+    The raw output was bit-identical; the result was a 16-bit PNG; the worker
+    stopped on unload. It found and fixed two problems:
+    - `check-artifacts --store <model>` took the model as the store path;
+    - test settings also need the staging-directory model path
+      (`make_test_repository.py`).
+  - **Promotion gate** for Depth and MI-GAN, rehearsed on the test stack:
+    9/9.
+    - Fidelity, and unload then reload.
+    - Contention beside YOLOE-11s and MobileNet: every result unchanged.
+      YOLOE-11s went from 417 to 626 ms median beside Depth; MobileNet was
+      795 on all probes.
+    - Free memory stayed at 3.0 GB or more.
+  - **Store and backups:**
+    - Store completed: 46/46 files. Two guest assets were added, and the CLIP
+      vocabulary's provenance was corrected to its pinned GitHub source.
+    - `derived/` backed up to the Mac, verified, and a restore tested.
+    - The production binaries, configs and MLServer venv are preserved for
+      rollback.
+  - **Pre-flight files** are staged on the phone.
+  - **Reboot recovery is not unattended:** `adb tcpip` must be re-enabled by
+    hand first. It is still to be tested in a maintenance window.
+  - **Next:** the cutover window (user-scheduled), then promotions one at a
+    time, starting with Depth and MI-GAN.
