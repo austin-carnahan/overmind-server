@@ -286,7 +286,6 @@ are never promoted: EfficientSAM3 FP32 (memory) and SAM 2.1 reduced precision
   beside the gate. The worker's peak and the free-memory drop should be close
   to the staged figures (results), and free memory must stay above 1 GB.
 - Record the gate's output in the lane plan's progress notes.
-- 10 minutes later (5 for OWLv2), the slot is STOPPED and the model is READY.
 
 **Rollback (demote):**
 
@@ -295,6 +294,25 @@ are never promoted: EfficientSAM3 FP32 (memory) and SAM 2.1 reduced precision
 2. Revert the commit and pull in the guest.
 
 The production endpoints are untouched either way.
+
+## Checkpoint-only checks
+
+Some properties belong to shared code, not to a model. Verifying them again
+for every promotion or deployment proves nothing new and costs a long wait.
+Check them only at a **checkpoint**: a change to the code that implements
+them, or a release that replaces it.
+
+| Property | Implemented by | Check it when | How |
+| --- | --- | --- | --- |
+| Idle stop (an on-demand worker stops after its idle window; the model stays READY) | the adapter's residency code (`cerebrate_graph_runtime.py`), the supervisor's STOP | that code changes, or a new MLServer version | `IDLE_STOP_CHECK=1 mlserver_staged_test.py …` on the test stack (OWLv2, 60 s test window), or one endpoint in production after a cutover |
+| Admission refusal | the supervisor's START | the supervisor changes | the full `mlserver_staged_test.py` (OWLv2 refused while EfficientSAM3 holds memory) |
+| Lost-worker retry, supervisor watchdog | the adapter, `pixel-supervisor-watchdog` | either changes | kill a test worker or the test supervisor, as in the 2026-10-25 results |
+
+Idle stop was last verified on 2026-10-25, at the registry-serving cutover:
+`hetero1` and `hetero2` stopped ten minutes after the gate. The idle window
+is a per-endpoint setting (`cerebrate_graph_idle_stop_s` in
+`model-settings.json`), and the mechanism is shared by every endpoint. A new
+endpoint doesn't need its own runtime check.
 
 ## Disable serving
 

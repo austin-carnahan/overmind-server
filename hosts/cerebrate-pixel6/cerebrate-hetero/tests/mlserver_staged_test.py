@@ -6,7 +6,9 @@ worker runs; the first request starts the worker on demand (cold start), the
 second is warm; raw outputs bit-identical to the validated device outputs
 (where they fit gRPC's 32 MiB); final results as the direct runs; then
 admission (a profile refused while EfficientSAM3 holds memory, the model stays
-READY and serves once memory is back), idle stop, unload.
+READY and serves once memory is back), unload. The idle-stop check (OWLv2's
+worker stops after its test idle window) waits up to 150 s and runs only with
+IDLE_STOP_CHECK=1: a checkpoint check, not a routine one (runbook).
 With --only <model>[,<model>...] it is the promotion gate for endpoints
 already loaded (production: gRPC 8081, HTTP 8080, SUPERVISOR_PORT=8767), per
 model: the fidelity checks; unload stops the worker and the model is not
@@ -197,7 +199,7 @@ if want("owlv2-b16"):
         total += sum(len(q["detections"]) for q in res["result"]["queries"])
     check("owlv2: serves once memory is back; 75 detections as the validated run", total == 75, f"{total}; cold {warm[0]:.0f} ms, warm {np.median(warm[1:]):.0f} ms")
     lat["owlv2-b16"] = (warm[0], np.median(warm[1:]))
-if ONLY is None:
+if ONLY is None and os.environ.get("IDLE_STOP_CHECK") == "1":
     # 4. idle stop (the test settings use 60 s for OWLv2)
     t0 = time.time()
     while slot_state("gpu-owlv2") == "RUNNING" and time.time() - t0 < 150:

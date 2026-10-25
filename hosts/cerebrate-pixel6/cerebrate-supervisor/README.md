@@ -831,7 +831,10 @@ back. No promotion happens in the cutover window unless that gate passed.
    - `LIST` shows the four pinned workers RUNNING and every `hetero*` and
      `gpu-*` slot STOPPED.
    - Temperatures.
-   - Ten minutes later `hetero1` and `hetero2` have stopped again.
+   - Idle stop: checked once, at this cutover, because the adapter and the
+     supervisor both changed. `hetero1` and `hetero2` stopped ten minutes after
+     the gate. It is not part of later gates (see the runbook's
+     [checkpoint checks](../../../runbooks/cerebrate-pixel6-models.md#checkpoint-only-checks)).
 8. Install the watchdog on overmind-01:
    1. `install -m 755 pixel-supervisor-watchdog /usr/local/bin/`
    2. Add the two units from the overmind-01 README.
@@ -869,3 +872,44 @@ above remain available behind this one.
 **Go/no-go at the window:** proceed only with at least 3 GB free on the phone
 and both TPU and GPU below 45 °C, and only if nothing else (TPU compiles,
 curate jobs) is scheduled on the phone.
+
+### Deploy record: registry-serving cutover (2026-10-25, 19:29–19:31 UTC)
+
+Authorized by the user ("roll this out").
+
+1. **Pre-flight** as recorded above (`cerebrate-registry-rc1`). The baseline
+   gate ran on the old production just before the window and passed:
+   - YOLOE result 8/8, raw 8/8;
+   - EdgeSAM result 8/8, cached 8/8;
+   - MobileNet 795.
+2. **19:29:14.** MLServer stopped. `infer`, `generate`, `gguf`, `graph3`,
+   `hetero1` and `hetero2` were STOPPED through the supervisor, and `LIST`
+   showed all STOPPED.
+3. **Phone.** The `.transport` copies were made (`bad5bed3`, `7554324e`), the
+   supervisor (pid 11557, exe verified) was killed, and the `.registry`
+   builds were moved into place (`05ad7e0d`, `e06a906e`) and relaunched.
+   READY: `…,gpu-esam3,gpu-owlv2 file_profiles=11`, with 16 slots STOPPED.
+4. **Guest, Pillow.** Pillow 12.3.0 moved to `~/pillow-12.3.0-backup/`, and
+   the 13.0.0 wheel was unpacked (144 entries). PIL 13.0.0 and cv2 5.0.0
+   import.
+5. **Guest, checkout.** `git pull --ff-only` → `f815068`.
+6. **19:30:18.** MLServer active, with the same seven models READY.
+   **MLServer downtime ~64 s.**
+7. **Gate: PASS.**
+   - YOLOE: result mode 8/8 equal to the validated postprocessing; raw 8/8
+     bit-identical; round trip 295 ms, worker 92 ms (baseline 273 / 91).
+   - EdgeSAM: result 8/8, cached 8/8. Photo + 1 box 427 ms; cached 115 ms;
+     96 boxes in a 144 KB response.
+   - MobileNet 795.
+   - MLServer's peak after the gate is 246 MB, the same as the previous
+     process (247 MB).
+   - `LIST`: the pinned workers RUNNING and every `gpu-*` slot STOPPED.
+   - 2.5 GB free; TPU and GPU at 31 °C; the catalog validates.
+   - Idle stop (checked at this checkpoint only): `hetero1` and `hetero2`
+     STOPPED at 19:41:48.
+8. **Watchdog.** The files were staged on overmind-01 and a dry run (no
+   sudo) exited quietly against the new supervisor. The install needs the
+   user's sudo.
+
+Rollback is not needed. The `.transport` files, the rollback set and the
+Pillow backup stay in place until the promotions are done.
