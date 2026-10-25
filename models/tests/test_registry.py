@@ -26,6 +26,7 @@ GOLDEN = {
     ("inpainting", "default"): ("mi-gan-512/gpu-fp16", "gpu-migan", "mi-gan-512-fast", "mi-gan-512"),
     ("inpainting", "quality"): ("mi-gan-512/gpu-fp32", "gpu-migan", "mi-gan-512-default", None),
     ("image-embedding", "default"): ("dinov2-s14/gpu-fp32", "gpu-dinov2", "dinov2-s14-default", "dinov2-s14"),
+    # yoloe-11s-pf/gpu-fp32: production endpoint, not selected by a task
 }
 AVAILABLE = {"prompt-free-segmentation", "box-refinement", "relative-depth", "inpainting", "image-embedding"}
 
