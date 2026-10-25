@@ -860,3 +860,12 @@ blanket (SAM 2.1 on them: 0.54–0.71, 0.41). The device `fast` run is within
 mean 0.9989). Latency for one box: SAM 2.1 ~1.46 s, EdgeSAM `default` 0.33 s,
 `fast` 0.21 s (encoder + decoder, measured separately).
 
+**Decision and qualifications (2026-10-24).** Box refinement's task-level
+default is EdgeSAM `tpu-fp16r-gpu-neck-fp32` with the GPU fp32 box decoder;
+quality alternative SAM 2.1 `gpu-fp32`; fallback EdgeSAM `gpu-fp32`. The
+latencies above use the fp32 decoder (146 + 66.6 ms per box, components
+measured separately). EdgeSAM's self-selected best-of-3 (its own scores) is
+not an automatic fallback: vs its single mask it helps > 5 points on 6
+objects and hurts on 8 (mirror 0.78 → 0.58, blanket 0.65 → 0.46, person
+0.95 → 0.83), large objects 83.1% vs 83.0%.
+

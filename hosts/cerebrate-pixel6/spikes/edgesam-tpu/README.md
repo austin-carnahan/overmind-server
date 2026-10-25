@@ -97,8 +97,9 @@ the GELU approximation (6,116 already at fp32).
 
 ## Variant registration (approved 2026-10-24)
 
-Encoder only — not yet a segmentation service (decoder and the comparison
-with SAM 2.1 follow).
+Encoder variants below; the decoder (GPU fp32 in every configuration) and the
+task-level decision follow in "Decoder on the phone". Validation closed
+2026-10-24; not yet a segmentation service (needs the serving worker).
 
 | Configuration | Alias | Status |
 | --- | --- | --- |
@@ -158,4 +159,11 @@ The TPU variant costs nothing measurable in ground-truth quality (no object
 moves by more than 2 points). Fidelity ≠ quality: EdgeSAM reproduces itself
 exactly at `default` and nearly at `fast`, but is ~1 point below SAM 2.1 on
 this set, weaker on large deformable objects and better on small ones.
+
+**Decision (2026-10-24):** box refinement defaults to EdgeSAM
+`tpu-fp16r-gpu-neck-fp32` + the GPU fp32 decoder (~146 + 66.6 ms per box,
+summed components), with SAM 2.1 `gpu-fp32` as the quality alternative and
+EdgeSAM `gpu-fp32` as fallback (lane plan, Step 4). Best-of-3 by EdgeSAM's
+own scores is not an automatic fallback (helps > 5 points on 6 objects,
+hurts on 8).
 

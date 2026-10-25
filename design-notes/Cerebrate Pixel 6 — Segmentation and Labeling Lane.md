@@ -675,7 +675,7 @@ path Step 2A established (CPU if none); decoders on CPU.
 
 **Gate:** a chosen refiner with measured quality and Pixel latency.
 
-**Status (2026-10-24): measured; choice pending.** Both complete pipelines
+**Status (2026-10-24): decided** — see "Decision" below the table. Both complete pipelines
 run on the Pixel, and both were scored against the ground truth of
 browser-perception's 126-object LVIS selection set with each object's box
 (spike `edgesam-tpu`, `lvis_compare.py`, `lvis_device_score.py`):
@@ -695,6 +695,36 @@ and a blanket, where SAM 2.1 is also weak (0.41–0.71). Candidate policy:
 EdgeSAM as the default box refiner, SAM 2.1 kept for large bedding/textile
 regions or when a mask looks wrong. A serving worker (embedding cached per
 image, decoder inputs resident) comes before production.
+
+**Decision (2026-10-24): task-level selection for box refinement**, kept
+separate from each model's own variant aliases:
+
+```yaml
+tasks:
+  box-refinement:
+    default: edgesam/tpu-fp16r-gpu-neck-fp32   # + edgesam GPU fp32 box decoder
+    quality: sam2.1/gpu-fp32
+    fallback: edgesam/gpu-fp32
+```
+
+EdgeSAM for ordinary object masks; SAM 2.1 for bedding, fabric, large
+deformable objects and explicit quality-sensitive requests. Qualifications:
+- The `default` pipeline's decoder is the **GPU fp32** box decoder (66.6 ms
+  per box); its ~210 ms (1 box) / ~810 ms (10 boxes) are 146 ms + 66.6 ms ×
+  boxes, sums of separately measured components. The fp16acc32 decoder
+  (53.2 ms, worst mask IoU 0.971 vs the original) was measured, not
+  adopted. Single-process pipeline latency comes with the serving worker.
+- EdgeSAM's best-of-3 is selected by its own scores, not ground truth, but
+  it is **not an automatic fallback**: per object it helps by > 5 points on
+  6 and hurts on 8, and leaves large objects at 83.1%. Difficult cases go
+  to SAM 2.1.
+- Compilation caching: preserve both numbers (42.9 s cold, 183 ms cached);
+  the worker prepares its models before advertising readiness and treats a
+  cache miss as an ordinary lifecycle event. Reboot / driver-update
+  behavior still to verify.
+- The task map lands in `models/catalog.yaml` when these models are
+  registered with the serving worker (the catalog's schema has no tasks
+  section yet, and neither model is cataloged).
 
 ### Step 5 — OWLv2 characterization
 
