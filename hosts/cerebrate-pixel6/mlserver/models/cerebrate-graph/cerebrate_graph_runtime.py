@@ -19,9 +19,10 @@ parameters.extra:
   cerebrate_graph_residency   optional; pinned (default) | on_demand
   cerebrate_graph_idle_stop_s optional, on_demand only; default 600
   cerebrate_graph_photo       optional; yoloe | sam: accept the encoded photo
-                              ("photo", BYTES) and preprocess it here into
-                              the worker's uint8 input (see
-                              cerebrate_graph_photo.py); needs OpenCV
+                              ("photo", BYTES), preprocess it here into the
+                              worker's uint8 input and return final results
+                              as JSON (see cerebrate_graph_photo.py); needs
+                              OpenCV
 
 Residency (catalog v4 Section 9). pinned: START at load, STOP at unload --
 the worker runs for as long as the MLServer model is loaded. on_demand:
@@ -56,7 +57,7 @@ import time
 from mlserver import MLModel
 from mlserver.codecs import NumpyCodec
 from mlserver.errors import MLServerError
-from mlserver.types import InferenceRequest, InferenceResponse, Parameters
+from mlserver.types import InferenceRequest, InferenceResponse, Parameters, ResponseOutput
 
 import cerebrate_graph_protocol as protocol
 
@@ -314,7 +315,7 @@ class CerebrateGraphRuntime(MLModel):
         inputs, ctx = None, None
         if self._hooks is not None:
             try:
-                prepared = self._hooks.prepare({request_input.name: request_input for request_input in payload.inputs})
+                prepared = self._hooks.prepare({request_input.name: request_input for request_input in payload.inputs}, payload.parameters)
             except ValueError as exc:
                 raise MLServerError(f"{self.name}: {exc}") from exc
             if prepared is not None:
@@ -340,6 +341,8 @@ class CerebrateGraphRuntime(MLModel):
         return InferenceResponse(
             model_name=self.name,
             model_version=self.version,
-            outputs=[NumpyCodec.encode_output(name, array) for name, array in outputs.items()],
+            # bytes (a hook's JSON result) go out as BYTES, untouched by MLServer's list encoding
+            outputs=[ResponseOutput(name=name, datatype="BYTES", shape=[1], data=[value]) if isinstance(value, bytes)
+                     else NumpyCodec.encode_output(name, value) for name, value in outputs.items()],
             parameters=Parameters(**done),
         )

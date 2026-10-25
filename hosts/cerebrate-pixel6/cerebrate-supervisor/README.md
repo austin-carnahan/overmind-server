@@ -564,3 +564,41 @@ runbook:
 Rollback A (YOLOE-only build) and B (pre-deployment, `.prev` + guest
 `248c6e3` + the saved unit) remain available.
 
+## Image transport release: photo in, final results out, EdgeSAM served (prepared 2026-10-25)
+
+One restart for both transport steps and EdgeSAM's release. Phone side:
+the uint8-capable worker (`cerebrate-hetero` `7554324e`) and the four config
+files with `input_uint8` (repo `cerebrate-hetero/configs/`); the supervisor
+is unchanged (`bad5bed3` = the default build of the current source). Guest
+side: `opencv-python-headless==5.0.0.93` in the MLServer venv, and the
+checkout with the photo hooks, postprocessing, labels and `edgesam3x-box`
+back in `models/`. The new configs must not reach the running worker build
+(`fad6e56c` rejects the unknown keys), so they're staged under `.transport`
+names and moved into place only with the worker stopped.
+
+**Runbook**
+
+1. Pre-flight: staged `.transport` files verified by hash; `LIST` recorded;
+   guest checkout clean.
+2. `sudo systemctl stop cerebrate-mlserver`; STOP any worker still running
+   through the supervisor (MLServer's shutdown doesn't).
+3. Phone: keep `cerebrate-hetero` and the four `.conf` as `*.combined`
+   (rollback), move the `.transport` files into place, verify hashes.
+4. Guest: unpack the OpenCV wheel into the venv's `site-packages` (the venv
+   has no pip; a wheel is a zip) and check `import cv2` with the venv's
+   Python.
+5. Guest: `git pull --ff-only`.
+6. `sudo systemctl start cerebrate-mlserver`: seven models READY, including
+   `yoloe-v8s-pf` and `edgesam3x-box`.
+7. Gate (roll back on any failure): `mlserver_result_test.py` against
+   production gRPC (8081) — YOLOE result mode equal to the validated
+   postprocessing 8/8 and raw mode bit-identical 8/8; EdgeSAM result mode
+   8/8 and cached 8/8; MLServer peak memory flat per request; MobileNet 795;
+   catalog valid; temperatures; both slots idle-stop after ten minutes.
+
+**Rollback** (to the YOLOE-only service of 2026-10-25): stop MLServer and
+STOP the workers; on the phone move the `*.combined` files back; in the guest
+check out `196f8d0`; start MLServer. OpenCV can stay (unused) or be removed
+(its `cv2/`, `opencv_python_headless*` entries in `site-packages`). Rollbacks A
+and B above remain available behind that.
+

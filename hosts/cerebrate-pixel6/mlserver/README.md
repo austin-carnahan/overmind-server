@@ -797,3 +797,54 @@ The image-side memory is gone; the per-box response cost (MLServer
 list-converts the raw 256 × 256 logits) is step 2's, so EdgeSAM stays held
 until then.
 
+## Image transport, step 2: final results (validated 2026-10-25; deployed with step 1)
+
+Photo requests now return **one BYTES output, `result`, holding a JSON
+document** in photo coordinates ([`photo_postprocess.py`](models/cerebrate-graph/photo_postprocess.py),
+numpy only, mirroring the reference postprocessing). Parameter `output: raw`
+returns step 1's raw tensors plus geometry instead.
+
+```json
+// yoloe-v8s-pf, input {photo}
+{"image": {"width": 640, "height": 480},
+ "detections": [{"box": [89.5, 242.2, 246.0, 399.2], "score": 0.960, "class_id": 2313,
+                 "label": "laptop", "mask": {"bbox": [90, 243, 246, 399], "rle": [0, 37, 119, ...]}}]}
+// edgesam3x-box, input {photo?, image_id, boxes [N,4] xyxy in photo pixels}
+{"image": {"width": 640, "height": 480}, "image_id": 0,
+ "masks": [{"box": [...], "score": 0.97, "mask": {"bbox": [...], "bits": "..."}}]}
+```
+
+- YOLOE: Ultralytics 8.4.184 with `retina_masks` — NMS (best class,
+  class-agnostic, conf 0.25, IoU 0.7, max 300), boxes scaled to the photo,
+  `process_mask_native` masks at photo resolution cropped to their boxes,
+  empty masks dropped; labels from
+  [`labels/yoloe-v8s-pf.json`](models/cerebrate-graph/labels/yoloe-v8s-pf.json)
+  (the model's 4,585 names). EdgeSAM: one mask per requested box, in order,
+  SAM's `postprocess_masks`, score = the model's IoU prediction. A photo
+  without boxes just encodes and caches (no masks).
+- Masks: `bbox` [x0, y0, x1, y1] end-exclusive, then `rle` (run lengths,
+  row-major inside the bbox, starting with a run of zeros) or `bits` (base64
+  of the bbox crop, `np.packbits` row-major) — whichever is smaller;
+  `photo_postprocess.decode_mask` inverts it. Median 1 KB per mask.
+- Exactness: identical to PyTorch/Ultralytics on the same raw outputs — 132
+  YOLOE detections (classes, scores, boxes difference 0) and 0 flipped mask
+  pixels; 132 EdgeSAM masks, 0 flipped pixels; also on 1600 × 1200,
+  1200 × 1600 and 961 × 552 photos (`photo_postprocess_check.py`,
+  `result_reference_check.py`). Exactly tied scores (the fp16 head makes
+  some) keep torchvision's stable order. Large-photo EdgeSAM masks are
+  computed only where positive low-res cells can reach (exact: bilinear
+  weights are non-negative).
+
+Measured on a test MLServer beside production (gRPC, raw inputs):
+
+| | Raw tensors (step 1) | Final results (step 2) |
+| --- | --- | --- |
+| YOLOE response | 4.6 MB | ~25 KB |
+| YOLOE round trip | 412 ms | **278 ms** (originally ~600) |
+| EdgeSAM response, 21 boxes | 5.5 MB | ~32 KB |
+| EdgeSAM photo + 1 box / cached + 1 box | 444 / 123 ms | 412 / 120 ms |
+| MLServer peak memory, EdgeSAM + 96 boxes | +229 MB (guest swapping) | **+28 MB** (flat from 1 to 96 boxes) |
+
+This removed the reason EdgeSAM was held: `edgesam3x-box` moves from
+`held-models/` back to `models/` with this release.
+

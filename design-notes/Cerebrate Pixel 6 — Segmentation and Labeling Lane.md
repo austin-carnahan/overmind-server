@@ -1248,4 +1248,10 @@ conditions in Section 4.4).
   123 KB instead of 4.9/12.6 MB; MLServer memory per image request
   +125–196 MB → +13–14 MB. The per-box raw response cost remains for step 2
   (compact final results), after which EdgeSAM can be released.
+- **2026-10-25** — **Image transport step 2 validated: final results.** The
+  guest postprocesses in numpy (Ultralytics NMS and native masks; SAM's mask
+  upscaling) — identical to the PyTorch references, 0 flipped pixels — and
+  returns JSON with compact masks: responses ~25–32 KB instead of
+  4.6–5.5 MB, YOLOE round trip 278 ms, MLServer memory flat at +28 MB up to
+  96 boxes. EdgeSAM released with it.
 

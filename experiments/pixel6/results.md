@@ -939,3 +939,13 @@ box; YOLOE's 4.6 MB) — step 2. A numpy port of OpenCV's bilinear resize
 failed bit-exactness (ARM NEON HAL rounding), so the guest gets
 `opencv-python-headless` (the references' version, +14 MB).
 
+## 2026-10-25 — Image transport step 2: final results (validated)
+
+numpy postprocessing on the guest, identical to PyTorch/Ultralytics on the
+same raw outputs: 132 YOLOE detections (boxes difference 0) and 132 EdgeSAM
+masks with 0 flipped pixels, also at 1600 × 1200, 1200 × 1600 and 961 × 552.
+Through MLServer: responses ~25 KB (YOLOE) and ~32 KB (EdgeSAM, 21 boxes)
+instead of 4.6 / 5.5 MB; YOLOE round trip 278 ms (412 after step 1, ~600
+originally); EdgeSAM photo + 1 box 412 ms, cached box 120 ms; MLServer peak
+memory flat at +28 MB from 1 to 96 EdgeSAM boxes (was +229 MB with swapping).
+

@@ -137,9 +137,11 @@ models:
       yoloe-v8s-seg-pf): boxes, masks and one of 4,585 built-in labels per
       object, no prompt. Segmentation and Labeling Lane, Step 2B. Served by
       cerebrate-hetero through the supervisor's hetero1 slot as MLServer
-      model yoloe-v8s-pf. Live since 2026-10-25 (combined worker build
-      fad6e56c, config-file profiles with the NNAPI compilation cache,
-      on demand) -- see cerebrate-supervisor's README, "Combined deployment".
+      model yoloe-v8s-pf. Live since 2026-10-25 (config-file profiles with
+      the NNAPI compilation cache, on demand); from the image-transport
+      release it takes the encoded photo and returns JSON detections (boxes,
+      labels, scores, compact masks) in photo coordinates -- see the MLServer
+      README.
     # Capability names beyond catalog v4's initial list, introduced by the
     # lane for prompt-free detection and masks.
     capabilities:
@@ -249,15 +251,13 @@ models:
       conversions of the original (bicubic) model. Segmentation and Labeling
       Lane, Step 4: the task default for box refinement. Served by
       cerebrate-hetero through the supervisor's hetero2 slot as MLServer
-      model edgesam3x-box: one request carries image (ResizeLongestSide 1024,
-      normalized, padded, NHWC float32), image_id (int64) and boxes
-      [N,1,4]; the worker caches each image's embedding (4 images, LRU), so
-      later boxes for the same image_id skip the encoder. Deployment staged
-      with YOLOE (combined build fad6e56c) and tested beside production
-      2026-10-24; not yet live: its MLServer model is held
-      (mlserver/held-models/) until the image-transport work, because MLServer
-      1.7's per-request memory (+196 MB per image, +3.6 MB per box) could get
-      the guest's MLServer OOM-killed under overlapping requests. Licence:
+      model edgesam3x-box: a request carries the encoded photo (BYTES),
+      image_id (int64) and boxes [N,4] in photo pixels, and returns JSON
+      masks in photo coordinates (compact RLE/bit-packed); the worker caches
+      each image's embedding (4 images, LRU), so later boxes for the same
+      image_id skip the encoder. Live from the image-transport release
+      (2026-10-25); it waited until MLServer's per-request memory was fixed
+      (+196 MB per image request before, a flat +28 MB after). Licence:
       S-Lab License 1.0, non-commercial use only.
     capabilities:
       - refine-box-mask
@@ -296,7 +296,7 @@ models:
     variants:
       tpu-fp16r-gpu-neck-fp32:
         role: fast
-        status: staged
+        status: production
         serving: {slot: hetero2, profile: edgesam3x-fast}
         latency_ms: 194
         benchmark: >-
@@ -314,7 +314,7 @@ models:
           fallback.
       gpu-fp32:
         role: default
-        status: staged
+        status: production
         serving: {slot: hetero2, profile: edgesam3x-default}
         latency_ms: 313
         benchmark: Worker-side, image + 1 box (a box against a cached image 57 ms); exact vs the original (1 px over 132 masks); 87.1% vs LVIS ground truth.

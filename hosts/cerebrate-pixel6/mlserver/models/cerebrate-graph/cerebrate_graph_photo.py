@@ -1,28 +1,41 @@
 """Photo-in hooks for the cerebrate-graph adapter (model-settings extra
 cerebrate_graph_photo: yoloe | sam). A request carrying a "photo" (BYTES,
 one element: the encoded JPEG/PNG file; base64 text over REST) is turned
-into the worker's uint8 input here, with the reference preprocessing
-(photo_preprocess), and the worker normalizes it. Requests without a photo
-pass through unchanged (the raw tensor / debug path).
-Step 1 of the transport work: the worker's outputs are still the raw
-tensors; finish() adds the geometry a client needs to map them back to the
-photo. (Step 2 replaces this with final results.)
-  yoloe  {photo} -> worker {images: uint8 [1,640,640,3]}; adds
-         letterbox [ratio, pad_left, pad_top] (float32) and original_size
-         [h, w] (int64)
-  sam    {photo?, image_id, boxes?} with boxes [N,4] xyxy in photo pixels ->
-         worker {image: uint8 [1,1024,1024,3], extent [h, w], image_id,
-         boxes [N,1,4] in the 1024 frame (SAM's apply_boxes)}; adds
-         input_size and original_size. Without a photo the request decodes
-         against the worker's cached embedding; this hook remembers each
-         image_id's size (the last 16) to rescale its boxes."""
+into the worker's uint8 input with the reference preprocessing
+(photo_preprocess) -- the worker normalizes -- and the worker's outputs into
+final results in photo coordinates (photo_postprocess), returned as one
+BYTES output "result" holding a JSON document. Request parameter
+output=raw returns the worker's raw tensors instead, plus the geometry to
+map them back (debugging and regression tests). Requests without a photo
+pass through unchanged (the raw tensor path).
+
+yoloe  {photo} -> {"image": {"width", "height"}, "detections": [{"box":
+       [x1, y1, x2, y2], "score", "class_id", "label", "mask": <encoded>}]}
+       (Ultralytics' NMS and native-resolution masks; raw mode adds
+       letterbox [ratio, pad_left, pad_top] and original_size)
+sam    {photo?, image_id, boxes?} with boxes [N, 4] xyxy in photo pixels ->
+       {"image": {...}, "image_id", "masks": [{"box", "score", "mask":
+       <encoded>}]} (one per box, in order; SAM's postprocess_masks). Without
+       a photo the request decodes against the worker's cached embedding;
+       the hook remembers each image_id's size (the last 16) to rescale
+       boxes. A photo without boxes just encodes and caches (no masks).
+       Raw mode adds input_size and original_size.
+<encoded> mask: {"bbox": [x0, y0, x1, y1] end-exclusive, and "rle": run
+lengths (row-major within the bbox, starting with zeros) or "bits": base64
+of the bbox crop packed row-major (np.packbits)} -- photo_postprocess.decode_mask
+inverts it."""
 import base64
+import json
+import os
 from collections import OrderedDict
 
 import numpy as np
 from mlserver.codecs import NumpyCodec
 
+import photo_postprocess as post
 import photo_preprocess as pp
+
+LABELS = os.path.join(os.path.dirname(os.path.abspath(__file__)), "labels")
 
 
 def photo_bytes(request_input) -> bytes:
@@ -37,19 +50,40 @@ def tensor(request_input) -> np.ndarray:
     return NumpyCodec.decode_input(request_input)
 
 
+def wants_raw(params) -> bool:
+    mode = getattr(params, "output", None) if params is not None else None
+    if mode not in (None, "result", "raw"):
+        raise ValueError("parameter output: result (default) or raw")
+    return mode == "raw"
+
+
+def as_json(doc) -> bytes:
+    return json.dumps(doc, separators=(",", ":"), ensure_ascii=False).encode()
+
+
 class YoloeHooks:
-    def prepare(self, inputs: dict):
+    def __init__(self):
+        with open(os.path.join(LABELS, "yoloe-v8s-pf.json"), encoding="utf-8") as f:
+            self.labels = json.load(f)
+
+    def prepare(self, inputs: dict, params=None):
         if "photo" not in inputs:
             return None
         if set(inputs) != {"photo"}:
             raise ValueError("with a photo, send only the photo")
         bgr = pp.decode(photo_bytes(inputs["photo"]))
         u8, (r, left, top, _, _) = pp.yoloe_letterbox(bgr)
-        ctx = {"letterbox": np.array([r, left, top], np.float32), "original_size": np.array(bgr.shape[:2], np.int64)}
+        ctx = {"raw": wants_raw(params), "shape": bgr.shape[:2], "letterbox": (r, left, top)}
         return {"images": u8[None]}, ctx
 
     def finish(self, outputs: dict, ctx: dict) -> dict:
-        return {**outputs, **ctx}
+        h, w = ctx["shape"]
+        if ctx["raw"]:
+            return {**outputs, "letterbox": np.array(ctx["letterbox"], np.float32), "original_size": np.array([h, w], np.int64)}
+        boxes, scores, ids, masks = post.yoloe_results(outputs["boxes"], outputs["score"], outputs["cls"], outputs["coef"], outputs["protos"], (h, w))
+        dets = [{"box": [float(v) for v in b], "score": float(s), "class_id": int(c), "label": self.labels[int(c)], "mask": post.encode_mask(m)}
+                for b, s, c, m in zip(boxes, scores, ids, masks)]
+        return {"result": as_json({"image": {"width": w, "height": h}, "detections": dets})}
 
 
 class SamHooks:
@@ -57,7 +91,7 @@ class SamHooks:
         self.sizes = OrderedDict()   # image_id -> (original (h, w), resized (h, w))
         self.remember = remember
 
-    def prepare(self, inputs: dict):
+    def prepare(self, inputs: dict, params=None):
         if "photo" not in inputs and "image" in inputs:
             return None
         if "image_id" not in inputs:
@@ -79,17 +113,28 @@ class SamHooks:
         elif key not in self.sizes:
             raise ValueError(f"image_id {key} unknown here; send the photo again")
         (h, w), (nh, nw) = self.sizes[key]
+        photo_boxes = None
         if "boxes" in inputs:
-            b = tensor(inputs["boxes"]).reshape(-1, 4).astype(np.float64)   # as SAM's apply_coords: float64, then float32
+            photo_boxes = tensor(inputs["boxes"]).reshape(-1, 4).astype(np.float32)
+            b = photo_boxes.astype(np.float64)   # as SAM's apply_coords: float64, then float32
             b[:, [0, 2]] *= nw / w
             b[:, [1, 3]] *= nh / h
             worker["boxes"] = b.astype(np.float32).reshape(-1, 1, 4)
         elif "photo" not in inputs:
             raise ValueError("send boxes, a photo, or both")
-        return worker, {"input_size": np.array([nh, nw], np.int64), "original_size": np.array([h, w], np.int64)}
+        return worker, {"raw": wants_raw(params), "image_id": key, "shape": (h, w), "input_size": (nh, nw), "boxes": photo_boxes}
 
     def finish(self, outputs: dict, ctx: dict) -> dict:
-        return {**outputs, **ctx}
+        (h, w), (nh, nw) = ctx["shape"], ctx["input_size"]
+        if ctx["raw"]:
+            return {**outputs, "input_size": np.array([nh, nw], np.int64), "original_size": np.array([h, w], np.int64)}
+        doc = {"image": {"width": w, "height": h}, "image_id": ctx["image_id"], "masks": []}
+        if ctx["boxes"] is not None:
+            masks = post.sam_masks(outputs["mask_logits"].reshape(-1, 256, 256), (nh, nw), (h, w))
+            scores = outputs["iou"].reshape(-1)
+            doc["masks"] = [{"box": [float(v) for v in b], "score": float(s), "mask": post.encode_mask(m)}
+                            for b, s, m in zip(ctx["boxes"], scores, masks)]
+        return {"result": as_json(doc)}
 
 
 HOOKS = {"yoloe": YoloeHooks, "sam": SamHooks}
