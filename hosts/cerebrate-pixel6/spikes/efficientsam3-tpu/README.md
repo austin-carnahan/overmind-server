@@ -196,3 +196,9 @@ serving worker yet, so every configuration is `validated`, not production.
 
 A serving worker would run the vision as this connected pair, passing the
 trunk's output buffer to the neck.
+
+**Closed (2026-10-25):** approved as EfficientSAM3's final `fast`
+configuration. No further EfficientSAM3 optimization or TPU work. The
+direct buffer hand-off between compiled models
+([`chain.cc`](../litert-gpu-transformers/chain.cc), `shared` mode) is the
+reusable piece for other split-model pipelines.

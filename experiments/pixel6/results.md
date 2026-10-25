@@ -1059,3 +1059,13 @@ Registered in `models/catalog.yaml` as `efficientsam3-rvm`:
 First-prompt latencies are sums of separately measured components. The
 model was not in the catalog before: the schema now allows a model with no
 serving worker. EfficientSAM3 TPU exploration is closed.
+
+**Decision (2026-10-25):** the split-precision configuration is approved as
+EfficientSAM3's final `fast`, and optimization is closed:
+
+- Two gains, measured connected: the mixed-precision neck (728 → 547 ms) and
+  the shared buffer hand-off (547 → 518 ms).
+- First-prompt times are estimates from stage timings; the 518 ms connected
+  vision is the directly validated figure.
+- Backlog only: the per-image cache of the first fusion layer's
+  self-attention (≈190 ms per additional prompt, `fast`).

@@ -1284,3 +1284,18 @@ conditions in Section 4.4).
   prompt 4.03 s), `fast` split vision + mixed grounding (2.26 s),
   `alternate` the previous `fast` (2.47 s). EfficientSAM3 TPU exploration
   stopped.
+- **2026-10-25** — **EfficientSAM3 optimization closed (approved).** The
+  split-precision `fast` configuration is final. The connected
+  measurement shows two separate gains: the mixed-precision neck
+  (728 → 547 ms, −181 ms) and the direct buffer hand-off between the two
+  compiled models (547 → 518 ms, −29 ms). The hand-off is reusable for
+  other split-model pipelines in one LiteRT environment. First prompt,
+  estimated from stage timings: 2.26 s `fast` vs 2.47 s previous `fast`
+  (−8.5%) and 4.03 s FP32 (−44%). The directly validated figure is the
+  518 ms connected vision. Status stays `validated` (no serving worker);
+  TPU exploration stays closed. **Backlog, not scheduled:** cache the
+  prompt-independent first fusion-layer self-attention per image (≈190 ms
+  saved per additional prompt with `fast` grounding, 364 ms with
+  `default`); it helps repeated prompts on an image already encoded, which
+  the vision change does not. Next: reusable serving infrastructure for
+  the rest of the catalog.
