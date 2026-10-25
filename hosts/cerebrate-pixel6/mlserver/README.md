@@ -707,6 +707,12 @@ work.
 
 ## Combined deployment: `edgesam3x-box` beside `yoloe-v8s-pf` (prepared 2026-10-24, deploy scheduled)
 
+**Held (2026-10-24):** the model folder now lives in
+[`held-models/`](held-models/README.md) — MLServer 1.7 turns every tensor into
+a Python list, so an EdgeSAM request costs +196 MB (+3.6 MB per box) in this
+guest's MLServer; it is served after the image-transport work. YOLOE ships in
+the window. The rest of this section describes the tested configuration.
+
 **Staged and tested beside production; deploy in the scheduled window**
 (runbook: [supervisor README, "Combined deployment"](../cerebrate-supervisor/README.md#combined-deployment-yoloe--edgesam-prepared-2026-10-24-deploy-scheduled)).
 
@@ -726,7 +732,9 @@ work.
   models exceed; `MLSERVER_GRPC_MAX_MESSAGE_LENGTH=67108864` lifts it (the
   test instance ran with it). REST is unaffected but costs JSON encoding
   (~2 s per YOLOE request); gRPC with raw tensor bytes is the efficient
-  path. Adding it to the unit is a decision in the runbook.
+  path. The deployment sets 32 MiB (`33554432`, runbook step 4); clients
+  raise their own receive limit to match. Measured peak memory per request
+  through MLServer: YOLOE +125–133 MB, EdgeSAM +196 MB +3.6 MB per box.
 
 Tested with a second MLServer instance hosting both models plus a pinned
 canary (gRPC, raw tensor bytes;

@@ -255,8 +255,11 @@ models:
       [N,1,4]; the worker caches each image's embedding (4 images, LRU), so
       later boxes for the same image_id skip the encoder. Deployment staged
       with YOLOE (combined build fad6e56c) and tested beside production
-      2026-10-24; not yet live. Licence: S-Lab License 1.0, non-commercial
-      use only.
+      2026-10-24; not yet live: its MLServer model is held
+      (mlserver/held-models/) until the image-transport work, because MLServer
+      1.7's per-request memory (+196 MB per image, +3.6 MB per box) could get
+      the guest's MLServer OOM-killed under overlapping requests. Licence:
+      S-Lab License 1.0, non-commercial use only.
     capabilities:
       - refine-box-mask
     # Our own conversions of the one checkpoint (no published LiteRT/TPU

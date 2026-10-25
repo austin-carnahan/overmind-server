@@ -386,7 +386,11 @@ YOLOE-only state.
 
 ## Combined deployment: YOLOE + EdgeSAM (prepared 2026-10-24, deploy scheduled)
 
-**Staged and tested beside production; not deployed.** One worker binary
+**Staged and tested beside production; not deployed. Decision 2026-10-24:
+the window releases YOLOE; EdgeSAM stays staged** — its worker profiles,
+supervisor slot and files ship (inert), but its MLServer model waits in
+`mlserver/held-models/` until the image-transport work removes MLServer's
+per-request memory cost (see "MLServer memory per image request" below). One worker binary
 (`cerebrate-hetero` build `fad6e56c`), **one process per model**:
 
 | Slot | Port | Profiles (fixed `--config` file in /data/local/tmp) | MLServer model |
@@ -457,17 +461,23 @@ module changed).
    YOLOE 4.9 MB in / 4.6 MB out and EdgeSAM 12.6 MB in / 7.3 MB out
    (28 boxes) pass, bit-identical. Clients must raise their own receive
    limit (gRPC's client default, 4 MiB, refuses YOLOE's response).
-5. In the guest: `git pull --ff-only` (the adapter, both model folders).
+5. In the guest: `git pull --ff-only` (the adapter and `yoloe-v8s-pf`;
+   `edgesam3x-box` arrives under `held-models/`, which MLServer doesn't load).
 6. `sudo systemctl start cerebrate-mlserver`.
-7. Verify: repository index all READY including `yoloe-v8s-pf` and
-   `edgesam3x-box`; `LIST` shows the four workers RUNNING and `hetero1`,
-   `hetero2` STOPPED; MobileNet classifies 795; then (with step 4)
-   `mlserver_combined_test.py infer 127.0.0.1:8081 <gateway> 8767
-   /home/droid/cg-test/hetero /home/droid/cg-test/edgesam` → every output
-   identical and both slots RUNNING (or, without step 4,
-   `hetero_ondemand.py first http://127.0.0.1:8080 <gateway> 8767
-   /home/droid/cg-test/hetero` for YOLOE); a temperature reading. Ten
-   minutes later both slots are STOPPED again.
+7. Verify (the window's gate):
+   - repository index all READY including `yoloe-v8s-pf`, and no
+     `edgesam3x-box`;
+   - `LIST` shows the four workers RUNNING and `hetero1`, `hetero2` STOPPED;
+   - full-size gRPC through production with a client receive limit of
+     32 MiB: `mlserver_grpc_limits.py`'s YOLOE case, or the first YOLOE
+     lines of `mlserver_combined_test.py infer 127.0.0.1:8081 <gateway>
+     8767 /home/droid/cg-test/hetero /home/droid/cg-test/edgesam` (stop it
+     before its EdgeSAM lines, or run the YOLOE function alone) → outputs
+     identical to the validated run, `hetero1` RUNNING with `load_us`
+     ~2.2 s (from the cache);
+   - MobileNet classifies 795; the catalog validates (task defaults and
+     fallbacks resolve to served profiles); a temperature reading;
+   - ten minutes later `hetero1` is STOPPED again.
 
 **Rollback A — to the YOLOE-only build** (rehearsed): stop MLServer,
 confirm every slot STOPPED; kill the supervisor; install the supervisor
@@ -486,7 +496,7 @@ cap) or be removed with another `daemon-reload`.
 **Go/no-go at the window:** if full-size gRPC requests fail or model
 readiness is inconsistent, roll back rather than switch clients to REST.
 
-### Open before the window: MLServer memory per image request
+### MLServer memory per image request (decided: EdgeSAM held)
 
 MLServer 1.7 converts every tensor to a Python list, even raw gRPC bytes
 (`mlserver/raw.py` `inject_raw` unpacks into lists; responses go through
@@ -507,5 +517,7 @@ or EdgeSAM with many boxes beside YOLOE) could get production MLServer
 OOM-killed (systemd restarts it; every MLServer model would be down for the
 restart). The fix belongs to the transport work: an image sent as a
 compressed BYTES tensor (MLServer keeps BYTES as bytes) and compact mask
-outputs. Whether EdgeSAM ships in this window with request limits or after
-that fix is open.
+outputs. **Decided 2026-10-24: YOLOE ships in the window (one request's
++125–133 MB fits; no consumer sends concurrent YOLOE requests yet);
+EdgeSAM's MLServer model waits for the transport fix** — no production
+consumer uses it yet, so serving it now would add risk without benefit.

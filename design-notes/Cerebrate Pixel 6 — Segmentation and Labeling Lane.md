@@ -1228,4 +1228,11 @@ conditions in Section 4.4).
   documented), a rehearsed rollback to the YOLOE-only build. Found: MLServer
   gRPC's 4 MB default request cap (a runbook decision). Next after the
   deploy: image transport, then MI-GAN on the TPU.
+- **2026-10-24** — **Release approved for the window, YOLOE only.** The
+  32 MiB gRPC limit passed full-size requests for both models, but
+  MLServer 1.7 converts every tensor to a Python list (even raw gRPC
+  bytes): +125–133 MB peak per YOLOE request, +196 MB per EdgeSAM image
+  (+3.6 MB per box); a 120-box request OOM-killed a test MLServer. EdgeSAM's
+  MLServer model is held until the image-transport work (compressed image as
+  BYTES, compact masks), which is now also a memory fix.
 
