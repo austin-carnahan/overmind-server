@@ -123,3 +123,172 @@ before the push and the device copy's after it, then renaming it into place.
 Files already staged with the recorded checksum are skipped. Run it from a
 checkout on overmind-01 with `~/hf-cache-venv/bin/python3` (pyyaml).
 `CACHED → STAGED` stays an explicit operator action.
+
+## Onboarding a validated model
+
+The path from a model that passed validation in a spike to an MLServer
+endpoint has ten steps. Each step leaves the registry valid, and only the
+last touches production. The operational side of these steps (commands, test
+ports, windows) is in the
+[Pixel 6 models runbook](../runbooks/cerebrate-pixel6-models.md). Steps 1–3
+need no new code.
+
+1. **Register the model.** Add a catalog entry: id, description,
+   capabilities, artifacts with every file's sha256 and bytes, and aliases.
+   Add one `validated` variant per measured configuration in `variants.yaml`,
+   with `validation` and `benchmarks` pointing at the spike's ledger.
+   Record rejected configurations as `rejected`, with their reason in
+   `limitations`; closed directions go under `investigations`.
+   `scripts/cerebrate-models hash <file>` prints the `files` entry for a file.
+2. **Store it.**
+   - Published files go into `/mnt/models/huggingface` at a pinned revision.
+   - Our conversions go into `derived/<model>/`, with `derived: true` and
+     `produced_by`.
+
+   Then run `scripts/cerebrate-models check-artifacts --store`.
+3. **Stage it.** `scripts/stage-model <model>`, then
+   `check-artifacts --device`.
+4. **Write the worker config.** Write
+   `hosts/cerebrate-pixel6/cerebrate-hetero/configs/<model>-<alias>.conf` in
+   graph mode (template below), choosing the `input_uint8` mode that matches
+   the reference's arithmetic. Use the pattern table in the
+   [cerebrate-hetero README](../hosts/cerebrate-pixel6/cerebrate-hetero/README.md#graph-mode-declarative-model-chains-registry-serving-staged-2026-10-25).
+   No new worker code is needed for one graph, a chain of graphs, a cached
+   image with prompts, or mixed GPU/CPU.
+5. **Prove the worker reproduces validation.** Start a test worker
+   (`tests/worker_launch.sh`) and run `tests/graph_fidelity.py`. The raw
+   outputs must be bit-identical to the validated device outputs. Record
+   memory with `tests/resource_sampler.sh`.
+6. **Write the adapter hook.** It is a class in
+   `mlserver/models/cerebrate-graph/model_hooks.py`, registered in
+   `cerebrate_graph_photo.HOOKS`:
+   - `prepare` decodes the photo and resizes it exactly as the reference
+     does;
+   - `finish` turns the outputs into the interface's JSON;
+   - a multi-call `run` is used only when a host step sits between graphs.
+
+   Then prove the photo path against the original model on real photos, with
+   a `tests/*_photo_check.py`. Exactness problems live here: the library
+   version, resampling arithmetic, FMA contraction.
+7. **Add a profile.** Add a slot (the next free port) and profile to
+   `cerebrate-supervisor/cerebrate-profiles.conf`. The floor is the measured
+   free-memory drop plus 1000 MB.
+8. **Hold the endpoint.** Create `mlserver/held-models/<endpoint>/` (template
+   below, plus the two symlinks), and set the variant to `status: staged` with
+   its `serving` block. The validator now checks the whole chain:
+   - the config names only this variant's files;
+   - the profile is in the slot;
+   - the endpoint serves the profile;
+   - the folder is in the right place.
+9. **Test side by side.** Run the test supervisor and test MLServer with
+   `tests/mlserver_staged_test.py`, and record the results.
+10. **Promote, in a window.** Move the folder to `models/`, set the variant to
+    `production`, load the endpoint, and run the promotion gate
+    (`mlserver_staged_test.py --only <endpoint>`). A task becomes
+    `available: true` only when its `default` and `fallback` are production
+    variants with serving.
+
+**Template.** These are the minimal entries for a single-graph GPU model whose
+photo is resized and normalized like the ImageNet references. Replace every
+`<…>`.
+
+```yaml
+# models/catalog.yaml, under models:
+  <model-id>:
+    description: >-
+      <what it is, which checkpoint, input/output shapes, how it was judged>
+    capabilities: [<capability>]
+    artifacts:
+      tflite_gpu:
+        source: {repo: <hf-org/repo>, revision: <40-char sha>}
+        files:
+          - {name: <device-file>.tflite, upstream_name: <path in repo>, sha256: <sha256>, bytes: <bytes>}
+    worker: {binary: cerebrate-hetero, port: <slot port>}
+    serving: {mlserver_model: <endpoint>, interface: <photo-…-v1>}
+    aliases: {default: gpu-fp32, reference: gpu-fp32}
+    residency: on_demand
+    requirements: {disk_mb: <MB>, ram_mb: null}
+```
+
+```yaml
+# models/variants.yaml, under variants:
+  <model-id>/gpu-fp32:
+    status: validated            # -> staged (step 8) -> production (step 10)
+    stages:
+      - {name: model, artifact: tflite_gpu, accelerator: gpu, precision: fp32, runtime: litert-2.3.0, phase: image}
+    validation:
+      reference: <original implementation + revision>
+      metrics: {<task metric>: <value>}
+      verdict: <exact | near-identical | …>
+      record: experiments/pixel6/results.md#<heading-anchor>
+    benchmarks:
+      - {measure: worker, ms: <ms>, statistic: median, covers: "<what>", record: experiments/pixel6/results.md#<heading-anchor>}
+    resources: {ram_mb: null, startup_ms: null}    # measured values only
+    # added at step 8:
+    serving:
+      slot: gpu-<short>
+      profile: <model-id>-default
+      worker_config: hosts/cerebrate-pixel6/cerebrate-hetero/configs/<model-id>-default.conf
+      mlserver_model: <endpoint>
+```
+
+```ini
+# hosts/cerebrate-pixel6/cerebrate-hetero/configs/<model-id>-default.conf
+# <model>, configuration gpu-fp32 (model alias default; models/variants.yaml).
+input=pixel_values
+input_uint8=unit_mean_std:0.485,0.456,0.406:0.229,0.224,0.225
+input_layout=nchw
+graph.main.model=/data/local/tmp/<device-file>.tflite
+graph.main.precision=fp32
+graph.main.inputs=pixel_values=input
+graph.main.outputs=<output>
+outputs=main.<output>
+```
+
+```text
+# hosts/cerebrate-pixel6/cerebrate-supervisor/cerebrate-profiles.conf
+slot    gpu-<short>  <port>  cerebrate-hetero
+profile <model-id>-default  gpu-<short>  <device-file>.tflite  <model-id>-default.conf  <drop + 1000>
+```
+
+```json
+// hosts/cerebrate-pixel6/mlserver/held-models/<endpoint>/model-settings.json
+// (+ symlinks cerebrate_graph_runtime.py, cerebrate_graph_protocol.py -> ../../models/cerebrate-graph/)
+{
+  "name": "<endpoint>",
+  "implementation": "cerebrate_graph_runtime.CerebrateGraphRuntime",
+  "parameters": {
+    "version": "v0.1.0",
+    "extra": {
+      "cerebrate_graph_worker": "gpu-<short>",
+      "cerebrate_graph_port": <port>,
+      "cerebrate_graph_model_path": "/data/local/tmp/<device-file>.tflite",
+      "cerebrate_graph_backend": "<model-id>-default",
+      "cerebrate_graph_residency": "on_demand",
+      "cerebrate_graph_idle_stop_s": 600,
+      "cerebrate_graph_request_timeout_s": 120,
+      "cerebrate_graph_photo": "<hook name>"
+    }
+  }
+}
+```
+
+```python
+# hosts/cerebrate-pixel6/mlserver/models/cerebrate-graph/model_hooks.py
+class <Name>Hooks:
+    S = <input size>
+
+    def prepare(self, inputs, params=None):
+        if "photo" not in inputs:
+            return None                       # raw tensors: passed to the worker as they are
+        img = pil_rgb(_bytes(inputs["photo"]))
+        u8 = np.asarray(img.resize((self.S, self.S), Image.BICUBIC), np.uint8)   # exactly the reference's resize
+        return {"pixel_values": u8[None]}, {"raw": _raw(params), "size": (img.height, img.width)}
+
+    def finish(self, outputs, ctx):
+        h, w = ctx["size"]
+        if ctx["raw"]:
+            return {**outputs, "original_size": np.array([h, w], np.int64)}
+        return {"result": _json({"image": {"width": w, "height": h}, ...})}
+# and in cerebrate_graph_photo.py: HOOKS.update({"<hook name>": model_hooks.<Name>Hooks})
+```

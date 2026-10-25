@@ -15,6 +15,7 @@
 - Romset notes: [DATs](romsets/dats.md), [Igir](romsets/igir.md),
   [scraping](romsets/scraper.md), [travel sync](romsets/travel-sync.md)
 - [N64 and Dreamcast optimization](emulation/n64-dreamcast-optimization.md)
+- [Cerebrate Pixel 6 models](cerebrate-pixel6-models.md): discovery, validation, staging, promotion, health, reboot recovery, troubleshooting
 - OpenClaw on Overmind: [index](openclaw/README.md),
   [deployment and gateway](openclaw/deployment-and-gateway.md),
   [agents and model routing](openclaw/agents-and-model-routing.md),

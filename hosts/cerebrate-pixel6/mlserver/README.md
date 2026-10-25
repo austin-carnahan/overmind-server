@@ -718,7 +718,7 @@ guest's MLServer; it is served after the image-transport work. YOLOE ships in
 the window. The rest of this section describes the tested configuration.
 
 **Staged and tested beside production; deploy in the scheduled window**
-(runbook: [supervisor README, "Combined deployment"](../cerebrate-supervisor/README.md#combined-deployment-yoloe--edgesam-prepared-2026-10-24-deploy-scheduled)).
+(runbook: [supervisor README, "Combined deployment"](../cerebrate-supervisor/README.md#combined-deployment-yoloe--edgesam-deployed-2026-10-25-yoloe-served)).
 
 - **`models/edgesam3x-box/`** — EdgeSAM-3x box refinement on slot `hetero2`
   (port 8773), profile `edgesam3x-fast`, on demand with a 10-minute idle
@@ -851,3 +851,96 @@ supervisor README). Raw mode (`output: raw`) still returns raw tensors
 through MLServer's list encoding — keep it for debugging, not for many
 boxes.
 
+
+## Registry endpoints: eight GPU models staged in `held-models/` (prepared 2026-10-25)
+
+The registry's eight newly served models have MLServer settings in
+[`held-models/`](held-models/). MLServer loads only `models/`, so production
+doesn't see them. Each folder holds a `model-settings.json` and two symlinks
+to the shared adapter. Every model uses on-demand residency (idle stop 600 s;
+OWLv2 300 s), a 120 s request timeout, and its own supervisor slot. Every one
+passed the side-by-side test
+([`mlserver_staged_test.py`](../cerebrate-hetero/tests/mlserver_staged_test.py), 18/18;
+[results](../../../experiments/pixel6/results.md#2026-10-25--registry-serving-eight-gpu-models-staged-beside-production)).
+None is served in production yet.
+
+**Adapter changes.** All are compatible with the deployed `yoloe-v8s-pf` and
+`edgesam3x-box`:
+
+- [`model_hooks.py`](models/cerebrate-graph/model_hooks.py) holds one hook per
+  model, registered in `cerebrate_graph_photo.HOOKS`.
+- A hook either maps one request to one worker call (`prepare` / `finish`), or
+  implements `async run(inputs, params, call)` when a host step sits between
+  two graphs. RF-DETR and OWLv2 use `run`.
+- `cerebrate_graph_supervisor_port` points a model at a test supervisor.
+- On-demand models retry a request once if their worker was lost. Inference is
+  stateless.
+- A refused start now carries the supervisor's reason, so a refusal for lack of
+  memory reaches the client as "could not start gpu-owlv2 on demand: supervisor
+  refused START: ERROR: profile owlv2-b16-default needs 3000 MB free…".
+- New guest-side helpers:
+  - [`photo_preprocess.py`](models/cerebrate-graph/photo_preprocess.py): a
+    bit-exact port of torchvision's uint8 antialiased resize, and of OWLv2's
+    processor.
+  - [`clip_bpe.py`](models/cerebrate-graph/clip_bpe.py): CLIP's tokenizer, using
+    the standard library only.
+  - Four small constants in [`assets/`](models/cerebrate-graph/assets/), each
+    recorded with its sha256 in the catalog (`target: guest`).
+- **Pillow 13.0.0 is required** in the venv
+  ([`requirements.txt`](requirements.txt)). 12.3's bicubic resize differs from
+  the references.
+
+**Contracts.**
+
+- Inputs are `photo` (BYTES, an encoded image) plus the model's prompts.
+- The output is one BYTES `result` holding a JSON document in photo
+  coordinates.
+- Masks use `photo_postprocess.encode_mask`: `bbox`, then `rle` or `bits`, as
+  above.
+- Parameter `output: raw` returns the worker's raw tensors plus
+  `original_size`. This is the diagnostic path; keep it for debugging.
+
+| Endpoint | Interface | Request | `result` |
+| --- | --- | --- | --- |
+| `depth-anything-v2-small` | `photo-depth-v1` | `photo` | `depth`: 686×518 16-bit PNG (base64) with `min` and `max`. Value = min + png/65535·(max−min). Relative inverse depth, larger = nearer. |
+| `mi-gan-512` | `photo-inpaint-v1` | `photo`, `mask` (an image of the same size, white = remove) | The inpainted photo as a PNG (base64), composited like the author's `migan.onnx` pipeline: pixels outside the mask are unchanged. |
+| `dinov2-s14` | `photo-embedding-v1` | `photo`. Parameter `patches=true` adds the tokens. | `embedding`: 384 little-endian float32 (base64), the mean of the 1,024 patch tokens, not normalized. `patch_tokens` [1024, 384] are optional. |
+| `yoloe-11s-pf` | `photo-detections-v1` | `photo` | As `yoloe-v8s-pf`: detections with 4,585-class labels and masks. |
+| `sam2.1-hiera-tiny` | `photo-box-masks-v1` | `photo?`, `image_id` (INT64 [1]), `boxes?` (FP32 [N,4] xyxy in photo pixels). Parameter `masks=all` returns all three candidates. | `masks`: per box, the best candidate by predicted IoU, with box, score and mask. The image is cached per `image_id`, so later boxes need no photo. |
+| `rf-detr-seg-nano` | `photo-detections-v1` | `photo`. Parameter `threshold` (default 0.5). | `detections`: box, score, COCO `class_id`, `label`, mask. |
+| `efficientsam3-rvm` | `photo-text-segmentation-v1` | `photo?`, `image_id`, `prompts` (BYTES, one phrase each, at most 16). Parameter `threshold` (0.5). | `prompts`: per phrase, `presence` plus `detections` (box, score, mask). Vision is cached per `image_id`, and each phrase is one worker call. |
+| `owlv2-b16` | `photo-text-detection-v1` | `photo`, `queries` (BYTES, at most 256). Parameter `threshold` (0.2). | `queries`: per phrase, `detections` (box, score) after per-query NMS at IoU 0.3. |
+
+Warm round trips on the test path:
+
+| Endpoint | Warm round trip |
+| --- | --- |
+| Depth | 595 ms |
+| MI-GAN | 419 ms |
+| DINOv2 | 485 ms |
+| YOLOE-11s | 561 ms |
+| SAM 2.1 | 1.86 s for a photo and 2 boxes |
+| RF-DETR | 523 ms |
+| EfficientSAM3 | 3.4 s for a photo and 1 phrase |
+| OWLv2 | 5.5 s for a photo and 24 queries |
+
+A first request also starts the worker, which takes 1.4–9.5 s. The full
+tables, with memory per worker, are in the results.
+
+**Promotion** happens one endpoint at a time, inside a window, after the
+registry-serving deployment (supervisor README) is in place. The procedure is
+in the
+[Pixel 6 models runbook](../../../runbooks/cerebrate-pixel6-models.md#promote-a-staged-endpoint):
+
+1. `git mv held-models/<m> models/<m>`.
+2. Re-point its two symlinks from `../../models/cerebrate-graph/` to
+   `../cerebrate-graph/`.
+3. Mark the variant `production` in `models/variants.yaml`. The validator
+   checks that a staged endpoint is in `held-models/` and a production one is
+   in `models/`.
+4. Pull in the guest, then `POST /v2/repository/models/<m>/load`. No restart is
+   needed.
+5. Run the promotion gate: `SUPERVISOR_PORT=8767 mlserver_staged_test.py
+   127.0.0.1:8081 127.0.0.1:8080 <gateway> <data> --only <m>`.
+
+Demotion is the reverse: unload, then move the folder back.

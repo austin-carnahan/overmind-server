@@ -188,6 +188,53 @@ reliably crashes the USB controller without it under real write load.
   WantedBy=timers.target
   ```
 
+- **`pixel-supervisor-watchdog.timer`** (prepared 2026-10-25, **not
+  installed yet** — it goes in with the registry-serving deployment, see the
+  [Pixel 6 models runbook](../../runbooks/cerebrate-pixel6-models.md))
+  restarts `cerebrate-supervisor` on the phone when its control port (8767)
+  isn't listening: after a crash, the low-memory killer, or an Android reboot
+  once adb tcpip is back. It kills orphaned on-demand `cerebrate-hetero`
+  workers first (a new supervisor can't adopt them), launches the supervisor
+  with the documented detached command, and then asks MLServer to load any
+  model that isn't READY. At most one start per 2 minutes; it never touches a
+  running supervisor, the VM, or the pinned workers. Tested against the
+  side-by-side test supervisor (`kill -9` → orphan cleared, supervisor back,
+  models reloaded, next request served). The script is in the repo:
+  [`pixel-supervisor-watchdog`](../cerebrate-pixel6/cerebrate-supervisor/pixel-supervisor-watchdog),
+  installed as `/usr/local/bin/pixel-supervisor-watchdog`. **Stop the timer
+  during any deliberate supervisor swap**, or it relaunches the old binary
+  in the middle of the swap: `sudo systemctl stop pixel-supervisor-watchdog.timer`.
+
+  ```ini
+  # /etc/systemd/system/pixel-supervisor-watchdog.service
+  [Unit]
+  Description=Restart cerebrate-pixel6's cerebrate-supervisor if it isn't running
+  After=network-online.target pixel-adb-reconnect.service
+  Wants=network-online.target
+
+  [Service]
+  Type=oneshot
+  User=austin
+  RuntimeDirectory=pixel-supervisor-watchdog
+  RuntimeDirectoryPreserve=yes
+  TimeoutStartSec=15min
+  ExecStart=/usr/local/bin/pixel-supervisor-watchdog
+  ```
+
+  ```ini
+  # /etc/systemd/system/pixel-supervisor-watchdog.timer
+  [Unit]
+  Description=Check cerebrate-pixel6's cerebrate-supervisor every minute
+
+  [Timer]
+  OnBootSec=3min
+  OnUnitActiveSec=60s
+  AccuracySec=5s
+
+  [Install]
+  WantedBy=timers.target
+  ```
+
 - SSD mounted (ext4, `noatime`, `nofail`) at `/mnt/disks/ssd1` — numbered
   rather than matching the filesystem's own `overmind-ssd` label, since a
   number scales to a second/third disk more simply than a label match would.

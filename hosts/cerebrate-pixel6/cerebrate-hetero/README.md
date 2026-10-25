@@ -168,6 +168,73 @@ expressions have nothing to contract, so the float32 results equal numpy's.
 | EdgeSAM image + 1 box round trip | ~465 → 288 ms (outside the worker ~270 → 81 ms); normalization +11 ms |
 | base round trip / uint8 image alone | 0.4–0.6 ms; 3.15 MB in ~53 ms (~60 MB/s) + ~2–9 ms client encode |
 
+## Graph mode: declarative model chains (registry serving, staged 2026-10-25)
+
+Any `graph.<name>.<field>` key in a `--config` file selects graph mode: the
+worker loads a chain of LiteRT graphs described entirely in the config, so a
+new model is a config file plus (in the guest) a small adapter hook, not new
+worker code. The TPU/stage2/fallback/prompt keys above belong to the legacy
+pipeline and are refused in graph mode; the legacy pipeline itself is
+unchanged (60/60 requests bit-identical against the deployed `7554324e`).
+
+| Key | Meaning |
+| --- | --- |
+| `graph.<name>.model` | `.tflite` path (required) |
+| `graph.<name>.accelerator` | `gpu` (default), `cpu`, `gpu+cpu` |
+| `graph.<name>.precision` | GPU: `fp32` (default), `fp16acc32`, `fp16` |
+| `graph.<name>.phase` | `image` (default; once per request carrying `input`) or `prompt` (once per prompt) |
+| `graph.<name>.inputs` | `<label>=<source>,...`, one per model input in signature order |
+| `graph.<name>.outputs` | names for the model's outputs, in order |
+| `outputs` / `prompt_outputs` | the `<graph>.<output>`s returned for image-only requests / requests with prompts (stacked `[N, ...]`) |
+| `input`, `input_uint8`, `input_layout=nhwc\|nchw`, `input_extent` | the request's main tensor and its uint8 normalization |
+| `cache_entries` | image-phase results kept per `image_id` (LRU) when prompt graphs read them |
+| `share_buffers=0` | copy GPU→GPU hand-offs instead of sharing the buffer (diagnostics) |
+
+Input sources: `input` (the request's main tensor), `request:<name>` (a
+request tensor; in the prompt phase stacked, one slice per prompt),
+`file:<path>` (a constant read once at load), `<graph>.<output>` (an earlier
+graph's output; GPU→GPU in the same phase shares the tensor buffer — no copy
+and no host sync between the runs).
+
+uint8 normalization modes (all in float32, matched bit for bit against each
+model's reference preprocessing):
+
+| `input_uint8=` | Formula | Reference it matches |
+| --- | --- | --- |
+| `divide:<d>` | x / d | YOLOE |
+| `mean_std:m:s` | (x − m) / s, 0 outside `input_extent` | SAM/EdgeSAM (pixel-scale mean/std) |
+| `unit_mean_std:m:s` | (x / 255 − m) / s | numpy processors (Depth, DINOv2, SAM 2.1) |
+| `recip_mean_std:m:s` | (x · (1/255) − m) / s, the product kept out of an FMA | torchvision (EfficientSAM3) |
+
+The patterns the eight registry models use — one config each in
+[`configs/`](configs/), named `<model>-<alias>.conf`:
+
+| Pattern | Configs |
+| --- | --- |
+| single GPU graph | `depth-anything-v2-small-*`, `mi-gan-512-*`, `dinov2-s14-default`, `yoloe-11s-pf-default` |
+| sequential GPU graphs, shared buffer | `efficientsam3-rvm-*` (vision trunk FP32 → neck FP16 + FP32 acc.) |
+| cached image + prompt graph per box | `sam2.1-hiera-tiny-*` (boxes encoded host-side by the adapter) |
+| mixed GPU/CPU, cached image + prompts | `efficientsam3-rvm-*` (text encoder on the CPU, grounding on the GPU, five `file:` constants), `owlv2-b16-default` (text tower on `gpu+cpu`) |
+| two phases called separately, host step in the guest between them | `rf-detr-seg-nano-*` (graph A, numpy step, graph B as the prompt phase), `owlv2-b16-default` (image tower, then text tower; logits computed in the guest) |
+
+DESCRIBE in graph mode reports `mode: graphs`, the config, `load_us`, the
+request inputs (dtype, shape, uint8 spec), `outputs`, `prompt_outputs`,
+`cache_entries` and `share_buffers` — what an adapter needs to build requests. DONE keeps the legacy
+fields (`backend` 3, `gpu_us` = image phase, `prompt_us` = prompt phase).
+
+Checks, all against the validated device outputs or the original models
+([results](../../../experiments/pixel6/results.md#2026-10-25--registry-serving-eight-gpu-models-staged-beside-production)):
+[`tests/legacy_regression.py`](tests/legacy_regression.py) (old vs new build),
+[`tests/graph_fidelity.py`](tests/graph_fidelity.py) (raw outputs),
+[`tests/photo_models_check.py`](tests/photo_models_check.py) and the
+per-model `*_photo_check.py` (the guest's photo path),
+[`tests/mlserver_staged_test.py`](tests/mlserver_staged_test.py) (test
+supervisor + test MLServer, lifecycle and recovery),
+[`tests/graph_contention.py`](tests/graph_contention.py) with
+[`tests/resource_sampler.sh`](tests/resource_sampler.sh) (concurrency,
+memory, thermals). [`tests/worker_launch.sh`](tests/worker_launch.sh) starts
+a test worker on a test port.
+
 ## Build
 
 See [`CMakeLists.fragment.txt`](CMakeLists.fragment.txt). Push the binary,

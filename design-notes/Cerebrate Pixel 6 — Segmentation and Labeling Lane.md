@@ -1299,3 +1299,28 @@ conditions in Section 4.4).
   `default`); it helps repeated prompts on an image already encoded, which
   the vision change does not. Next: reusable serving infrastructure for
   the rest of the catalog.
+- **2026-10-25** — **Model registry and reusable serving: eight more models
+  staged beside production.**
+  - **Registry.** The catalog is now two manifests: `models/catalog.yaml`
+    for what a model is, and `models/variants.yaml` for immutable execution
+    configurations with their evidence. They come with a validator,
+    `scripts/cerebrate-models` and an artifact store under `/mnt/models`.
+    The golden test pins the production task selections.
+  - **Worker.** cerebrate-hetero gained a declarative graph mode: chains of
+    GPU/CPU graphs, a cached image plus prompts, and shared buffers. One
+    config file per configuration, no per-model worker code.
+  - **Adapter.** The MLServer adapter gained per-model hooks, including
+    multi-call hooks for a host step between graphs.
+  - **Supervisor.** The supervisor gained a profiles file with
+    memory-admission floors. A watchdog on overmind-01 handles supervisor
+    loss.
+  - **Fidelity.** Depth, MI-GAN, DINOv2, YOLOE-11s, SAM 2.1, RF-DETR,
+    EfficientSAM3 (`fast`) and OWLv2 serve through the test supervisor and
+    test MLServer, reproducing their validation bit for bit or within it.
+    Exactness needed Pillow 13 and a bit-exact port of torchvision's resize.
+  - **Not staged.** EfficientSAM3's FP32 default is memory-blocked.
+  - **Open.** SAM 2.1 `fast` measures 0.963 worst-case mask IoU once both
+    halves are reduced (≈0.98 each alone).
+  - **Production** was untouched.
+  - **Next:** the registry-serving deployment window, then promotion of the
+    endpoints one at a time ([runbook](../runbooks/cerebrate-pixel6-models.md)).

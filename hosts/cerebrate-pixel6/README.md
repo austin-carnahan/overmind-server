@@ -133,6 +133,29 @@ active on port `2222`) and reachable headlessly via `adb forward` — see the
 design notes for the full chain and the AOSP forwarder's ≥1024/loopback-only
 constraint that explains why.
 
+## Models and operations
+
+The models served (or validated) on this phone, and how each configuration
+runs, are in the [model registry](../../models/README.md). Use
+`scripts/cerebrate-models` to browse it. Day-to-day procedures are in the
+[Pixel 6 models runbook](../../runbooks/cerebrate-pixel6-models.md):
+
+- validating a variant;
+- staging and promoting an endpoint;
+- health checks;
+- recovery after a reboot;
+- troubleshooting.
+
+Production serves:
+
+| Endpoint | Status |
+| --- | --- |
+| `cerebrate-infer` (MobileNet), `cerebrate-generate`, `cerebrate-gguf`, `graph-canary` | pinned |
+| `yoloe-v8s-pf`, `edgesam3x-box` | on demand |
+
+Eight more GPU models are staged beside production, awaiting a deployment
+window ([supervisor README](cerebrate-supervisor/README.md#registry-serving-profiles-file-admission-eight-gpu-slots-prepared-2026-10-25-deploy-scheduled)).
+
 ## Access
 
 - ADB over USB, currently authorized (`1A071FDF6007Q3`). Wireless ADB also
