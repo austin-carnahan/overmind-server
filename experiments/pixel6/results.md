@@ -308,7 +308,7 @@ original), **`fast`** a reduced-precision mode that passed the task checks.
 | OWLv2 B/16 (ours) | FP32 only, 4.53 s image tower | — (both reduced modes fail) |
 | YOLOE-v8s prompt-free (ours; added 2026-10-24) | FP32, 186 ms (exact: 132/132 detections, mask IoU 1.0000) | FP16 + FP32 acc., 108 ms (132/132 kept, plus one borderline extra; mask IoU ≥ 0.969, mean 0.996) |
 | EdgeSAM-3x image encoder (ours; added 2026-10-24, experimental; encoder only, not yet a segmentation service) | `gpu-fp32`: GPU FP32, 267 ms (exact) — also `alternate` `gpu-mixed`: FP16 + FP32 acc., 169 ms (worst mask IoU 0.920) | `tpu-fp16r-gpu-neck-fp32`: TPU fp16-relaxed trunk 130 ms + GPU FP32 neck 16 ms (worst mask IoU 0.944, mean 0.9983). Preparation metadata: `gelu: tanh-approximation` (approximate functional rewrite), bicubic restoration (exact), chain-form elementwise ops (TPU compiler op-order workaround) |
-| EfficientSAM3 RV-M (ours; added 2026-10-24, experimental) | FP32: vision 715 ms per image + grounding 3.28 s per prompt (exact) | FP16 + FP32 acc. grounding, 1.72 s per prompt (all detections kept, final-mask IoU ≥ 0.9986); vision stays FP32. Pure FP16 rejected (changes detections) |
+| EfficientSAM3 RV-M (ours; added 2026-10-24, experimental) | FP32: vision 715 ms per image + grounding 3.28 s per prompt (exact) | FP16 + FP32 acc. grounding, 1.72 s per prompt (all detections kept, final-mask IoU ≥ 0.9986); vision stays FP32. Pure FP16 rejected (changes detections). Candidate (2026-10-25, not registered): split-precision vision — trunk FP32 + neck FP16 + FP32 acc., ≈ 519 ms, 20/20 with either grounding; reduced precision over the whole vision graph drops a detection, and the TPU was ruled out |
 
 ## 2026-10-24 — EfficientSAM3 RV-M (our conversion, checkpoint rev `85b05896`)
 
@@ -980,3 +980,52 @@ low-memory killer took four cached apps. The memory guard can't stop that
 compiler (a `system` process; it ran until the driver's ~60 s deadline). The
 VM and production MLServer were unaffected. MI-GAN stays GPU-only:
 `default` FP32 compute 147 ms, `fast` FP16 79 ms.
+
+## 2026-10-25 — EfficientSAM3 RV-M vision on the Edge TPU (fp16-relaxed): no-go; GPU split precision instead
+
+Code: [efficientsam3-tpu](../../hosts/cerebrate-pixel6/spikes/efficientsam3-tpu/README.md).
+Small fragments only; no full-encoder compile.
+
+**Vision on the GPU, by part** (synchronized E2E, median of 8; G3D ≤ 47 °C,
+skin 25 °C):
+
+| Part | FP32 | FP16 + FP32 acc. | FP16 |
+| --- | --- | --- | --- |
+| Trunk (RepViT-M1.1 + head + resize, ~36 GMACs) | 244 ms | 137 ms | 110 ms |
+| Neck (SAM 3 simple FPN up to 288×288, 106 GMACs) | 504 ms | 276 ms | 251 ms |
+| Whole vision graph | 723 ms | 409 ms | 349 ms |
+
+**Precision sensitivity** (phone-native chain, 11 samples, 20 detections):
+
+| Vision | Grounding | Kept | Worst final-mask IoU | Flipped px |
+| --- | --- | --- | --- | --- |
+| whole graph FP16 + FP32 acc. (FPN rel L2 5.5e-3) | FP32 | 19/20 (laptop 0.510 lost, score diff 1.1e-2) | — | — |
+| whole graph FP16 (FPN rel L2 1.1e-2) | FP32 | 19/20 (same) | — | — |
+| tanh GELU everywhere, FP32 (desktop) | FP32 | 20/20 | 0.9994 | 266 |
+| **trunk FP32 + neck FP16 + FP32 acc.** | FP32 | **20/20** | 0.9997 | 120 |
+| **trunk FP32 + neck FP16 + FP32 acc.** | FP16 + FP32 acc. | **20/20** | 0.9987 | 687 |
+
+**TPU fragments** (every op accepted by the driver; error = rel L2 vs PyTorch):
+
+| Fragment | TPU | Compile, memory | GPU FP32 / FP16 + FP32 acc. |
+| --- | --- | --- | --- |
+| Stem, 1008 → 252×252×64 (10 ops) | 18.9 ms, 7.0e-4 | 0.7 s, 3 MB | 23.1 / 15.1 ms (1.2e-3) |
+| Stem + 3 RepViT blocks at 1008 (60 ops) | **compile fails** (status 1) | — | 47.4 / 35.6 ms (7.2e-3) |
+| The same at 1024 (60 ops) | **93.0 ms**, 4.3e-3 | 12.8 s, **775 MB** | — |
+| SE module alone (MEAN over 252×252) | **compile fails** | — | — |
+| Depthwise / channel mixer alone at 252×252 | 17.9 / 20.5 ms | 0.6 / 2.7 s, 0 / 104 MB | — |
+| Neck conv_1x1 + conv_3x3 at 144×144 (2 ops) | 30.2 ms, 1.5e-4 | 1.2 s, 149 MB | 47.8 / 33.5 ms (1.4e-3) |
+
+Verdict: **no-go for TPU acceleration of the encoder.**
+
+- The trunk doesn't compile at 1008, because of the MEAN over 252×252 (256×256 compiles).
+- Where the trunk does compile, the TPU is 2× slower than the GPU.
+- Reduced precision in the trunk drops a detection.
+- The neck suits the TPU (accurate, 1.6× GPU FP32), but the GPU's mixed mode
+  matches its speed and passes validation.
+
+Result instead: GPU **trunk FP32 + neck FP16 + FP32 acc.**, ≈ 519 ms
+(summed) vs 723 ms. It passes the chain with both grounding variants and is a
+candidate configuration, not yet registered. First prompt with `fast`
+grounding: 2.46 → ≈ 2.26 s. Production untouched (MLServer: no restarts,
+7/7 ready).

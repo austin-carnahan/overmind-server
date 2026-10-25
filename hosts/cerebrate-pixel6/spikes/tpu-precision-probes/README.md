@@ -52,6 +52,17 @@ until the deadline, while EdgeSAM's 410 ops needed ≈1.2 GB. The compiler is a
 stop it, and the shell can't. Grow fragments in small steps and stop at the
 first large footprint.
 
+**Added by EfficientSAM3's encoder** ([efficientsam3-tpu](../efficientsam3-tpu/README.md)):
+**compilation can fail on a size the ops accept.** A global MEAN over
+252×252 (RepViT's SE module at a 1008 input) is accepted by the driver but
+the compiler fails (status 1, "Failed to create compiled model"), while
+256×256 compiles; the same 60-op fragment at 1024 compiles. Compile memory
+grows fast with resolution (that fragment: 775 MB, vs 149 MB for two
+256-channel convs at 144×144). RepViT's high-resolution first stage runs at
+half the GPU's speed on the TPU (93 vs 47 ms); plain 256-channel convs run
+1.6× faster than GPU FP32. fp16 relaxation's error is 1.7–9× below the
+GPU's FP16 + FP32-accumulation mode on every fragment measured.
+
 ## Scripts
 
 - [`tpu_probe_models.py`](tpu_probe_models.py) — conv and attention blocks in
