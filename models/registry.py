@@ -287,6 +287,8 @@ class Registry:
                 problem = self._check_record(rec)
                 if problem:
                     err(f"variant {ref}: {problem}")
+            if v.get("serving_blocked") and (v["status"] in SERVED or v.get("serving")):
+                err(f"variant {ref}: serving_blocked ({v['serving_blocked']}) but status {v['status']}{' with serving' if v.get('serving') else ''}")
             if v["status"] in SERVED and v.get("selectable", True):
                 for problem in self._check_serving(ref, v, models[model], check_files):
                     err(f"variant {ref}: {problem}")
@@ -309,7 +311,8 @@ class Registry:
             if served and not (m.get("serving") or {}).get("mlserver_model") and key not in ("mobilenetv1", "smollm2-135m-instruct"):
                 err(f"model {key}: has served variants but no serving.mlserver_model")
 
-        # tasks: selections resolve; an available task's default and fallback are production with serving
+        # tasks: selections resolve; default and fallback must be servable (not
+        # serving_blocked); an available task's default and fallback are production with serving
         for task, sel in self.tasks.items():
             for key in ("default", "quality", "fallback"):
                 if key not in sel:
@@ -322,6 +325,8 @@ class Registry:
                 v = variants[ref]
                 if v["status"] == "rejected" or v.get("selectable") is False:
                     err(f"tasks.{task}.{key}: {ref} is {'rejected' if v['status'] == 'rejected' else 'not selectable'}")
+                if key in ("default", "fallback") and v.get("serving_blocked"):
+                    err(f"tasks.{task}.{key}: {ref} is serving_blocked ({v['serving_blocked']}); a task's default and fallback must be servable")
                 if sel.get("available") and key in ("default", "fallback") and (v["status"] != "production" or not v.get("serving")):
                     err(f"tasks.{task}.{key}: {ref} is {v['status']} without production serving, but the task is advertised as available")
 

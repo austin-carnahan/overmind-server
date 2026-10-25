@@ -192,8 +192,9 @@ reliably crashes the USB controller without it under real write load.
   installed yet** — it goes in with the registry-serving deployment, see the
   [Pixel 6 models runbook](../../runbooks/cerebrate-pixel6-models.md))
   restarts `cerebrate-supervisor` on the phone when its control port (8767)
-  isn't listening: after a crash, the low-memory killer, or an Android reboot
-  once adb tcpip is back. It kills orphaned on-demand `cerebrate-hetero`
+  isn't listening: after a crash or the low-memory killer. After an Android
+  reboot it can act only once `adb tcpip` has been re-enabled by hand;
+  reboot recovery is not unattended. It kills orphaned on-demand `cerebrate-hetero`
   workers first (a new supervisor can't adopt them), launches the supervisor
   with the documented detached command, and then asks MLServer to load any
   model that isn't READY. At most one start per 2 minutes; it never touches a

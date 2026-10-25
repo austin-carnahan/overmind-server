@@ -74,6 +74,17 @@ YOLOE's fast variant while YOLOE's own `default` stays GPU FP32. A task with
 validated model never becomes an endpoint by being listed: `endpoints` shows
 only staged/production variants with a complete serving path.
 
+**Servable or not.** A variant that must not be served carries
+`serving_blocked: "<reason>"`:
+
+- EfficientSAM3's FP32 default, for memory;
+- SAM 2.1's reduced precision, unresolved at 0.963 worst mask IoU.
+
+It stays registered and selectable, so model aliases and a task's `quality`
+may name it. EfficientSAM3's model `default` is the blocked FP32 reference.
+The validator refuses it serving, a staged or production status, and any
+task's `default` or `fallback`: what a task serves must be servable.
+
 **Benchmarks** record their measurement kind: `device` (synchronized end to
 end on the phone for the named graph(s)), `worker` (cerebrate-hetero's
 inference time), `round-trip` (guest → MLServer → worker → guest), `summed`

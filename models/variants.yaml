@@ -266,7 +266,7 @@ variants:
       mlserver_model: sam2.1-hiera-tiny
   sam2.1-hiera-tiny/gpu-fp16acc32:
     previous_ids: [gpu-mixed]
-    status: staged
+    status: validated
     stages:
       - {name: encoder, artifact: tflite_gpu_encoder, accelerator: gpu, precision: fp16acc32, runtime: litert-2.3.0, phase: image}
       - {name: prompt encoder, accelerator: host, precision: n/a, runtime: numpy, phase: prompt}
@@ -283,11 +283,8 @@ variants:
       - {measure: summed, ms: 827, covers: "encoder + one box"}
       - {measure: worker, ms: 815, statistic: median, covers: "worker: encoder; + 38 ms per box", record: experiments/pixel6/results.md#2026-10-25--registry-serving-eight-gpu-models-staged-beside-production}
     limitations: ["the halves were validated separately (worst 0.981 / 0.978); measured together through the serving path (2026-10-25): worst mask IoU 0.963, 492 px -- below either half alone"]
+    serving_blocked: "unresolved: worst mask IoU 0.963 end to end, below either half alone; not promoted, the exact FP32 configuration serves box-refinement quality (decision 2026-10-25)"
     resources: {ram_mb: 845, startup_ms: null, notes: "peak RSS; free-memory drop 568 MB"}
-    serving:
-      slot: gpu-sam2
-      profile: sam2.1-hiera-tiny-fast
-      worker_config: hosts/cerebrate-pixel6/cerebrate-hetero/configs/sam2.1-hiera-tiny-fast.conf
   sam2.1-hiera-tiny/gpu-fp16:
     status: rejected
     stages:
@@ -319,6 +316,7 @@ variants:
       - {measure: device, ms: 3280, statistic: median, covers: "grounding per prompt", record: experiments/pixel6/results.md#2026-10-24--efficientsam3-rv-m-our-conversion-checkpoint-rev-85b05896}
       - {measure: summed, ms: 4025, covers: "first prompt on a new image: vision + text 17 ms + grounding"}
     limitations: ["not stageable on the Pixel 6: loading the FP32 vision + FP32 grounding worker took the phone from 3.3 GB to 850 MB free (2026-10-25); the fast variant needs 2.4 GB"]
+    serving_blocked: "memory: loading it took the Pixel 6 from 3.3 GB to 850 MB free; kept as the validated reference, the fast variant is served instead (decision 2026-10-25)"
     resources: {ram_mb: null, notes: "load peak > 2.5 GB (free-memory drop); stopped by the test guard before requests"}
 
   efficientsam3-rvm/gpu-trunk-fp32-neck-fp16acc32-grounding-fp16acc32:

@@ -54,6 +54,23 @@ class RealRegistry(unittest.TestCase):
         self.assertEqual(self.reg.resolve("yoloe-v8s-pf@fast"), "yoloe-v8s-pf/tpu-fp16r-gpu-head-fp16acc32")
         self.assertEqual(self.reg.resolve("efficientsam3-rvm@fast"), "efficientsam3-rvm/gpu-trunk-fp32-neck-fp16acc32-grounding-fp16acc32")
 
+    def test_blocked_default_alias_vs_servable_task_default(self):
+        # EfficientSAM3: the model's validated default (FP32) can't be served on
+        # the Pixel 6 and stays the reference; the task's default is the fast
+        # configuration, which can. A task's quality may name the blocked one.
+        model_default = self.reg.resolve("efficientsam3-rvm")
+        self.assertTrue(self.reg.variant(model_default).get("serving_blocked"))
+        task_default = self.reg.resolve("text-prompted-segmentation@default")
+        self.assertFalse(self.reg.variant(task_default).get("serving_blocked"))
+        self.assertIsNotNone(self.reg.serving_of(task_default))
+        self.assertEqual(self.reg.resolve("text-prompted-segmentation@quality"), model_default)
+
+    def test_blocked_variants_have_no_serving(self):
+        for ref, v in self.reg.variants["variants"].items():
+            if v.get("serving_blocked"):
+                self.assertNotIn(v["status"], registry.SERVED, ref)
+                self.assertNotIn("serving", v, ref)
+
     def test_validated_models_are_not_endpoints(self):
         for name, ref, status in self.reg.endpoints():
             self.assertIn(status, registry.SERVED)
@@ -184,6 +201,17 @@ class Mutations(unittest.TestCase):
         def m(c, v):
             v["variants"]["dinov2-s14/gpu-fp16acc32"]["serving"] = {"slot": "hetero1"}
         self.assertCaught(m, "status rejected can't carry serving")
+
+    def test_task_default_cannot_select_blocked_variant(self):
+        def m(c, v):
+            c["tasks"]["text-prompted-segmentation"]["default"] = "efficientsam3-rvm/gpu-fp32"
+        self.assertCaught(m, "a task's default and fallback must be servable")
+
+    def test_blocked_variant_cannot_be_staged(self):
+        def m(c, v):
+            v["variants"]["sam2.1-hiera-tiny/gpu-fp16acc32"]["status"] = "staged"
+            v["variants"]["sam2.1-hiera-tiny/gpu-fp16acc32"]["serving"] = {"slot": "gpu-sam2", "profile": "sam2.1-hiera-tiny-default"}
+        self.assertCaught(m, "serving_blocked (unresolved")
 
     def test_variants_in_catalog_rejected(self):
         def m(c, v):

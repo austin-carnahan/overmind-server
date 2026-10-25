@@ -42,6 +42,7 @@
           "description": "Compatibility transformations applied to the original model, each marked exact or approximate."
         },
         "limitations": {"type": "array", "items": {"type": "string"}},
+        "serving_blocked": {"type": "string", "minLength": 1, "description": "Why this configuration must not be served (memory, unresolved accuracy, a decision): it stays a registered reference, never carries serving, is never staged or in production, and no task selects it as default or fallback. Model aliases and a task's quality selection may still name it."},
         "rejected_because": {"type": "string"},
         "validation": {"$ref": "#/definitions/validation"},
         "benchmarks": {"type": "array", "items": {"$ref": "#/definitions/benchmark"}},

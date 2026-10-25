@@ -219,6 +219,21 @@ This needs a window. It runs one endpoint at a time, and only after the
 That deployment puts the new supervisor, worker, profiles file and Pillow 13
 in place.
 
+**Order** (decided 2026-10-25):
+
+1. `depth-anything-v2-small`, then `mi-gan-512`. These are the simplest GPU
+   paths: one graph, prepare/finish hooks.
+2. The rest one at a time: `dinov2-s14`, `yoloe-11s-pf`, `rf-detr-seg-nano`,
+   `sam2.1-hiera-tiny` (FP32 only), `efficientsam3-rvm` (fast only),
+   `owlv2-b16`.
+
+Never more than one per step. Never activate several at once: separate GPU
+processes serialize, and YOLOE's median went from 78 to 248 ms beside Depth.
+On-demand residency with idle stops keeps few workers resident, and the
+admission floors bound memory. Two configurations are `serving_blocked` and
+are never promoted: EfficientSAM3 FP32 (memory) and SAM 2.1 reduced precision
+(unresolved 0.963).
+
 **Prerequisites:**
 
 - Push authorized.
@@ -244,15 +259,28 @@ in place.
 **Verification:**
 
 - `/v2/models/<m>/ready` returns 200 and the slot is still STOPPED.
+- Record the phone's free memory (`grep MemAvailable /proc/meminfo` over adb)
+  before the gate.
 - Run the promotion gate in the guest:
 
   ```bash
-  SUPERVISOR_PORT=8767 PYTHONPATH=~/cg-test/stage/pylib ~/mlserver17-venv/bin/python3 \
+  SUPERVISOR_PORT=8767 ~/mlserver17-venv/bin/python3 \
     mlserver_staged_test.py 127.0.0.1:8081 127.0.0.1:8080 10.61.209.60 ~/cg-test/stage/data --only <m>
   ```
 
-  The model's checks must pass. The endpoint stays loaded.
-- MobileNet still returns 795.
+  It checks, in order:
+  - **correctness:** the model's fidelity checks;
+  - **unloading:** unload stops the worker and the model isn't READY; load
+    makes it READY again with no worker;
+  - **contention:** the model's result is unchanged while production YOLOE
+    and MobileNet run concurrently, and so are theirs. It reports YOLOE's
+    median alone and contended.
+
+  Every check must pass. The endpoint ends loaded.
+- **Memory:** run `resource_sampler.sh <port> <stop-file>` on overmind-01
+  beside the gate. The worker's peak and the free-memory drop should be close
+  to the staged figures (results), and free memory must stay above 1 GB.
+- Record the gate's output in the lane plan's progress notes.
 - 10 minutes later (5 for OWLv2), the slot is STOPPED and the model is READY.
 
 **Rollback (demote):**
@@ -275,6 +303,14 @@ profile is inert.
 Either way, the task selections must still validate.
 
 ## Recovery after a reboot
+
+> **Not unattended, and not yet rehearsed.** After an Android reboot,
+> `adb tcpip` mode is off, and every automatic step below depends on it.
+> Someone has to re-enable it by hand (step 1). Only then do the watchdogs
+> recover the VM and the supervisor. Don't describe this node as
+> self-recovering after a reboot until that adb prerequisite is solved (for
+> example, by an on-device service). Test the sequence in a maintenance
+> window before relying on it.
 
 What survives an Android reboot:
 

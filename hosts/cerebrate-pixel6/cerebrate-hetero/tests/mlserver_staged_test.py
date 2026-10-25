@@ -7,10 +7,15 @@ second is warm; raw outputs bit-identical to the validated device outputs
 (where they fit gRPC's 32 MiB); final results as the direct runs; then
 admission (a profile refused while EfficientSAM3 holds memory, the model stays
 READY and serves once memory is back), idle stop, unload.
-With --only <model>[,<model>...] it is a promotion gate for an endpoint
-already loaded (production: gRPC 8081, HTTP 8080, SUPERVISOR_PORT=8767): just
-those models' fidelity checks, nothing unloaded (the idle stop frees the
-worker), no admission or idle-stop test.
+With --only <model>[,<model>...] it is the promotion gate for endpoints
+already loaded (production: gRPC 8081, HTTP 8080, SUPERVISOR_PORT=8767), per
+model: the fidelity checks; unload stops the worker and the model is not
+READY, load makes it READY again with no worker; then contention -- the
+model's result while CONTENTION_MODEL (default yoloe-v8s-pf, the production
+YOLOE) and the production MobileNet worker (MOBILENET_PORT, default 8765)
+serve concurrently: every result equal to its solo result, MobileNet class
+795, YOLOE's median latency reported. Memory is read on the phone (runbook).
+No admission or idle-stop test.
 usage: [SUPERVISOR_PORT=8777] mlserver_staged_test.py <grpc host:port> <http host:port> <gateway> <data dir> [--only <models>]"""
 import sys, os, json, time, socket, base64, urllib.request
 import numpy as np, grpc, cv2
@@ -19,6 +24,8 @@ from mlserver.grpc import dataplane_pb2 as pb, dataplane_pb2_grpc as pbg
 GRPC, HTTP, GW, D = sys.argv[1:5]
 ONLY = sys.argv[6].split(",") if len(sys.argv) > 6 and sys.argv[5] == "--only" else None
 SUP_PORT = int(os.environ.get("SUPERVISOR_PORT", "8777"))
+CONTENTION_MODEL = os.environ.get("CONTENTION_MODEL", "yoloe-v8s-pf")
+MOBILENET_PORT = int(os.environ.get("MOBILENET_PORT", "8765"))
 stub = pbg.GRPCInferenceServiceStub(grpc.insecure_channel(GRPC, options=[("grpc.max_send_message_length", 33554432), ("grpc.max_receive_message_length", 33554432)]))
 MODELS = ["depth-anything-v2-small", "mi-gan-512", "dinov2-s14", "yoloe-11s-pf", "sam2.1-hiera-tiny", "rf-detr-seg-nano", "efficientsam3-rvm", "owlv2-b16"]
 SLOT = {"depth-anything-v2-small": "gpu-depth", "mi-gan-512": "gpu-migan", "dinov2-s14": "gpu-dinov2", "yoloe-11s-pf": "gpu-yoloe11s",
@@ -42,6 +49,10 @@ def slot_state(slot):
 
 def want(model):
     return ONLY is None or model in ONLY
+
+
+def load(model):
+    urllib.request.urlopen(urllib.request.Request(f"http://{HTTP}/v2/repository/models/{model}/load", data=b"{}", method="POST"), timeout=180)
 
 
 def unload(model):
@@ -192,5 +203,51 @@ if ONLY is None:
     while slot_state("gpu-owlv2") == "RUNNING" and time.time() - t0 < 150:
         time.sleep(5)
     check("idle stop: OWLv2's worker stopped after its idle window, model still READY", slot_state("gpu-owlv2") == "STOPPED" and ready("owlv2-b16"), f"after {time.time() - t0:.0f} s")
+# 5. promotion gate: unload/load cycle and contention with production YOLOE + MobileNet
+if ONLY is not None:
+    import threading
+    sw, sh = __import__("PIL.Image").Image.open(f"{D}/sam-photos/photo0.jpg").size
+    sam_boxes = np.array([[b[0] * sw, b[1] * sh, b[2] * sw, b[3] * sh] for b in [[0.25, 0.35, 0.75, 0.95], [0.05, 0.05, 0.55, 0.60]]], np.float32)
+    ONE = {"depth-anything-v2-small": lambda: dict(photo=[photo(0)]),
+           "mi-gan-512": lambda: dict(photo=[photo(0)], mask=[open(f"{D}/migan-serve/mask0.png", "rb").read()]),
+           "dinov2-s14": lambda: dict(photo=[photo(0)]),
+           "yoloe-11s-pf": lambda: dict(photo=[photo(0)]),
+           "sam2.1-hiera-tiny": lambda: dict(photo=[photo(0, "sam-photos")], image_id=np.array([0], np.int64), boxes=sam_boxes),
+           "rf-detr-seg-nano": lambda: dict(photo=[photo(0)]),
+           "efficientsam3-rvm": lambda: dict(photo=[photo(0)], image_id=np.array([0], np.int64), prompts=[b"bed"]),
+           "owlv2-b16": lambda: dict(photo=[photo(0)], queries=VOCAB)}
+    for m in ONLY:
+        unload(m)
+        check(f"{m}: unload stops its worker, model not READY", slot_state(SLOT[m]) == "STOPPED" and not ready(m))
+        load(m)
+        check(f"{m}: load: READY again, no worker until a request", ready(m) and slot_state(SLOT[m]) == "STOPPED")
+        solo, _ = infer(m, **ONE[m]())
+        y_solo, _ = infer(CONTENTION_MODEL, photo=[photo(1)])
+        y_ms_solo = [infer(CONTENTION_MODEL, photo=[photo(1)])[1] for _ in range(3)]
+        stop, y_rec, mn_rec = threading.Event(), [], []
+
+        def yoloe_loop():
+            while not stop.is_set():
+                r, ms = infer(CONTENTION_MODEL, photo=[photo(1)]); y_rec.append((r == y_solo, ms))
+
+        def mobilenet_loop():
+            probe = bytes(i % 256 for i in range(150528))
+            with socket.create_connection((GW, MOBILENET_PORT), timeout=30) as s:
+                f = s.makefile("rb")
+                while not stop.is_set():
+                    s.sendall(probe); kv = dict(x.split("=", 1) for x in f.readline().decode().split() if "=" in x)
+                    mn_rec.append(kv.get("top_class") == "795")
+
+        threads = [threading.Thread(target=yoloe_loop), threading.Thread(target=mobilenet_loop)]
+        for t in threads:
+            t.start()
+        same_m = [infer(m, **ONE[m]())[0] == solo for _ in range(3)]
+        stop.set()
+        for t in threads:
+            t.join()
+        check(f"{m}: contention with {CONTENTION_MODEL} + MobileNet: all results unchanged",
+              all(same_m) and y_rec and all(ok for ok, _ in y_rec) and mn_rec and all(mn_rec),
+              f"{m} {sum(same_m)}/3, {CONTENTION_MODEL} {sum(ok for ok, _ in y_rec)}/{len(y_rec)} "
+              f"(median {np.median(y_ms_solo):.0f} ms alone, {np.median([ms for _, ms in y_rec]):.0f} ms contended), MobileNet {sum(mn_rec)}/{len(mn_rec)}")
 print("LATENCY (cold first request incl. worker start, warm median), ms:", json.dumps({k: [round(a), round(b)] for k, (a, b) in lat.items()}))
 print(f"{sum(ok for _, ok in results)}/{len(results)} checks passed")
