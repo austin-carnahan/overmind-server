@@ -12,14 +12,19 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 import registry  # noqa: E402
 
 # Task selections and their serving path as deployed on 2026-10-25, before the
-# catalog/variants split: (model/variant, slot, profile, MLServer model).
+# catalog/variants split, plus each promotion since: (model/variant, slot,
+# profile, MLServer model).
 GOLDEN = {
     ("prompt-free-segmentation", "default"): ("yoloe-v8s-pf/tpu-fp16r-gpu-head-fp16acc32", "hetero1", "yoloe-v8s-fast", "yoloe-v8s-pf"),
     ("prompt-free-segmentation", "fallback"): ("yoloe-v8s-pf/gpu-fp32", "hetero1", "yoloe-v8s-default", None),
     ("box-refinement", "default"): ("edgesam-3x/tpu-fp16r-gpu-neck-fp32", "hetero2", "edgesam3x-fast", "edgesam3x-box"),
     ("box-refinement", "fallback"): ("edgesam-3x/gpu-fp32", "hetero2", "edgesam3x-default", None),
     ("box-refinement", "quality"): ("sam2.1-hiera-tiny/gpu-fp32", None, None, None),
+    # promoted after the registry-serving cutover (2026-10-25)
+    ("relative-depth", "default"): ("depth-anything-v2-small/gpu-fp16acc32", "gpu-depth", "depth-anything-v2-small-fast", "depth-anything-v2-small"),
+    ("relative-depth", "quality"): ("depth-anything-v2-small/gpu-fp32", "gpu-depth", "depth-anything-v2-small-default", None),
 }
+AVAILABLE = {"prompt-free-segmentation", "box-refinement", "relative-depth"}
 
 
 class RealRegistry(unittest.TestCase):
@@ -42,7 +47,7 @@ class RealRegistry(unittest.TestCase):
 
     def test_available_tasks(self):
         avail = {t for t in self.reg.tasks if self.reg.task_available(t)}
-        self.assertEqual(avail, {"prompt-free-segmentation", "box-refinement"})
+        self.assertEqual(avail, AVAILABLE)
 
     def test_previous_ids_resolve(self):
         self.assertEqual(self.reg.resolve("edgesam3x/tpu-fp16r-gpu-neck-fp32"), "edgesam-3x/tpu-fp16r-gpu-neck-fp32")

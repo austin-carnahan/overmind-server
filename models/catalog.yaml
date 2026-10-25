@@ -741,7 +741,7 @@ tasks:
   relative-depth:
     default: depth-anything-v2-small/gpu-fp16acc32
     quality: depth-anything-v2-small/gpu-fp32
-    available: false
+    available: true
   inpainting:
     default: mi-gan-512/gpu-fp16
     quality: mi-gan-512/gpu-fp32

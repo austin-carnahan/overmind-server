@@ -431,7 +431,7 @@ variants:
 
   # ---- Depth Anything V2 Small ----------------------------------------------
   depth-anything-v2-small/gpu-fp32:
-    status: staged
+    status: production
     stages:
       - {name: model, artifact: tflite_gpu, accelerator: gpu, precision: fp32, weights: fp32, runtime: litert-2.3.0, phase: image}
     validation:
@@ -449,7 +449,7 @@ variants:
       profile: depth-anything-v2-small-default
       worker_config: hosts/cerebrate-pixel6/cerebrate-hetero/configs/depth-anything-v2-small-default.conf
   depth-anything-v2-small/gpu-fp16acc32:
-    status: staged
+    status: production
     stages:
       - {name: model, artifact: tflite_gpu, accelerator: gpu, precision: fp16acc32, weights: fp32, runtime: litert-2.3.0, phase: image}
     validation:
