@@ -450,11 +450,13 @@ module changed).
    (`908f5620…48fd9`) over `cerebrate-supervisor.prev`; kill the old
    supervisor; move the new one into place; relaunch with the `nohup
    setsid` command. Its READY line must list `…,graph3,hetero1,hetero2`.
-4. **Decision at the window — gRPC message limit.** To accept image
-   requests over gRPC, add `Environment=MLSERVER_GRPC_MAX_MESSAGE_LENGTH=67108864`
-   to `/etc/systemd/system/cerebrate-mlserver.service` (and to the unit
-   block in the MLServer README), then `sudo systemctl daemon-reload`. REST
-   works either way.
+4. **gRPC message limit (approved 2026-10-24):** add
+   `Environment=MLSERVER_GRPC_MAX_MESSAGE_LENGTH=33554432` (32 MiB) to
+   `/etc/systemd/system/cerebrate-mlserver.service`, then `sudo systemctl
+   daemon-reload`. Verified with full-size payloads on a test instance:
+   YOLOE 4.9 MB in / 4.6 MB out and EdgeSAM 12.6 MB in / 7.3 MB out
+   (28 boxes) pass, bit-identical. Clients must raise their own receive
+   limit (gRPC's client default, 4 MiB, refuses YOLOE's response).
 5. In the guest: `git pull --ff-only` (the adapter, both model folders).
 6. `sudo systemctl start cerebrate-mlserver`.
 7. Verify: repository index all READY including `yoloe-v8s-pf` and
@@ -478,4 +480,32 @@ cerebrate-hetero`; in the guest check out `aa1d8cd`; start MLServer.
 slot STOPPED; kill the supervisor; `mv cerebrate-supervisor.prev
 cerebrate-supervisor`; relaunch; in the guest check out `248c6e3`; start
 MLServer. Staged files and the compilation cache are inert without the
-slots.
+slots. In either rollback the gRPC limit line can stay (it only raises a
+cap) or be removed with another `daemon-reload`.
+
+**Go/no-go at the window:** if full-size gRPC requests fail or model
+readiness is inconsistent, roll back rather than switch clients to REST.
+
+### Open before the window: MLServer memory per image request
+
+MLServer 1.7 converts every tensor to a Python list, even raw gRPC bytes
+(`mlserver/raw.py` `inject_raw` unpacks into lists; responses go through
+`NumpyCodec`'s `.tolist()`), so its memory scales with element count, not
+bytes. Measured on a test MLServer (gRPC, raw bytes; peak resident memory
+over a 124–129 MB idle baseline, transient):
+
+| Request | Peak increase |
+| --- | --- |
+| YOLOE, full-size image | +125–133 MB |
+| EdgeSAM, image + 1 box | +196 MB |
+| EdgeSAM, image + 24 boxes | +279 MB (~3.6 MB per extra box) |
+| EdgeSAM, image + 120 boxes | the guest's OOM killer killed the test instance (production MLServer unaffected: same PID, no restart) |
+
+The guest has ~530–650 MB available beside production MLServer: one
+request of either model fits, but overlapping large requests (two EdgeSAM,
+or EdgeSAM with many boxes beside YOLOE) could get production MLServer
+OOM-killed (systemd restarts it; every MLServer model would be down for the
+restart). The fix belongs to the transport work: an image sent as a
+compressed BYTES tensor (MLServer keeps BYTES as bytes) and compact mask
+outputs. Whether EdgeSAM ships in this window with request limits or after
+that fix is open.
