@@ -17,7 +17,9 @@ this Pixel 6 — once the model is prepared for it.**
 Prepared DINOv2-small (224×224, all 621 ops in one GPU partition), measured
 end to end — input copy, run, and a synchronizing output lock — over eight
 different real photos, against the **unmodified** PyTorch model
-([`bench.cc`](bench.cc), [`accuracy.py`](accuracy.py)):
+([`bench.cc`](bench.cc), [`accuracy.py`](accuracy.py)). [`chain.cc`](chain.cc)
+(`litert_chain`) times two graphs as one connected pipeline, each at its own
+precision (EfficientSAM3's split-precision vision):
 
 | Path | End-to-end median | run / read (sync) | Speed-up |
 | --- | --- | --- | --- |
@@ -160,7 +162,7 @@ NDK=~/Library/Android/sdk/ndk/27.1.12297006
 mkdir -p build && cd build
 cmake .. -DCMAKE_TOOLCHAIN_FILE="$NDK/build/cmake/android.toolchain.cmake" \
   -DANDROID_ABI=arm64-v8a -DANDROID_PLATFORM=android-26
-cmake --build . --target litert_bench litert_c_canary litert_e2e -j8
+cmake --build . --target litert_bench litert_c_canary litert_e2e litert_chain -j8
 ```
 
 Two 2.3.0 differences from the 2.2.0 recipe: the GPU accelerator moved to the

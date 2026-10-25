@@ -15,8 +15,10 @@ it is half the GPU's speed and needs 775 MB of compiler memory for 60 ops.
 The trunk is also the precision-sensitive half. The neck runs well on the
 TPU, but the GPU's own FP16 + FP32-accumulation mode matches that speed and
 already passes validation. The useful result is a GPU-only configuration:
-**trunk FP32 + neck FP16/FP32 acc., ≈ 519 ms (−28%), 20/20 detections on
-the 11-sample chain** — a candidate variant, not yet registered.
+**trunk FP32 → neck FP16 + FP32 acc., 518 ms as one connected pipeline
+(−29%), 20/20 detections on the 11-sample chain.** It was registered as
+EfficientSAM3's `fast` configuration on 2026-10-25; see "Connected
+pipeline" below. TPU exploration for EfficientSAM3 is closed.
 
 ## The vision graph
 
@@ -122,12 +124,12 @@ Later prompts on the same image don't change, because grounding (1.72 /
 GPU while grounding runs (pipelining across images), not for one request's
 latency.
 
-**Recommendation: no-go for full-encoder TPU acceleration.** Register the
-GPU split-precision vision as a candidate configuration instead (needs your
-approval; no serving change at this stage).
+**Decision: no-go for full-encoder TPU acceleration; TPU exploration
+stopped (2026-10-25).** The GPU split-precision vision was validated as a
+connected pipeline and registered instead (below).
 
-**If a TPU neck is still wanted later**, these are the next safe
-boundaries, one compile each, stopping at the first large footprint:
+**For the record, if a TPU neck were ever reconsidered**, these would be the
+next safe boundaries, one compile each, stopping at the first large footprint:
 
 1. N1 at full 288×288 — 2 ops; N1S used 149 MB, so roughly 4× is expected.
 2. Neck level 0 alone, with each 2×2 stride-2 transposed conv rewritten
@@ -156,3 +158,41 @@ rewrite in the preparation metadata as an approximate functional rewrite.
 - GPU runs use `litert_e2e` from
   [litert-gpu-transformers](../litert-gpu-transformers/README.md); the
   chains reuse efficientsam3-gpu's device inputs and grounding graph.
+
+## Connected pipeline (2026-10-25)
+
+[`chain.cc`](../litert-gpu-transformers/chain.cc) (`litert_chain`) runs the
+two graphs in one process and one LiteRT environment, each at its own GPU
+precision. It takes the eight photos in rotation. Latency is the median of
+16 requests after a warm-up pass, synchronized from pixel write to the FPN
+levels on the host:
+
+| Vision | Median | p90 | Parts (median) |
+| --- | --- | --- | --- |
+| Whole graph FP32 (same session) | 728 ms | 741 ms | — |
+| Trunk FP32 → neck FP16 + FP32 acc., hand-off through host memory | 547 ms | 566 ms | trunk output read 230 ms (its sync point), FPN read 300 ms |
+| **Same, trunk output buffer passed to the neck** | **518 ms** | 529 ms | one sync at the FPN read, 511 ms |
+
+Both hand-offs give bit-identical FPN levels (24/24 files). Running the
+validation chain on them: the connected vision, then grounding on the GPU,
+with text features from the original, scored by `esam3_e2e_accuracy.py`:
+
+| Grounding | Kept | Max kept score diff | Worst final-mask IoU | Flipped px (of 6.38 M) |
+| --- | --- | --- | --- | --- |
+| FP32 | **20/20** | 9.2e-4 | 0.9997 | 120 |
+| FP16 + FP32 acc. | **20/20** | 1.5e-3 | 0.9987 | 687 |
+
+These are identical to the two-process runs above. G3D went 23 → 51 °C over
+the session; skin stayed at 21–27 °C.
+
+**Registered** in `models/catalog.yaml` (`efficientsam3-rvm`). There is no
+serving worker yet, so every configuration is `validated`, not production.
+
+| Configuration | Role | First prompt (summed) |
+| --- | --- | --- |
+| `gpu-fp32` | `default` (exact reference) | 4.03 s |
+| `gpu-trunk-fp32-neck-fp16acc32-grounding-fp16acc32` | **`fast`** | **2.26 s** |
+| `gpu-vision-fp32-grounding-fp16acc32` | `alternate` (the previous `fast`) | 2.47 s |
+
+A serving worker would run the vision as this connected pair, passing the
+trunk's output buffer to the neck.

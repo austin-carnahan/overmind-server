@@ -365,6 +365,95 @@ models:
         benchmark: Encoder only (fp16 + fp32 accumulation), worst mask IoU ~0.98.
     residency: manual
 
+  efficientsam3-rvm:
+    description: >-
+      EfficientSAM3 RV-M (fine-tuned full model): SAM 3's text-prompted
+      concept segmentation -- every instance of a phrase, with masks -- with
+      a RepViT-M1.1 image encoder and a MobileCLIP-S0 text encoder. Our
+      LiteRT conversions (spikes efficientsam3-gpu, efficientsam3-tpu):
+      vision on the GPU once per image, text on the CPU (17 ms per phrase,
+      cacheable), grounding on the GPU per prompt (early fusion: not
+      cacheable). Validated on the 11-sample phone-native chain (20
+      detections, against the original model); no serving worker yet.
+      Edge TPU ruled out for the vision encoder (2026-10-25). Apache-2.0.
+    capabilities:
+      - segment-by-text
+    # Every artifact derives from the one checkpoint
+    # (efficientsam3_ft/efficientsam3_repvit.pt).
+    artifacts:
+      tflite_gpu_vision:
+        # esam3-rvm-vision-fp32.tflite, sha256 775baa8b... (unprepared, 340 ops)
+        source: {repo: Simon7108528/EfficientSAM3, revision: 85b05896928f974e308f889d7ccb2eefc069de98}
+        validated:
+          pixel6_litert_compiled_gpu: passed
+          # reduced precision over the whole graph drops a borderline detection
+          pixel6_litert_compiled_gpu_fp16acc32: failed
+      tflite_gpu_vision_trunk:
+        # esam3-rvm-vision-trunk-fp32.tflite, sha256 25301c5a... (RepViT +
+        # head + resize -> 72x72x1024)
+        source: {repo: Simon7108528/EfficientSAM3, revision: 85b05896928f974e308f889d7ccb2eefc069de98}
+        validated:
+          pixel6_litert_compiled_gpu: passed
+      tflite_gpu_vision_neck:
+        # esam3-rvm-vision-neck-fp32.tflite, sha256 a5f11036... (simple FPN
+        # -> 288/144/72 x 256)
+        source: {repo: Simon7108528/EfficientSAM3, revision: 85b05896928f974e308f889d7ccb2eefc069de98}
+        validated:
+          pixel6_litert_compiled_gpu: passed
+          pixel6_litert_compiled_gpu_fp16acc32: passed
+      tflite_cpu_text:
+        # esam3-rvm-text-fp32.tflite, sha256 dfdace73...
+        source: {repo: Simon7108528/EfficientSAM3, revision: 85b05896928f974e308f889d7ccb2eefc069de98}
+        validated:
+          pixel6_litert_compiled_cpu: passed
+      tflite_gpu_grounding:
+        # esam3-rvm-grounding-prepared-fp32.tflite, sha256 e20b1e1b... (six
+        # exact rewrites) + five host constant inputs
+        source: {repo: Simon7108528/EfficientSAM3, revision: 85b05896928f974e308f889d7ccb2eefc069de98}
+        validated:
+          pixel6_litert_compiled_gpu: passed
+          pixel6_litert_compiled_gpu_fp16acc32: passed
+          pixel6_litert_compiled_gpu_fp16: failed
+    variants:
+      gpu-fp32:
+        role: default
+        status: validated
+        latency_ms: 4025
+        benchmark: >-
+          First prompt on a new image: vision 728 ms + text 17 ms + grounding
+          3.28 s (components measured separately, summed); later prompts on
+          the same image 3.30 s. Exact vs the original: 20/20 detections,
+          final masks IoU 1.0000 (1 px).
+      gpu-trunk-fp32-neck-fp16acc32-grounding-fp16acc32:
+        role: fast
+        status: validated
+        latency_ms: 2255
+        benchmark: >-
+          First prompt on a new image: vision 518 ms (trunk FP32 -> neck
+          FP16 + FP32 acc. as one connected pipeline, synchronized, median of
+          16) + text 17 ms + grounding 1.72 s (summed); later prompts 1.74 s.
+          vs the original: 20/20 detections (incl. scores 0.504, 0.510),
+          worst final-mask IoU 0.9987, 687 of 6.38 M px. Same chain with
+          FP32 grounding: worst IoU 0.9997.
+        notes: >-
+          Vision split into trunk and neck graphs; the trunk's output buffer
+          is passed straight to the neck (bit-identical to a host copy,
+          29 ms faster). Reduced precision is limited to the neck: over the
+          whole vision graph it drops the 0.510 detection.
+      gpu-vision-fp32-grounding-fp16acc32:
+        role: alternate
+        status: validated
+        latency_ms: 2465
+        benchmark: >-
+          First prompt: vision 728 ms + text 17 ms + grounding 1.72 s
+          (summed). vs the original: 20/20 detections, final-mask IoU
+          >= 0.9986, 643 px. The `fast` configuration until 2026-10-25.
+    residency: manual
+    requirements:
+      # The five graphs and the host constant inputs, MiB.
+      disk_mb: 464.18
+      ram_mb: null
+
 # Task-level selection (lane Step 4 decision, 2026-10-24), separate from each
 # model's own aliases. Default and fallback must be served configurations.
 tasks:

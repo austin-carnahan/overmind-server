@@ -19,3 +19,6 @@ target_link_libraries(litert_c_canary litert_cc_api absl::raw_hash_set absl::has
 
 add_executable(litert_e2e bench.cc)
 target_link_libraries(litert_e2e litert_cc_api absl::raw_hash_set absl::hash android log)
+
+add_executable(litert_chain chain.cc)
+target_link_libraries(litert_chain litert_cc_api absl::raw_hash_set absl::hash android log)

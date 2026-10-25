@@ -308,7 +308,7 @@ original), **`fast`** a reduced-precision mode that passed the task checks.
 | OWLv2 B/16 (ours) | FP32 only, 4.53 s image tower | — (both reduced modes fail) |
 | YOLOE-v8s prompt-free (ours; added 2026-10-24) | FP32, 186 ms (exact: 132/132 detections, mask IoU 1.0000) | FP16 + FP32 acc., 108 ms (132/132 kept, plus one borderline extra; mask IoU ≥ 0.969, mean 0.996) |
 | EdgeSAM-3x image encoder (ours; added 2026-10-24, experimental; encoder only, not yet a segmentation service) | `gpu-fp32`: GPU FP32, 267 ms (exact) — also `alternate` `gpu-mixed`: FP16 + FP32 acc., 169 ms (worst mask IoU 0.920) | `tpu-fp16r-gpu-neck-fp32`: TPU fp16-relaxed trunk 130 ms + GPU FP32 neck 16 ms (worst mask IoU 0.944, mean 0.9983). Preparation metadata: `gelu: tanh-approximation` (approximate functional rewrite), bicubic restoration (exact), chain-form elementwise ops (TPU compiler op-order workaround) |
-| EfficientSAM3 RV-M (ours; added 2026-10-24, experimental) | FP32: vision 715 ms per image + grounding 3.28 s per prompt (exact) | FP16 + FP32 acc. grounding, 1.72 s per prompt (all detections kept, final-mask IoU ≥ 0.9986); vision stays FP32. Pure FP16 rejected (changes detections). Candidate (2026-10-25, not registered): split-precision vision — trunk FP32 + neck FP16 + FP32 acc., ≈ 519 ms, 20/20 with either grounding; reduced precision over the whole vision graph drops a detection, and the TPU was ruled out |
+| EfficientSAM3 RV-M (ours; added 2026-10-24, experimental) | FP32: vision 715 ms per image + grounding 3.28 s per prompt (exact) | FP16 + FP32 acc. grounding, 1.72 s per prompt (all detections kept, final-mask IoU ≥ 0.9986); vision stays FP32. Pure FP16 rejected (changes detections). **`fast` since 2026-10-25: vision split — trunk FP32 → neck FP16 + FP32 acc., 518 ms connected (20/20, final-mask IoU ≥ 0.9987) — with grounding FP16 + FP32 acc.**; the previous `fast` is now `alternate`. Reduced precision over the whole vision graph drops a detection; TPU ruled out |
 
 ## 2026-10-24 — EfficientSAM3 RV-M (our conversion, checkpoint rev `85b05896`)
 
@@ -1029,3 +1029,33 @@ Result instead: GPU **trunk FP32 + neck FP16 + FP32 acc.**, ≈ 519 ms
 candidate configuration, not yet registered. First prompt with `fast`
 grounding: 2.46 → ≈ 2.26 s. Production untouched (MLServer: no restarts,
 7/7 ready).
+
+## 2026-10-25 — EfficientSAM3 RV-M: split-precision vision as a connected pipeline; registered `fast`
+
+Code: [efficientsam3-tpu](../../hosts/cerebrate-pixel6/spikes/efficientsam3-tpu/README.md),
+[`chain.cc`](../../hosts/cerebrate-pixel6/spikes/litert-gpu-transformers/chain.cc).
+GPU only; no TPU compile.
+
+| Vision (8 photos, median of 16, synchronized pixels → FPN on host) | Median | p90 |
+| --- | --- | --- |
+| Whole graph FP32 (same session) | 728 ms | 741 ms |
+| Trunk FP32 → neck FP16 + FP32 acc., host hand-off | 547 ms | 566 ms |
+| **Trunk FP32 → neck FP16 + FP32 acc., trunk output buffer shared** | **518 ms** | 529 ms |
+
+The two hand-offs give bit-identical outputs. On the 11-sample chain against
+the original:
+
+- with FP32 grounding: 20/20 detections, worst final-mask IoU 0.9997, 120 px;
+- with FP16 + FP32-acc. grounding: 20/20, 0.9987, 687 px.
+
+Registered in `models/catalog.yaml` as `efficientsam3-rvm`:
+
+| Configuration | Role | Status | First prompt |
+| --- | --- | --- | --- |
+| `gpu-fp32` | `default` | `validated` | 4.03 s |
+| `gpu-trunk-fp32-neck-fp16acc32-grounding-fp16acc32` | `fast` | `validated` | **2.26 s** |
+| `gpu-vision-fp32-grounding-fp16acc32` | `alternate` (the previous `fast`) | `validated` | 2.47 s |
+
+First-prompt latencies are sums of separately measured components. The
+model was not in the catalog before: the schema now allows a model with no
+serving worker. EfficientSAM3 TPU exploration is closed.

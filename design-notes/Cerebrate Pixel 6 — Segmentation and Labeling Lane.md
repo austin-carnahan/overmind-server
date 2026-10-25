@@ -237,7 +237,7 @@ evidence showing what actually ran on the accelerator.
 | DINOv2-small (test model, not in the pipeline) | GPU path proof | Transformer (ViT-S/14) | 22M params, 87 MB fp32 | **GPU** | **LiteRT GPU, prepared: 68.6 ms end to end at fp32, cosine 1.0 (measured)** | CPU (344 ms, measured) | — |
 | Depth Anything V2 Small (added 2026-10-24) | Depth-aware edits: relative depth map | Transformer (DINOv2 ViT-S + DPT head) | ~25M params | **GPU** | Published `litert-community/depth-anything-v2-small`, validated per Section 4.7 | Our prepared conversion (DINOv2 rules apply) | CPU |
 | MI-GAN 512 Places2 (added 2026-10-24) | Infill: object removal and correction | CNN (mobile inpainting GAN) | 28 MB fp32 | **GPU** | Published `litert-community/MI-GAN-512-Places2-LiteRT`, validated per Section 4.7: FP32 compute 147 ms, FP16 79 ms (measured) | — (TPU ruled out 2026-10-25: first block slower than the GPU, encoder compile exhausts memory) | CPU |
-| EfficientSAM3 RV-M (spike, added 2026-10-24) | Text-prompted concept segmentation: every instance of a phrase, with masks | RepViT CNN + MobileCLIP-S0 text + SAM 3 fusion transformer and heads | 92.7M params | **GPU** (vision, grounding) + CPU (text) | **Our prepared conversion: vision 715 ms per image, grounding 3.28 s per prompt at fp32, task-exact (measured)**; fp16+fp32 acc. 1.72 s, near-identical; candidate split-precision vision (trunk FP32 + neck FP16/FP32 acc.) ≈ 519 ms, 20/20 (measured) | CPU (10.5 s + 14.7 s per prompt) | — (TPU ruled out 2026-10-25: trunk doesn't compile at 1008 and is 2× slower where it does; neck no faster than the GPU's mixed mode) |
+| EfficientSAM3 RV-M (spike, added 2026-10-24) | Text-prompted concept segmentation: every instance of a phrase, with masks | RepViT CNN + MobileCLIP-S0 text + SAM 3 fusion transformer and heads | 92.7M params | **GPU** (vision, grounding) + CPU (text) | **Our prepared conversion: vision 715 ms per image, grounding 3.28 s per prompt at fp32, task-exact (measured)**; fp16+fp32 acc. 1.72 s, near-identical; `fast` vision since 2026-10-25: trunk FP32 → neck FP16/FP32 acc., 518 ms connected, 20/20 (measured) | CPU (10.5 s + 14.7 s per prompt) | — (TPU ruled out 2026-10-25: trunk doesn't compile at 1008 and is 2× slower where it does; neck no faster than the GPU's mixed mode) |
 | OWLv2 text tower | Phrase → embedding | Text transformer (CLIP) | ~63M params, 254 MB fp32 | **GPU + CPU**, or precomputed offline | **GPU+CPU split: 229 ms per 32 phrases, exact (measured)** | CPU (1.08 s per 32, exact) | — |
 
 The two models added on 2026-10-24 extend the design capabilities beyond
@@ -1275,3 +1275,12 @@ conditions in Section 4.4).
   faster than the GPU's FP16 + FP32-accumulation mode. So: trunk FP32 + neck
   FP16/FP32 acc. on the GPU, ≈ 519 ms vs 723 ms, 20/20 on the 11-sample
   chain with both grounding variants — a candidate pending approval.
+- **2026-10-25** — **EfficientSAM3 split-precision vision validated as a
+  connected pipeline and registered `fast`.** Trunk FP32 → neck FP16 + FP32
+  acc. in one process (the trunk's output buffer goes straight to the neck):
+  518 ms synchronized vs 728 ms for FP32 vision, 20/20 detections on the
+  11-sample chain with either grounding precision. In `models/catalog.yaml`
+  (`efficientsam3-rvm`, all `validated`, no worker): `default` FP32 (first
+  prompt 4.03 s), `fast` split vision + mixed grounding (2.26 s),
+  `alternate` the previous `fast` (2.47 s). EfficientSAM3 TPU exploration
+  stopped.
