@@ -41,8 +41,9 @@ a rolling reload still never STOPs a worker another instance is using.
 An on_demand model stays ready (= able to start its worker on request):
 MLServer refuses requests to a model that isn't ready before predict()
 runs, so marking it unready after a failure would block the very request
-that restarts it. A failed start or a lost worker is a failed request
-(and a log line); the slot is released and the next request starts afresh.
+that restarts it. A lost worker releases the slot and the request is
+retried once on a freshly started worker; a failed start is a failed
+request (and a log line), and the next request starts afresh.
 
 The slot may also be cerebrate-hetero's (hetero1, port 8772); its
 "backend" is then one of the supervisor's fixed profile names (e.g.
@@ -198,10 +199,12 @@ class CerebrateGraphRuntime(MLModel):
         try:
             response = await asyncio.to_thread(_supervisor_request, self._host, "START", fields, self._supervisor_port)
         except OSError as exc:
-            print(f"cerebrate-graph ({self.name}): cerebrate-supervisor unreachable: {exc}")
+            self._start_error = f"cerebrate-supervisor unreachable: {exc}"
+            print(f"cerebrate-graph ({self.name}): {self._start_error}")
             return False
         if not response.startswith("OK"):
-            print(f"cerebrate-graph ({self.name}): supervisor refused START: {response.strip()}")
+            self._start_error = f"supervisor refused START: {response.strip()}"
+            print(f"cerebrate-graph ({self.name}): {self._start_error}")
             return False
         await asyncio.to_thread(_adjust_refcount, self._refcount_path, 1)
         self._counted = True
@@ -271,10 +274,11 @@ class CerebrateGraphRuntime(MLModel):
         async with self._start_lock:
             if self._counted:
                 return
+            self._start_error = "worker did not become ready (see the MLServer log)"
             if not await self._start_worker():
                 await self._stop_worker()
                 self.ready = True
-                raise MLServerError(f"cerebrate-graph ({self.name}): could not start {self._worker} on demand")
+                raise MLServerError(f"cerebrate-graph ({self.name}): could not start {self._worker} on demand: {self._start_error}")
 
     async def unload(self) -> bool:
         if getattr(self, "_idle_task", None) is not None:
@@ -318,21 +322,28 @@ class CerebrateGraphRuntime(MLModel):
             ) from last_error
 
     async def _call_worker(self, inputs: dict):
-        """One worker call with on-demand start and failure handling (for
-        multi-call hooks)."""
-        await self._ensure_started()
-        try:
-            return await self._call(inputs)
-        except protocol.WorkerError as exc:
-            raise MLServerError(f"cerebrate-graph rejected the request: {exc}") from exc
-        except ConnectionError:
-            if self._residency == "on_demand":
+        """One worker call with on-demand start and failure handling. on_demand:
+        a lost worker (killed, or orphaned and cleared after a supervisor
+        restart) releases the slot and the call is retried once against a
+        freshly started worker -- inference is stateless, so a retry can't
+        double-apply anything. A second loss fails the request."""
+        for attempt in (1, 2):
+            await self._ensure_started()
+            try:
+                return await self._call(inputs)
+            except protocol.WorkerError as exc:
+                raise MLServerError(f"cerebrate-graph rejected the request: {exc}") from exc
+            except ConnectionError:
+                if self._residency != "on_demand":
+                    raise
                 async with self._start_lock:
                     await self._stop_worker()
                 self.ready = True
-            raise
-        except TypeError as exc:
-            raise MLServerError(str(exc)) from exc
+                if attempt == 2:
+                    raise
+                print(f"cerebrate-graph ({self.name}): worker on {self._worker} lost; restarting it for this request")
+            except TypeError as exc:
+                raise MLServerError(str(exc)) from exc
 
     async def predict(self, payload: InferenceRequest) -> InferenceResponse:
         if not payload.inputs:
@@ -359,20 +370,7 @@ class CerebrateGraphRuntime(MLModel):
                 inputs, ctx = prepared
         if inputs is None:
             inputs = {request_input.name: NumpyCodec.decode_input(request_input) for request_input in payload.inputs}
-        await self._ensure_started()
-        try:
-            outputs, done = await self._call(inputs)
-        except protocol.WorkerError as exc:
-            raise MLServerError(f"cerebrate-graph rejected the request: {exc}") from exc
-        except ConnectionError:
-            # on_demand: release the slot so the next request starts it afresh.
-            if self._residency == "on_demand":
-                async with self._start_lock:
-                    await self._stop_worker()
-                self.ready = True
-            raise
-        except TypeError as exc:
-            raise MLServerError(str(exc)) from exc
+        outputs, done = await self._call_worker(inputs)
         if ctx is not None:
             outputs = self._hooks.finish(outputs, ctx)
         return InferenceResponse(

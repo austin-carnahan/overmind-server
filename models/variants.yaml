@@ -137,7 +137,7 @@ variants:
 
   # ---- YOLOE-11s prompt-free (non-preferred alternative) -------------------
   yoloe-11s-pf/gpu-fp32:
-    status: validated
+    status: staged
     stages:
       - {name: model, artifact: tflite_gpu_full, accelerator: gpu, precision: fp32, runtime: litert-2.3.0, phase: image}
     validation:
@@ -148,8 +148,14 @@ variants:
       record: experiments/pixel6/results.md#2026-10-24--yoloe-prompt-free-on-the-gpu-int8-backbone-partition-desktop
     benchmarks:
       - {measure: device, ms: 179, statistic: median, covers: "whole model, litert_e2e", record: experiments/pixel6/results.md#2026-10-24--yoloe-prompt-free-on-the-gpu-int8-backbone-partition-desktop}
-    resources: {ram_mb: null}
-
+      - {measure: worker, ms: 178, statistic: median, covers: "worker inference", record: experiments/pixel6/results.md#2026-10-25--registry-serving-eight-gpu-models-staged-beside-production}
+      - {measure: round-trip, ms: 561, statistic: median, covers: "photo in through the test MLServer, warm", record: experiments/pixel6/results.md#2026-10-25--registry-serving-eight-gpu-models-staged-beside-production}
+    resources: {ram_mb: 619, startup_ms: 2316, notes: "peak RSS; free-memory drop 414 MB"}
+    serving:
+      slot: gpu-yoloe11s
+      profile: yoloe-11s-pf-default
+      worker_config: hosts/cerebrate-pixel6/cerebrate-hetero/configs/yoloe-11s-pf-default.conf
+      mlserver_model: yoloe-11s-pf
   yoloe-11s-pf/gpu-fp16acc32:
     status: rejected
     stages:
@@ -232,7 +238,7 @@ variants:
 
   # ---- SAM 2.1 Hiera-Tiny ----------------------------------------------------
   sam2.1-hiera-tiny/gpu-fp32:
-    status: validated
+    status: staged
     stages:
       - {name: encoder, artifact: tflite_gpu_encoder, accelerator: gpu, precision: fp32, runtime: litert-2.3.0, phase: image}
       - {name: prompt encoder, accelerator: host, precision: n/a, runtime: numpy, phase: prompt, notes: "box -> sparse embedding [1,3,256] (two corner tokens + padding)"}
@@ -250,11 +256,17 @@ variants:
       - {measure: device, ms: 1380, statistic: median, covers: "encoder", record: experiments/pixel6/results.md#2026-10-24--sam-21-hiera-tiny}
       - {measure: device, ms: 80, statistic: median, covers: "box decoder, rewriting 24 MB of inputs per run", record: experiments/pixel6/results.md#2026-10-24--sam-21-hiera-tiny}
       - {measure: summed, ms: 1460, covers: "encoder + one box"}
-    resources: {ram_mb: null}
-
+      - {measure: worker, ms: 1438, statistic: median, covers: "worker: encoder; + 60 ms per box (persistent buffers)", record: experiments/pixel6/results.md#2026-10-25--registry-serving-eight-gpu-models-staged-beside-production}
+      - {measure: round-trip, ms: 1863, statistic: median, covers: "photo + 2 boxes through the test MLServer, warm", record: experiments/pixel6/results.md#2026-10-25--registry-serving-eight-gpu-models-staged-beside-production}
+    resources: {ram_mb: 1225, startup_ms: 4731, notes: "peak RSS; free-memory drop 919 MB"}
+    serving:
+      slot: gpu-sam2
+      profile: sam2.1-hiera-tiny-default
+      worker_config: hosts/cerebrate-pixel6/cerebrate-hetero/configs/sam2.1-hiera-tiny-default.conf
+      mlserver_model: sam2.1-hiera-tiny
   sam2.1-hiera-tiny/gpu-fp16acc32:
     previous_ids: [gpu-mixed]
-    status: validated
+    status: staged
     stages:
       - {name: encoder, artifact: tflite_gpu_encoder, accelerator: gpu, precision: fp16acc32, runtime: litert-2.3.0, phase: image}
       - {name: prompt encoder, accelerator: host, precision: n/a, runtime: numpy, phase: prompt}
@@ -262,15 +274,20 @@ variants:
     validation:
       reference: transformers Sam2Model (facebook/sam2.1-hiera-tiny), unmodified
       inputs: 4 photos x 2 boxes, each half judged with the other at fp32
-      metrics: {encoder_mask_iou_min: 0.981, decoder_mask_iou_min: 0.978}
+      metrics: {encoder_mask_iou_min: 0.981, decoder_mask_iou_min: 0.978, together_mask_iou_min: 0.963, together_flipped_pixels: 492}
       verdict: near-identical
       record: experiments/pixel6/results.md#2026-10-24--sam-21-hiera-tiny
     benchmarks:
       - {measure: device, ms: 770, statistic: median, covers: "encoder", record: experiments/pixel6/results.md#2026-10-24--sam-21-hiera-tiny}
       - {measure: device, ms: 57, statistic: median, covers: "box decoder", record: experiments/pixel6/results.md#2026-10-24--sam-21-hiera-tiny}
       - {measure: summed, ms: 827, covers: "encoder + one box"}
-    limitations: ["the two halves were validated separately at fp16acc32, not together"]
-
+      - {measure: worker, ms: 815, statistic: median, covers: "worker: encoder; + 38 ms per box", record: experiments/pixel6/results.md#2026-10-25--registry-serving-eight-gpu-models-staged-beside-production}
+    limitations: ["the halves were validated separately (worst 0.981 / 0.978); measured together through the serving path (2026-10-25): worst mask IoU 0.963, 492 px -- below either half alone"]
+    resources: {ram_mb: 845, startup_ms: null, notes: "peak RSS; free-memory drop 568 MB"}
+    serving:
+      slot: gpu-sam2
+      profile: sam2.1-hiera-tiny-fast
+      worker_config: hosts/cerebrate-pixel6/cerebrate-hetero/configs/sam2.1-hiera-tiny-fast.conf
   sam2.1-hiera-tiny/gpu-fp16:
     status: rejected
     stages:
@@ -301,10 +318,11 @@ variants:
       - {measure: device, ms: 728, statistic: median, covers: "vision, whole graph", record: experiments/pixel6/results.md#2026-10-25--efficientsam3-rv-m-split-precision-vision-as-a-connected-pipeline-registered-fast}
       - {measure: device, ms: 3280, statistic: median, covers: "grounding per prompt", record: experiments/pixel6/results.md#2026-10-24--efficientsam3-rv-m-our-conversion-checkpoint-rev-85b05896}
       - {measure: summed, ms: 4025, covers: "first prompt on a new image: vision + text 17 ms + grounding"}
-    resources: {ram_mb: null}
+    limitations: ["not stageable on the Pixel 6: loading the FP32 vision + FP32 grounding worker took the phone from 3.3 GB to 850 MB free (2026-10-25); the fast variant needs 2.4 GB"]
+    resources: {ram_mb: null, notes: "load peak > 2.5 GB (free-memory drop); stopped by the test guard before requests"}
 
   efficientsam3-rvm/gpu-trunk-fp32-neck-fp16acc32-grounding-fp16acc32:
-    status: validated
+    status: staged
     stages:
       - {name: vision trunk, artifact: tflite_gpu_vision_trunk, accelerator: gpu, precision: fp32, runtime: litert-2.3.0, phase: image}
       - {name: vision neck, artifact: tflite_gpu_vision_neck, accelerator: gpu, precision: fp16acc32, runtime: litert-2.3.0, phase: image, notes: "trunk output buffer passed straight to the neck"}
@@ -320,9 +338,15 @@ variants:
       - {measure: connected, ms: 518, statistic: median, covers: "vision trunk -> neck, shared buffer, pixels to FPN levels on the host", record: experiments/pixel6/results.md#2026-10-25--efficientsam3-rv-m-split-precision-vision-as-a-connected-pipeline-registered-fast}
       - {measure: device, ms: 1720, statistic: median, covers: "grounding per prompt", record: experiments/pixel6/results.md#2026-10-24--efficientsam3-rv-m-our-conversion-checkpoint-rev-85b05896}
       - {measure: summed, ms: 2255, covers: "first prompt on a new image: vision 518 + text 17 + grounding 1,720"}
+      - {measure: worker, ms: 570, statistic: median, covers: "worker: vision (cached per image_id); + 1,734 ms per prompt", record: experiments/pixel6/results.md#2026-10-25--registry-serving-eight-gpu-models-staged-beside-production}
+      - {measure: round-trip, ms: 3428, statistic: median, covers: "photo + 1 prompt through the test MLServer, warm (a cached image + 2 prompts: 4,483 ms)", record: experiments/pixel6/results.md#2026-10-25--registry-serving-eight-gpu-models-staged-beside-production}
     limitations: ["reduced precision is confined to the neck: over the whole vision graph it drops the 0.510 detection"]
-    resources: {ram_mb: null}
-
+    resources: {ram_mb: 2848, startup_ms: 8263, notes: "peak RSS; free-memory drop 2,365 MB -- admission floor 3,400 MB: starts only on a nearly idle phone"}
+    serving:
+      slot: gpu-esam3
+      profile: efficientsam3-rvm-fast
+      worker_config: hosts/cerebrate-pixel6/cerebrate-hetero/configs/efficientsam3-rvm-fast.conf
+      mlserver_model: efficientsam3-rvm
   efficientsam3-rvm/gpu-vision-fp32-grounding-fp16acc32:
     status: validated
     stages:
@@ -351,7 +375,7 @@ variants:
 
   # ---- RF-DETR-Seg-Nano ------------------------------------------------------
   rf-detr-seg-nano/gpu-fp32:
-    status: validated
+    status: staged
     stages:
       - {name: graph A, artifact: tflite_gpu_graph_a, accelerator: gpu, precision: fp32, weights: fp16, runtime: litert-2.3.0, phase: image}
       - {name: host step, accelerator: host, precision: n/a, runtime: numpy, phase: image, notes: "top-100 proposals by class score -> reference points; memory * 0.5 (model card, verbatim)"}
@@ -366,10 +390,15 @@ variants:
       - {measure: device, ms: 239, statistic: median, covers: "graph A", record: experiments/pixel6/results.md#2026-10-24--published-rf-detr-seg-nano-litert-communityrf-detr-seg-nano-litert-rev-8fee237c}
       - {measure: device, ms: 114, statistic: median, covers: "graph B", record: experiments/pixel6/results.md#2026-10-24--published-rf-detr-seg-nano-litert-communityrf-detr-seg-nano-litert-rev-8fee237c}
       - {measure: summed, ms: 354, covers: "A + B (host step a few ms)"}
+      - {measure: worker, ms: 374, statistic: median, covers: "worker: graph A + graph B", record: experiments/pixel6/results.md#2026-10-25--registry-serving-eight-gpu-models-staged-beside-production}
     limitations: ["fp16 weights: the remaining error vs the original is the published weights' (same on CPU)"]
-
+    resources: {ram_mb: 499, startup_ms: null, notes: "peak RSS; free-memory drop 279 MB"}
+    serving:
+      slot: gpu-rfdetr
+      profile: rf-detr-seg-nano-default
+      worker_config: hosts/cerebrate-pixel6/cerebrate-hetero/configs/rf-detr-seg-nano-default.conf
   rf-detr-seg-nano/gpu-fp16acc32:
-    status: validated
+    status: staged
     stages:
       - {name: graph A, artifact: tflite_gpu_graph_a, accelerator: gpu, precision: fp16acc32, weights: fp16, runtime: litert-2.3.0, phase: image}
       - {name: host step, accelerator: host, precision: n/a, runtime: numpy, phase: image}
@@ -383,7 +412,14 @@ variants:
       - {measure: device, ms: 136, statistic: median, covers: "graph A"}
       - {measure: device, ms: 69, statistic: median, covers: "graph B"}
       - {measure: summed, ms: 205, covers: "A + B", record: experiments/pixel6/results.md#2026-10-24--published-rf-detr-seg-nano-litert-communityrf-detr-seg-nano-litert-rev-8fee237c}
-
+      - {measure: worker, ms: 222, statistic: median, covers: "worker: graph A + graph B (two calls; host step in the adapter)", record: experiments/pixel6/results.md#2026-10-25--registry-serving-eight-gpu-models-staged-beside-production}
+      - {measure: round-trip, ms: 523, statistic: median, covers: "photo in, detections out through the test MLServer, warm", record: experiments/pixel6/results.md#2026-10-25--registry-serving-eight-gpu-models-staged-beside-production}
+    resources: {ram_mb: 399, startup_ms: 3224, notes: "peak RSS; free-memory drop 180 MB"}
+    serving:
+      slot: gpu-rfdetr
+      profile: rf-detr-seg-nano-fast
+      worker_config: hosts/cerebrate-pixel6/cerebrate-hetero/configs/rf-detr-seg-nano-fast.conf
+      mlserver_model: rf-detr-seg-nano
   rf-detr-seg-nano/gpu-fp16:
     status: rejected
     stages:
@@ -397,7 +433,7 @@ variants:
 
   # ---- Depth Anything V2 Small ----------------------------------------------
   depth-anything-v2-small/gpu-fp32:
-    status: validated
+    status: staged
     stages:
       - {name: model, artifact: tflite_gpu, accelerator: gpu, precision: fp32, weights: fp32, runtime: litert-2.3.0, phase: image}
     validation:
@@ -408,9 +444,14 @@ variants:
       record: experiments/pixel6/results.md#2026-10-24--published-depth-anything-v2-small-litert-communitydepth-anything-v2-small-rev-178427e4
     benchmarks:
       - {measure: device, ms: 661, statistic: median, covers: "whole model", record: experiments/pixel6/results.md#2026-10-24--published-depth-anything-v2-small-litert-communitydepth-anything-v2-small-rev-178427e4}
-
+      - {measure: worker, ms: 674, statistic: median, covers: "worker inference, the validated float inputs", record: experiments/pixel6/results.md#2026-10-25--registry-serving-eight-gpu-models-staged-beside-production}
+    resources: {ram_mb: 619, startup_ms: null, notes: "peak RSS; free-memory drop 300 MB"}
+    serving:
+      slot: gpu-depth
+      profile: depth-anything-v2-small-default
+      worker_config: hosts/cerebrate-pixel6/cerebrate-hetero/configs/depth-anything-v2-small-default.conf
   depth-anything-v2-small/gpu-fp16acc32:
-    status: validated
+    status: staged
     stages:
       - {name: model, artifact: tflite_gpu, accelerator: gpu, precision: fp16acc32, weights: fp32, runtime: litert-2.3.0, phase: image}
     validation:
@@ -420,7 +461,14 @@ variants:
       record: experiments/pixel6/results.md#2026-10-24--published-depth-anything-v2-small-litert-communitydepth-anything-v2-small-rev-178427e4
     benchmarks:
       - {measure: device, ms: 340, statistic: median, covers: "whole model", record: experiments/pixel6/results.md#2026-10-24--published-depth-anything-v2-small-litert-communitydepth-anything-v2-small-rev-178427e4}
-
+      - {measure: worker, ms: 334, statistic: median, covers: "worker inference, the validated float inputs", record: experiments/pixel6/results.md#2026-10-25--registry-serving-eight-gpu-models-staged-beside-production}
+      - {measure: round-trip, ms: 595, statistic: median, covers: "photo in, depth out through the test MLServer (gRPC), warm", record: experiments/pixel6/results.md#2026-10-25--registry-serving-eight-gpu-models-staged-beside-production}
+    resources: {ram_mb: 474, startup_ms: 2017, notes: "peak RSS; free-memory drop 221 MB; startup = first request through MLServer incl. worker start; G3D 53 C after 2 min of contention + 60 s sustained"}
+    serving:
+      slot: gpu-depth
+      profile: depth-anything-v2-small-fast
+      worker_config: hosts/cerebrate-pixel6/cerebrate-hetero/configs/depth-anything-v2-small-fast.conf
+      mlserver_model: depth-anything-v2-small
   depth-anything-v2-small/gpu-fp16:
     status: rejected
     stages:
@@ -434,7 +482,7 @@ variants:
 
   # ---- MI-GAN 512 -----------------------------------------------------------
   mi-gan-512/gpu-fp32:
-    status: validated
+    status: staged
     stages:
       - {name: generator, artifact: tflite_gpu, accelerator: gpu, precision: fp32, weights: fp16, runtime: litert-2.3.0, phase: image}
     validation:
@@ -445,10 +493,15 @@ variants:
       record: experiments/pixel6/results.md#2026-10-24--published-mi-gan-512-places2-litert-communitymi-gan-512-places2-litert-rev-179a35d8
     benchmarks:
       - {measure: device, ms: 147, statistic: median, covers: "generator", record: experiments/pixel6/results.md#2026-10-24--published-mi-gan-512-places2-litert-communitymi-gan-512-places2-litert-rev-179a35d8}
+      - {measure: worker, ms: 157, statistic: median, covers: "worker inference", record: experiments/pixel6/results.md#2026-10-25--registry-serving-eight-gpu-models-staged-beside-production}
     limitations: ["fp16 weights: the remaining error vs the original is the published weights'"]
-
+    resources: {ram_mb: 406, startup_ms: null, notes: "peak RSS; free-memory drop 234 MB. Served pipeline vs migan.onnx >= 57.0 dB"}
+    serving:
+      slot: gpu-migan
+      profile: mi-gan-512-default
+      worker_config: hosts/cerebrate-pixel6/cerebrate-hetero/configs/mi-gan-512-default.conf
   mi-gan-512/gpu-fp16:
-    status: validated
+    status: staged
     stages:
       - {name: generator, artifact: tflite_gpu, accelerator: gpu, precision: fp16, weights: fp16, runtime: litert-2.3.0, phase: image}
     validation:
@@ -458,7 +511,14 @@ variants:
       record: experiments/pixel6/results.md#2026-10-24--published-mi-gan-512-places2-litert-communitymi-gan-512-places2-litert-rev-179a35d8
     benchmarks:
       - {measure: device, ms: 79, statistic: median, covers: "generator", record: experiments/pixel6/results.md#2026-10-24--published-mi-gan-512-places2-litert-communitymi-gan-512-places2-litert-rev-179a35d8}
-
+      - {measure: worker, ms: 84, statistic: median, covers: "worker inference", record: experiments/pixel6/results.md#2026-10-25--registry-serving-eight-gpu-models-staged-beside-production}
+      - {measure: round-trip, ms: 419, statistic: median, covers: "photo + mask in, composited PNG out through the test MLServer, warm", record: experiments/pixel6/results.md#2026-10-25--registry-serving-eight-gpu-models-staged-beside-production}
+    resources: {ram_mb: 288, startup_ms: 1442, notes: "peak RSS; free-memory drop 125 MB. Served as the author's pipeline: removed-region PSNR vs migan.onnx >= 44.6 dB"}
+    serving:
+      slot: gpu-migan
+      profile: mi-gan-512-fast
+      worker_config: hosts/cerebrate-pixel6/cerebrate-hetero/configs/mi-gan-512-fast.conf
+      mlserver_model: mi-gan-512
   mi-gan-512/gpu-fp16acc32:
     status: validated
     stages:
@@ -473,7 +533,7 @@ variants:
 
   # ---- OWLv2 B/16 -----------------------------------------------------------
   owlv2-b16/gpu-fp32:
-    status: validated
+    status: staged
     stages:
       - {name: image tower, artifact: tflite_gpu_image_tower, accelerator: gpu, precision: fp32, runtime: litert-2.3.0, phase: image}
       - {name: text tower, artifact: tflite_text_tower, accelerator: gpu+cpu, precision: fp32, runtime: litert-2.3.0, phase: prompt}
@@ -490,8 +550,14 @@ variants:
     benchmarks:
       - {measure: device, ms: 4530, statistic: median, covers: "image tower", record: experiments/pixel6/results.md#2026-10-24--owlv2-b16-ensemble-our-conversion-rev-cfd3195b}
       - {measure: device, ms: 229, statistic: median, covers: "text tower, 32 phrases, GPU + CPU", record: experiments/pixel6/results.md#2026-10-24--owlv2-b16-ensemble-our-conversion-rev-cfd3195b}
-    resources: {ram_mb: null, thermal: "G3D 27 -> 63-66 C over an 8-image run (~36 s busy)"}
-
+      - {measure: worker, ms: 4569, statistic: median, covers: "worker: image tower; text tower 211 ms per 32 phrases", record: experiments/pixel6/results.md#2026-10-25--registry-serving-eight-gpu-models-staged-beside-production}
+      - {measure: round-trip, ms: 5455, statistic: median, covers: "photo + 24 queries through the test MLServer, warm", record: experiments/pixel6/results.md#2026-10-25--registry-serving-eight-gpu-models-staged-beside-production}
+    resources: {ram_mb: 2533, startup_ms: 9522, notes: "peak RSS; free-memory drop 1,924 MB -- admission floor 3,000 MB"}
+    serving:
+      slot: gpu-owlv2
+      profile: owlv2-b16-default
+      worker_config: hosts/cerebrate-pixel6/cerebrate-hetero/configs/owlv2-b16-default.conf
+      mlserver_model: owlv2-b16
   owlv2-b16/gpu-fp16acc32:
     status: rejected
     stages:
@@ -505,7 +571,7 @@ variants:
 
   # ---- DINOv2 ViT-S/14 ------------------------------------------------------
   dinov2-s14/gpu-fp32:
-    status: validated
+    status: staged
     stages:
       - {name: model, artifact: tflite_gpu_erf, accelerator: gpu, precision: fp32, weights: fp16, runtime: litert-2.3.0, phase: image}
     validation:
@@ -516,8 +582,15 @@ variants:
       record: experiments/pixel6/results.md#2026-10-24--published-dinov2-s14-litert-communitydinov2-vit-s14-litert-rev-f3be8d98
     benchmarks:
       - {measure: device, ms: 253, statistic: median, covers: "whole model", record: experiments/pixel6/results.md#2026-10-24--published-dinov2-s14-litert-communitydinov2-vit-s14-litert-rev-f3be8d98}
+      - {measure: worker, ms: 265, statistic: median, covers: "worker inference", record: experiments/pixel6/results.md#2026-10-25--registry-serving-eight-gpu-models-staged-beside-production}
+      - {measure: round-trip, ms: 485, statistic: median, covers: "photo in, embedding out through the test MLServer, warm", record: experiments/pixel6/results.md#2026-10-25--registry-serving-eight-gpu-models-staged-beside-production}
     limitations: ["fp16 weights: rel L2 0.08% vs the original, same on CPU"]
-
+    resources: {ram_mb: 403, startup_ms: 1501, notes: "peak RSS; free-memory drop 150 MB"}
+    serving:
+      slot: gpu-dinov2
+      profile: dinov2-s14-default
+      worker_config: hosts/cerebrate-pixel6/cerebrate-hetero/configs/dinov2-s14-default.conf
+      mlserver_model: dinov2-s14
   dinov2-s14/gpu-fp32-tanh-gelu:
     status: validated
     stages:

@@ -1069,3 +1069,74 @@ EfficientSAM3's final `fast`, and optimization is closed:
   vision is the directly validated figure.
 - Backlog only: the per-image cache of the first fusion layer's
   self-attention (≈190 ms per additional prompt, `fast`).
+
+## 2026-10-25 — Registry serving: eight GPU models staged beside production
+
+Code: [cerebrate-hetero graph mode](../../hosts/cerebrate-pixel6/cerebrate-hetero/README.md),
+[model_hooks.py](../../hosts/cerebrate-pixel6/mlserver/models/cerebrate-graph/model_hooks.py),
+tests in [cerebrate-hetero/tests](../../hosts/cerebrate-pixel6/cerebrate-hetero/tests/).
+Registry: `models/catalog.yaml`, `models/variants.yaml`. All runs side by
+side: test workers on test ports, a test supervisor (port 8777, its own
+staging directory) and a test MLServer (18080-18082); production unchanged.
+
+**Legacy path unchanged:** the new worker build against the deployed one
+(`7554324e`), same configs and requests: 60/60 bit-identical (YOLOE fast and
+default, EdgeSAM fast and default; float and uint8 inputs; cached prompts).
+
+**Fidelity of the serving paths** (worker level; then through MLServer):
+
+| Model / configuration | Check | Result |
+| --- | --- | --- |
+| Depth Anything V2 Small fast / default | validated inputs, raw; photo path (PIL decode + bicubic in the guest) | 8/8 + 8/8 bit-identical (both precisions) |
+| MI-GAN 512 fast / default | validated inputs, raw; photo + mask through the author's pipeline (`migan.onnx`) | raw 8/8 bit-identical; removed-region PSNR vs the author's pipeline ≥ 44.6 dB (fp16) / ≥ 57.0 dB (fp32), outside the mask identical |
+| DINOv2-S/14 | raw; photo path | 8/8 + 8/8 bit-identical |
+| YOLOE-11s | raw; photo path (letterbox as YOLOE-v8s) | 8/8 + 8/8 bit-identical |
+| SAM 2.1 default | photo + 2 boxes, 4 photos, vs the original (3 masks each) | worst mask IoU 1.0000, 0 px |
+| SAM 2.1 fast (both halves at FP16 + FP32 acc., first measured together) | same | worst mask IoU 0.963, 492 px (each half alone ≈ 0.98) |
+| RF-DETR-Seg-Nano fast / default | graph A, B vs the validated device outputs; detections vs the original | A 8/8, B 8/8 (default: B 5/8 -- the host step in the guest's numpy); 25/25 (+1) matched, box IoU ≥ 0.984 / 0.956, mask IoU ≥ 0.988 / 0.983 -- as validated |
+| EfficientSAM3 fast | 11 samples, photo path (torchvision-exact resize, stdlib tokenizer) | 11/11 raw outputs bit-identical to the validated connected chain; 20/20 detections |
+| OWLv2 B/16 | 8 photos x 24 queries vs the original (validation's rule) | 75/75 matched, box IoU ≥ 0.9998, score diff ≤ 0.0002 |
+
+Exactness took four fixes, each found by these checks: Pillow 13.0.0 in the
+guest (12.3's bicubic differs by up to 11 levels when the aspect ratio
+changes); torchvision's uint8 antialiased resize ported bit-exactly
+(fixed-point int16 weights, horizontal pass first); torchvision's x * (1/255)
+normalization, with the worker's product kept out of a fused multiply-add
+(clang contracts x * r - m on arm64); OWLv2's `Owlv2ImageProcessorPil`
+(scipy zoom + Gaussian) ported to numpy (≤ 4.8e-7 of the validated inputs).
+
+**Through the whole path** (test supervisor + test MLServer, gRPC, on demand;
+`mlserver_staged_test.py`, 18/18 checks): all eight READY with no workers;
+first request (worker start + request) and warm round trip:
+
+| Endpoint (profile) | Cold first request | Warm round trip | Worker (inference) | Worker peak RSS | Free-memory drop |
+| --- | --- | --- | --- | --- | --- |
+| depth-anything-v2-small (fast) | 2.0 s | 595 ms | 334 ms | 474 MB | 221 MB |
+| mi-gan-512 (fast) | 1.4 s | 419 ms (photo + mask → PNG) | 84 ms | 288 MB | 125 MB |
+| dinov2-s14 (default) | 1.5 s | 485 ms | 265 ms | 403 MB | 150 MB |
+| yoloe-11s-pf (default) | 2.3 s | 561 ms | 178 ms | 619 MB | 414 MB |
+| sam2.1-hiera-tiny (default) | 4.7 s | 1.86 s (photo + 2 boxes) | 1,438 ms + 60 ms/box | 1,225 MB | 919 MB |
+| rf-detr-seg-nano (fast) | 3.2 s | 523 ms | 222 ms (A + B) | 399 MB | 180 MB |
+| efficientsam3-rvm (fast) | 8.3 s | 3.43 s (photo + 1 prompt); cached image, 2 prompts 4.48 s | 570 ms + 1,734 ms/prompt | 2,848 MB | 2,365 MB |
+| owlv2-b16 (default) | 9.5 s | 5.46 s (photo + 24 queries) | 4,569 ms + 211 ms/32 phrases | 2,533 MB | 1,924 MB |
+
+Default/alternate profiles (not endpoints): Depth FP32 674 ms (619 MB, drop
+300), MI-GAN FP32 157 ms (406 MB, 234), SAM 2.1 fast 815 + 38 ms/box (845
+MB, 568), RF-DETR FP32 374 ms (499 MB, 279). **EfficientSAM3's FP32 default
+can't be staged:** loading it took the phone from 3.3 GB to 850 MB free.
+
+Lifecycle: admission refused OWLv2 (floor 3,000 MB) while EfficientSAM3 held
+memory -- the model stayed READY and served once EfficientSAM3 was unloaded;
+unload stops the worker; OWLv2's worker stopped after its 60 s idle window
+(test setting). Recovery: a killed worker is restarted and the request
+retried transparently (bit-identical); after `kill -9` of the supervisor,
+`pixel-supervisor-watchdog` cleared the orphaned worker, restarted the
+supervisor and reloaded MLServer's not-ready models; the next request
+served normally.
+
+Contention (`graph_contention.py`, 20 s phases): Depth fast + YOLOE fast +
+production MobileNet concurrently -- every output correct; Depth worker p50
+342 → 393 ms, YOLOE 78 → 248 ms (its GPU head queues behind Depth's GPU
+job), MobileNet p99 5.7 → 12.8 ms (one known reconnect). Depth alone
+sustained 60 s: 338-346 ms per 10 s window; G3D 53 °C, skin 34 °C.
+Thermal across the individual runs: G3D ≤ 49 °C (OWLv2), others 29-42 °C.

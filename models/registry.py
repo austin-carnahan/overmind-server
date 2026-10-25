@@ -116,6 +116,8 @@ SUPERVISOR_SOURCE = REPO_ROOT / "hosts/cerebrate-pixel6/cerebrate-supervisor/cer
 PROFILES_FILE = REPO_ROOT / "hosts/cerebrate-pixel6/cerebrate-supervisor/cerebrate-profiles.conf"
 WORKER_CONFIG_DIR = REPO_ROOT / "hosts/cerebrate-pixel6/cerebrate-hetero/configs"
 MLSERVER_MODELS_DIR = REPO_ROOT / "hosts/cerebrate-pixel6/mlserver/models"
+HELD_MODELS_DIR = REPO_ROOT / "hosts/cerebrate-pixel6/mlserver/held-models"   # staged: not loaded by production MLServer
+GUEST_ASSETS_DIR = MLSERVER_MODELS_DIR / "cerebrate-graph" / "assets"
 
 
 def compiled_supervisor():
@@ -323,6 +325,23 @@ class Registry:
                 if sel.get("available") and key in ("default", "fallback") and (v["status"] != "production" or not v.get("serving")):
                     err(f"tasks.{task}.{key}: {ref} is {v['status']} without production serving, but the task is advertised as available")
 
+        # guest-side assets ship in the repo next to the adapter: present, hashes match
+        if check_files:
+            for key, m in models.items():
+                for akey, art in m.get("artifacts", {}).items():
+                    if art.get("target") != "guest":
+                        continue
+                    for fl in art.get("files") or []:
+                        p = GUEST_ASSETS_DIR / fl["name"]
+                        if not p.exists():
+                            err(f"model {key}: guest asset {fl['name']} not in {GUEST_ASSETS_DIR.relative_to(REPO_ROOT)}")
+                        elif sha256_file(p) != fl["sha256"]:
+                            err(f"model {key}: guest asset {fl['name']} sha256 differs from the catalog")
+        # profile names must fit the supervisor's 31-character backend field
+        for prof in list(compiled_supervisor()[1]) + list(parse_profiles_file(PROFILES_FILE)[1]):
+            if len(prof) > 31:
+                err(f"supervisor profile name {prof} is longer than 31 characters")
+
         for inv in self.variants.get("investigations", []):
             problem = self._check_record(inv.get("record"))
             if problem:
@@ -406,7 +425,12 @@ class Registry:
             problems.append(f"profile {s['profile']} declares model {prof['model']}, which isn't one of this variant's files")
         ml = s.get("mlserver_model")
         if ml:
-            ms_path = MLSERVER_MODELS_DIR / ml / "model-settings.json"
+            # Production endpoints live in mlserver/models/ (loaded at startup);
+            # staged ones in mlserver/held-models/ (never loaded by production).
+            ms_path = (MLSERVER_MODELS_DIR if v["status"] == "production" else HELD_MODELS_DIR) / ml / "model-settings.json"
+            other = (HELD_MODELS_DIR if v["status"] == "production" else MLSERVER_MODELS_DIR) / ml / "model-settings.json"
+            if other.exists():
+                problems.append(f"MLServer model {ml} also in {other.parent.parent.name}/ (a {v['status']} endpoint belongs only in {ms_path.parent.parent.name}/)")
             if not ms_path.exists():
                 problems.append(f"MLServer model {ml}: {ms_path.relative_to(REPO_ROOT)} not found")
             else:

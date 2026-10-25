@@ -244,10 +244,16 @@ models:
           pixel6_litert_compiled_gpu: passed
           pixel6_litert_compiled_gpu_fp16acc32: failed
           pixel6_litert_compiled_gpu_fp16: failed
+    worker:
+      binary: cerebrate-hetero
+      port: 8778
+    serving:
+      mlserver_model: yoloe-11s-pf
+      interface: photo-detections-v1
     aliases:
       default: gpu-fp32
       reference: gpu-fp32
-    residency: manual
+    residency: on_demand
     requirements:
       disk_mb: 45.46
       ram_mb: null
@@ -368,12 +374,27 @@ models:
           pixel6_litert_compiled_gpu: passed
           pixel6_litert_compiled_gpu_fp16acc32: passed
           pixel6_litert_compiled_gpu_fp16: failed
+      host_prompt_encoder:
+        # SAM 2.1's box prompt encoder constants for the guest adapter
+        # (gaussian [2,128], corner embeddings, not-a-point), float32 .npz
+        source: {repo: facebook/sam2.1-hiera-tiny, revision: de431c4043854a71d8101e17995dfe596bf101a5}
+        derived: true
+        produced_by: hosts/cerebrate-pixel6/spikes/sam21-gpu/export_prompt_encoder.py
+        target: guest
+        files:
+          - {name: sam2.1-hiera-tiny-prompt-encoder.npz, sha256: bf9ce0c7076f1632cea0ac880b3a8e2fea8cf49eb6df657db28414c85f24dc02, bytes: 5366}
+    worker:
+      binary: cerebrate-hetero
+      port: 8779
+    serving:
+      mlserver_model: sam2.1-hiera-tiny
+      interface: photo-box-masks-v1
     aliases:
       default: gpu-fp32
       reference: gpu-fp32
       quality: gpu-fp32
       fast: gpu-fp16acc32
-    residency: manual
+    residency: on_demand
     requirements:
       disk_mb: 151.9
       ram_mb: null
@@ -449,11 +470,24 @@ models:
           pixel6_litert_compiled_gpu: passed
           pixel6_litert_compiled_gpu_fp16acc32: passed
           pixel6_litert_compiled_gpu_fp16: failed
+      host_tokenizer:
+        # OpenAI CLIP's BPE merges (MIT), for the guest's stdlib tokenizer
+        # (mlserver/models/cerebrate-graph/clip_bpe.py; also OWLv2's)
+        source: {repo: Simon7108528/EfficientSAM3, revision: 85b05896928f974e308f889d7ccb2eefc069de98}
+        target: guest
+        files:
+          - {name: bpe_simple_vocab_16e6.txt.gz, sha256: 924691ac288e54409236115652ad4aa250f48203de50a9e4722a6ecd48d6804a, bytes: 1356917}
+    worker:
+      binary: cerebrate-hetero
+      port: 8781
+    serving:
+      mlserver_model: efficientsam3-rvm
+      interface: photo-text-segmentation-v1
     aliases:
       default: gpu-fp32
       reference: gpu-fp32
       fast: gpu-trunk-fp32-neck-fp16acc32-grounding-fp16acc32
-    residency: manual
+    residency: on_demand
     requirements:
       # The five graphs and the host constant inputs, MiB.
       disk_mb: 464.18
@@ -497,11 +531,17 @@ models:
         target: guest
         files:
           - {name: rfdetr-refpoint_embed.bin, upstream_name: refpoint_embed.bin, sha256: e5713e5fe84a3df26598af65ce29e3a513097b20071849019b3e1f3a8c156c26, bytes: 1600}
+    worker:
+      binary: cerebrate-hetero
+      port: 8780
+    serving:
+      mlserver_model: rf-detr-seg-nano
+      interface: photo-detections-v1
     aliases:
       default: gpu-fp32
       reference: gpu-fp32
       fast: gpu-fp16acc32
-    residency: manual
+    residency: on_demand
     requirements:
       disk_mb: 60.04
       ram_mb: null
@@ -525,11 +565,17 @@ models:
           pixel6_litert_compiled_gpu: passed
           pixel6_litert_compiled_gpu_fp16acc32: passed
           pixel6_litert_compiled_gpu_fp16: failed
+    worker:
+      binary: cerebrate-hetero
+      port: 8774
+    serving:
+      mlserver_model: depth-anything-v2-small
+      interface: photo-depth-v1
     aliases:
       default: gpu-fp32
       reference: gpu-fp32
       fast: gpu-fp16acc32
-    residency: manual
+    residency: on_demand
     requirements:
       disk_mb: 94.92
       ram_mb: null
@@ -554,11 +600,17 @@ models:
           pixel6_litert_compiled_gpu: passed
           pixel6_litert_compiled_gpu_fp16acc32: passed
           pixel6_litert_compiled_gpu_fp16: passed
+    worker:
+      binary: cerebrate-hetero
+      port: 8775
+    serving:
+      mlserver_model: mi-gan-512
+      interface: photo-inpaint-v1
     aliases:
       default: gpu-fp32
       reference: gpu-fp32
       fast: gpu-fp16
-    residency: manual
+    residency: on_demand
     requirements:
       disk_mb: 15.56
       ram_mb: null
@@ -598,10 +650,24 @@ models:
         validated:
           pixel6_litert_compiled_cpu: passed
           pixel6_litert_compiled_gpu_cpu: passed
+      host_box_bias:
+        # the box-head bias [3600,4] float32, added on the host (the G1 GPU broadcast it wrongly)
+        source: {repo: google/owlv2-base-patch16-ensemble, revision: cfd3195ba4ea9592eec887ded089f4c08eff231d}
+        derived: true
+        produced_by: hosts/cerebrate-pixel6/spikes/owlv2-gpu/convert_owlv2.py
+        target: guest
+        files:
+          - {name: owlv2-box_bias.bin, sha256: bf4be1d28eddbfe1fa93c3947309a1fe3cef0e58e06f5adb7dd993f625944de3, bytes: 57600}
+    worker:
+      binary: cerebrate-hetero
+      port: 8782
+    serving:
+      mlserver_model: owlv2-b16
+      interface: photo-text-detection-v1
     aliases:
       default: gpu-fp32
       reference: gpu-fp32
-    residency: manual
+    residency: on_demand
     requirements:
       disk_mb: 590.18
       ram_mb: null
@@ -633,10 +699,16 @@ models:
           - {name: dinov2_s_fp16.tflite, sha256: c0697093316b777de2c79ed895f74c864136840309ecb2aab6f51cbe0c228e7f, bytes: 44893248, origin: dino448/dinov2_s_fp16.tflite}
         validated:
           pixel6_litert_compiled_gpu: passed
+    worker:
+      binary: cerebrate-hetero
+      port: 8776
+    serving:
+      mlserver_model: dinov2-s14
+      interface: photo-embedding-v1
     aliases:
       default: gpu-fp32
       reference: gpu-fp32
-    residency: manual
+    residency: on_demand
     requirements:
       # Both published files (the default variant alone: 42.79).
       disk_mb: 85.6

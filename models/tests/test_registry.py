@@ -33,8 +33,12 @@ class RealRegistry(unittest.TestCase):
         for (task, sel), (ref, slot, profile, ml) in GOLDEN.items():
             got = self.reg.resolve(f"{task}@{sel}")
             self.assertEqual(got, ref, f"{task}@{sel}")
+            if slot is None:   # not a production selection: the variant is pinned, its staging may change
+                self.assertNotEqual(self.reg.variant(got)["status"], "production", f"{task}@{sel}")
+                continue
             s = self.reg.serving_of(got) or {}
             self.assertEqual((s.get("slot"), s.get("profile"), s.get("mlserver_model")), (slot, profile, ml), f"{task}@{sel}")
+            self.assertEqual(self.reg.variant(got)["status"], "production", f"{task}@{sel}")
 
     def test_available_tasks(self):
         avail = {t for t in self.reg.tasks if self.reg.task_available(t)}

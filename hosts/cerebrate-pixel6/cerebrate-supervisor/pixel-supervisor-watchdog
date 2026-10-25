@@ -1,0 +1,88 @@
+#!/usr/bin/env bash
+# pixel-supervisor-watchdog -- keep cerebrate-supervisor running on
+# cerebrate-pixel6 (runs on overmind-01 from a systemd timer, as the adb user).
+#
+# Android has no init service we can install, so after a reboot -- or if the
+# low-memory killer or a crash takes the supervisor -- nothing restarts it.
+# Every run:
+#   1. adb must reach the phone (pixel-adb-reconnect keeps the tcpip session
+#      up; after an Android reboot adb tcpip itself must be re-enabled first --
+#      see the supervisor README's recovery runbook); otherwise exit quietly.
+#   2. If the supervisor's control port is listening, all is well.
+#   3. Otherwise (at most once per COOLDOWN_S): stop orphaned on-demand workers
+#      (cerebrate-hetero processes from this staging directory, reparented to
+#      init -- a new supervisor can't adopt them and would refuse their ports;
+#      they restart on their next request), start the supervisor with the
+#      documented detached command, and confirm the port.
+#   4. Right after a restart, ask MLServer (through the reverse tunnel) to load
+#      every model that isn't READY: a pinned model whose load ran while the
+#      supervisor was down stays unready until loaded again. Only then, so an
+#      operator's deliberate unload isn't undone in normal operation.
+# Never touches a running supervisor, the VM (pixel-vm-watchdog's job), or
+# cerebrate-infer/-generate/-gguf orphans (pinned; they keep serving).
+#
+# Environment (defaults are production): PIXEL_ADB_SERIAL, SUPERVISOR_DIR,
+# SUPERVISOR_PORT, MLSERVER_URL, STATE_DIR. A side-by-side test supervisor is
+# exercised with SUPERVISOR_DIR=/data/local/tmp/cerebrate-stage SUPERVISOR_PORT=8777.
+set -euo pipefail
+
+ADB="/usr/bin/adb -s ${PIXEL_ADB_SERIAL:-192.168.68.60:5555}"
+DIR=${SUPERVISOR_DIR:-/data/local/tmp}
+PORT=${SUPERVISOR_PORT:-8767}
+MLSERVER_URL=${MLSERVER_URL:-http://127.0.0.1:8500}
+STATE_DIR=${STATE_DIR:-/run/pixel-supervisor-watchdog}
+COOLDOWN_S=${COOLDOWN_S:-120}
+mkdir -p "$STATE_DIR"
+
+listening() {
+    $ADB shell "netstat -ltn 2>/dev/null | grep -q ':$PORT '" >/dev/null 2>&1
+}
+
+if [ "$($ADB get-state 2>/dev/null || true)" != "device" ]; then
+    echo "adb not connected to the Pixel; nothing to check"
+    exit 0
+fi
+if listening; then
+    exit 0
+fi
+
+now=$(date +%s)
+last=$(cat "$STATE_DIR/last-start" 2>/dev/null || echo 0)
+if [ $((now - last)) -lt "$COOLDOWN_S" ]; then
+    echo "supervisor not listening on $PORT, but started $((now - last)) s ago; waiting"
+    exit 0
+fi
+echo "supervisor not listening on $PORT: stopping orphaned on-demand workers, then starting it"
+
+# Orphans: cerebrate-hetero from this directory whose parent is init.
+$ADB shell "for p in \$(pidof cerebrate-hetero); do
+  if [ \"\$(readlink /proc/\$p/exe)\" = '$DIR/cerebrate-hetero' ] && [ \"\$(cut -d' ' -f4 /proc/\$p/stat)\" = 1 ]; then
+    echo \"  killing orphaned worker \$p: \$(tr '\0' ' ' < /proc/\$p/cmdline)\"; kill \$p
+  fi
+done" || true
+
+# The documented detached launch; the adb invocation itself doesn't return
+# (a known adb quirk) while the supervisor is fully detached, so bound it.
+timeout 10 $ADB shell "cd $DIR && LD_LIBRARY_PATH=/data/local/tmp nohup setsid ./cerebrate-supervisor > supervisor.log 2>&1 < /dev/null &" >/dev/null 2>&1 || true
+echo "$now" > "$STATE_DIR/last-start"
+for _ in $(seq 1 10); do
+    listening && break
+    sleep 1
+done
+if ! listening; then
+    echo "supervisor did not come up on $PORT; log:"
+    $ADB shell "tail -5 $DIR/supervisor.log" || true
+    exit 1
+fi
+echo "supervisor listening on $PORT"
+
+# MLServer: load every model that isn't READY (if MLServer is reachable).
+index=$(curl -s -m 10 -X POST -H 'Content-Type: application/json' -d '{}' "$MLSERVER_URL/v2/repository/index" || true)
+if [ -z "$index" ]; then
+    echo "MLServer not reachable at $MLSERVER_URL; its own startup will load models against the running supervisor"
+    exit 0
+fi
+for m in $(printf '%s' "$index" | python3 -c 'import json,sys; print(" ".join(m["name"] for m in json.load(sys.stdin) if m.get("state") != "READY"))'); do
+    code=$(curl -s -m 180 -o /dev/null -w '%{http_code}' -X POST "$MLSERVER_URL/v2/repository/models/$m/load" || true)
+    echo "  MLServer load $m: HTTP $code"
+done
