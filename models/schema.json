@@ -1,315 +1,362 @@
 {
- "$schema": "http://json-schema.org/draft-07/schema#",
- "title": "Cerebrate Pixel 6 model catalog",
- "description": "Stage 1 of the Operational Model Catalog (design-notes/cerebrate_pixel6_operational_model_catalog_v4.md, Phase A). Deliberately small: validates the concept against the two models already in production before extending to anything new.",
- "type": "object",
- "required": [
-  "models"
- ],
- "additionalProperties": false,
- "properties": {
-  "models": {
-   "type": "object",
-   "additionalProperties": {
-    "$ref": "#/definitions/model"
-   }
-  },
-  "tasks": {
-   "type": "object",
-   "description": "Task-level selection (added 2026-10-24, lane Step 4): which configuration serves a task by default, which one is the quality alternative, and which one is the fallback. Kept separate from each model's own variant aliases so a task isn't tied to one architecture. Targets are <model>/<variant>; default and fallback must name served variants (scripts/validate-model-catalog checks).",
-   "additionalProperties": {
-    "type": "object",
-    "required": [
-     "default"
-    ],
-    "additionalProperties": false,
-    "properties": {
-     "default": {
-      "type": "string",
-      "pattern": "^[A-Za-z0-9._-]+/[A-Za-z0-9._-]+$"
-     },
-     "quality": {
-      "type": "string",
-      "pattern": "^[A-Za-z0-9._-]+/[A-Za-z0-9._-]+$"
-     },
-     "fallback": {
-      "type": "string",
-      "pattern": "^[A-Za-z0-9._-]+/[A-Za-z0-9._-]+$"
-     },
-     "notes": {
-      "type": "string"
-     }
-    }
-   }
-  }
- },
- "definitions": {
-  "model": {
-   "type": "object",
-   "required": [
-    "capabilities",
-    "artifacts",
-    "residency"
-   ],
-   "additionalProperties": false,
-   "properties": {
-    "capabilities": {
-     "type": "array",
-     "minItems": 1,
-     "items": {
-      "type": "string"
-     },
-     "description": "Public capability names, per catalog v4 Section 10 (e.g. classify-image, chat)."
-    },
-    "description": {
-     "type": "string"
-    },
-    "artifacts": {
-     "type": "object",
-     "minProperties": 1,
-     "additionalProperties": {
-      "$ref": "#/definitions/artifact"
-     },
-     "description": "Keyed by deployment artifact type, e.g. tflite, litertlm, onnx."
-    },
-    "worker": {
-     "$ref": "#/definitions/worker",
-     "description": "The serving worker. Absent = no serving worker yet (validated only); such a model can't be a task's default or fallback."
-    },
-    "execution_preferences": {
-     "type": "object",
-     "additionalProperties": {
-      "type": "array",
-      "items": {
-       "type": "string"
-      }
-     },
-     "description": "Keyed by device (e.g. pixel6), ordered most- to least-preferred backend identifiers."
-    },
-    "residency": {
-     "type": "string",
-     "enum": [
-      "pinned",
-      "on_demand",
-      "manual"
-     ],
-     "description": "Per catalog v4 Section 9. Applied at the worker-process level, not in-process."
-    },
-    "requirements": {
-     "$ref": "#/definitions/requirements"
-    },
-    "variants": {
-     "type": "object",
-     "description": "Configurations by stable identity (what runs where at which precision, e.g. tpu-fp16r-gpu-neck-fp32 -- lane \u00a74.7 rule 9). Preparation details belong in notes, not the name.",
-     "additionalProperties": {
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "Cerebrate Pixel 6 model catalog",
+  "description": "What each model is and does: identity, capabilities, artifacts (upstream provenance plus the exact files deployed, with sha256), model-level aliases, serving interface, and task-level selections. How each configuration executes lives in models/variants.yaml (variants.schema.json); scripts/validate-model-catalog checks both together.",
+  "type": "object",
+  "required": [
+    "models"
+  ],
+  "additionalProperties": false,
+  "properties": {
+    "models": {
       "type": "object",
-      "required": [
-       "role",
-       "status"
-      ],
-      "additionalProperties": false,
-      "properties": {
-       "role": {
-        "type": "string",
-        "enum": [
-         "default",
-         "fast",
-         "alternate",
-         "fallback-internal"
-        ],
-        "description": "The selection alias: default = exact reference; fast = validated performance/quality choice; alternate = validated, not preferred; fallback-internal = used inside another configuration's worker, not selectable."
-       },
-       "status": {
-        "type": "string",
-        "enum": [
-         "validated",
-         "staged",
-         "production",
-         "rejected"
-        ],
-        "description": "validated = passed the validation stages, not served; staged = deployment prepared and tested beside production, not live; production = live; rejected = failed validation."
-       },
-       "serving": {
+      "additionalProperties": {
+        "$ref": "#/definitions/model"
+      }
+    },
+    "tasks": {
+      "type": "object",
+      "description": "Task-level selection, separate from each model's own aliases so a task isn't tied to one architecture. Targets are immutable <model>/<variant> ids. A task with available: true must select production variants with serving for default and fallback; quality may name a validated, unserved variant.",
+      "additionalProperties": {
         "type": "object",
         "required": [
-         "slot",
-         "profile"
+          "default"
         ],
         "additionalProperties": false,
         "properties": {
-         "slot": {
-          "type": "string"
-         },
-         "profile": {
-          "type": "string"
-         }
+          "default": {
+            "type": "string",
+            "pattern": "^[A-Za-z0-9._-]+/[A-Za-z0-9._-]+$"
+          },
+          "quality": {
+            "type": "string",
+            "pattern": "^[A-Za-z0-9._-]+/[A-Za-z0-9._-]+$"
+          },
+          "fallback": {
+            "type": "string",
+            "pattern": "^[A-Za-z0-9._-]+/[A-Za-z0-9._-]+$"
+          },
+          "notes": {
+            "type": "string"
+          },
+          "available": {
+            "type": "boolean",
+            "description": "Advertised as an available service. Requires default and fallback to be production variants with serving (validator)."
+          }
+        }
+      }
+    }
+  },
+  "definitions": {
+    "model": {
+      "type": "object",
+      "required": [
+        "capabilities",
+        "artifacts",
+        "residency"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "capabilities": {
+          "type": "array",
+          "minItems": 1,
+          "items": {
+            "type": "string"
+          },
+          "description": "Public capability names, per catalog v4 Section 10 (e.g. classify-image, chat)."
         },
-        "description": "cerebrate-supervisor slot and fixed profile that serve this configuration."
-       },
-       "latency_ms": {
-        "type": "number",
-        "description": "Measured headline latency on the Pixel 6; benchmark says what it covers."
-       },
-       "benchmark": {
-        "type": "string",
-        "description": "What latency_ms measures, accuracy against the original, and where the run is recorded."
-       },
-       "notes": {
-        "type": "string"
-       }
+        "description": {
+          "type": "string"
+        },
+        "artifacts": {
+          "type": "object",
+          "minProperties": 1,
+          "additionalProperties": {
+            "$ref": "#/definitions/artifact"
+          },
+          "description": "Keyed by deployment artifact type, e.g. tflite, litertlm, onnx."
+        },
+        "worker": {
+          "$ref": "#/definitions/worker",
+          "description": "The serving worker. Absent = no serving worker yet (validated only); such a model can't be a task's default or fallback."
+        },
+        "execution_preferences": {
+          "type": "object",
+          "additionalProperties": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "description": "Keyed by device (e.g. pixel6), ordered most- to least-preferred backend identifiers."
+        },
+        "residency": {
+          "type": "string",
+          "enum": [
+            "pinned",
+            "on_demand",
+            "manual"
+          ],
+          "description": "Per catalog v4 Section 9. Applied at the worker-process level, not in-process."
+        },
+        "requirements": {
+          "$ref": "#/definitions/requirements"
+        },
+        "previous_ids": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "pattern": "^[A-Za-z0-9._-]+$"
+          },
+          "description": "Former catalog keys of this model (renames), still accepted by the CLI's resolve."
+        },
+        "aliases": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "default": {
+              "type": "string",
+              "pattern": "^[A-Za-z0-9._-]+$"
+            },
+            "fast": {
+              "type": "string",
+              "pattern": "^[A-Za-z0-9._-]+$"
+            },
+            "quality": {
+              "type": "string",
+              "pattern": "^[A-Za-z0-9._-]+$"
+            },
+            "reference": {
+              "type": "string",
+              "pattern": "^[A-Za-z0-9._-]+$"
+            },
+            "fallback": {
+              "type": "string",
+              "pattern": "^[A-Za-z0-9._-]+$"
+            }
+          },
+          "description": "Model-level selection aliases -> variant ids in models/variants.yaml. default = what a caller gets without asking; reference = the exact configuration closest to the original model; fast = the validated performance choice; quality = the validated quality choice; fallback = what the model degrades to. Lifecycle status lives on the variant, not here."
+        },
+        "serving": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "interface"
+          ],
+          "properties": {
+            "mlserver_model": {
+              "type": "string"
+            },
+            "interface": {
+              "type": "string",
+              "description": "Name of the request/response contract (hosts/cerebrate-pixel6/mlserver/README.md)."
+            }
+          },
+          "description": "The model's MLServer endpoint and its contract. Present once a variant is staged or in production."
+        }
       }
-     }
-    }
-   }
-  },
-  "artifact": {
-   "type": "object",
-   "required": [
-    "source"
-   ],
-   "additionalProperties": false,
-   "properties": {
+    },
+    "artifact": {
+      "type": "object",
+      "required": [
+        "source"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "source": {
+          "$ref": "#/definitions/source"
+        },
+        "validated": {
+          "type": "object",
+          "additionalProperties": {
+            "type": "string",
+            "enum": [
+              "untested",
+              "pending",
+              "passed",
+              "failed",
+              "experimental"
+            ]
+          },
+          "description": "Keyed by device_backend, e.g. pixel6_nnapi. Measured status only -- never assumed."
+        },
+        "api_requirements": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "modality",
+            "litertlm_surface"
+          ],
+          "description": "Only meaningful for litertlm artifacts. Found necessary after granite-docling-258M (litert-community): its multimodal .litertlm cannot be driven through the plain C API's SessionAdvanced path at all (verified against the real LiteRT-LM source, not assumed) -- only through the full C++ SDK's InputImage(TensorBuffer) construction, or the Kotlin/Swift app layers. Recording this per-artifact so that gap isn't rediscovered per model.",
+          "properties": {
+            "modality": {
+              "type": "string",
+              "enum": [
+                "text",
+                "vision",
+                "audio",
+                "multimodal"
+              ]
+            },
+            "litertlm_surface": {
+              "type": "array",
+              "minItems": 1,
+              "items": {
+                "type": "string",
+                "enum": [
+                  "c_session",
+                  "cpp_session_advanced",
+                  "kotlin_conversation",
+                  "swift_conversation"
+                ]
+              },
+              "description": "Which integration surface(s) this artifact's modality actually requires. c_session (engine.h's plain C API) is confirmed multimodal-incapable -- it can only construct InputImage from raw encoded bytes, which SessionAdvanced's PreprocessContents rejects for anything but text. cpp_session_advanced is the verified-real, heavier full-C++-SDK path (InputImage(TensorBuffer), CMake+Abseil-cpp build, same shape as the LiteRT CompiledModel spike's C++ SDK path) that Cerebrate's existing native-worker architecture could still reach without an Android app. kotlin_conversation/swift_conversation are the model card's only currently-documented working paths, both requiring an actual app, not a native binary."
+            }
+          }
+        },
+        "cerebrate_support": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "native_c_session": {
+              "type": "boolean",
+              "description": "Whether this artifact's required litertlm_surface is reachable from the existing plain-C-API native worker pattern (cerebrate-generate) without further build/architecture changes."
+            },
+            "validated": {
+              "type": "boolean",
+              "description": "Whether native_c_session was actually exercised end-to-end on-device, not assumed from reading the API surface alone."
+            }
+          }
+        },
+        "files": {
+          "type": "array",
+          "minItems": 1,
+          "items": {
+            "type": "object",
+            "required": [
+              "name",
+              "sha256",
+              "bytes"
+            ],
+            "additionalProperties": false,
+            "properties": {
+              "name": {
+                "type": "string",
+                "pattern": "^[A-Za-z0-9._+-]+$",
+                "description": "Flat device file name in /data/local/tmp (cerebrate-supervisor's staging rule); unique across the catalog."
+              },
+              "sha256": {
+                "type": "string",
+                "pattern": "^[0-9a-f]{64}$"
+              },
+              "bytes": {
+                "type": "integer",
+                "minimum": 0
+              },
+              "upstream_name": {
+                "type": "string",
+                "description": "The file's name in its source repo when it differs from name."
+              },
+              "origin": {
+                "type": "string",
+                "description": "Where the validated copy lives on the device today when it isn't yet staged flat (e.g. depth/depth_anything_v2_small.tflite)."
+              }
+            }
+          },
+          "description": "The exact files this artifact deploys, as validated (sha256 of the bytes on the device). scripts/cerebrate-models check-artifacts verifies a directory or the device against them."
+        },
+        "derived": {
+          "type": "boolean",
+          "description": "true = our own conversion of the source (kept in the derived store, models/README.md); false/absent = the published files themselves."
+        },
+        "produced_by": {
+          "type": "string",
+          "description": "Repo path of the script that produced the derived files."
+        },
+        "target": {
+          "type": "string",
+          "enum": [
+            "device",
+            "guest"
+          ],
+          "description": "Where the files are needed: the Android host (default) or the Debian guest's adapter."
+        }
+      }
+    },
     "source": {
-     "$ref": "#/definitions/source"
-    },
-    "validated": {
-     "type": "object",
-     "additionalProperties": {
-      "type": "string",
-      "enum": [
-       "untested",
-       "pending",
-       "passed",
-       "failed",
-       "experimental"
+      "type": "object",
+      "description": "Exactly one provenance shape: a pinned repo revision (e.g. Hugging Face), or a pinned direct-download URL with a checksum.",
+      "oneOf": [
+        {
+          "type": "object",
+          "required": [
+            "repo",
+            "revision"
+          ],
+          "additionalProperties": false,
+          "properties": {
+            "repo": {
+              "type": "string"
+            },
+            "revision": {
+              "type": "string"
+            }
+          }
+        },
+        {
+          "type": "object",
+          "required": [
+            "url",
+            "sha256"
+          ],
+          "additionalProperties": false,
+          "properties": {
+            "url": {
+              "type": "string",
+              "format": "uri"
+            },
+            "sha256": {
+              "type": "string",
+              "pattern": "^[0-9a-f]{64}$"
+            }
+          }
+        }
       ]
-     },
-     "description": "Keyed by device_backend, e.g. pixel6_nnapi. Measured status only -- never assumed."
     },
-    "api_requirements": {
-     "type": "object",
-     "additionalProperties": false,
-     "required": [
-      "modality",
-      "litertlm_surface"
-     ],
-     "description": "Only meaningful for litertlm artifacts. Found necessary after granite-docling-258M (litert-community): its multimodal .litertlm cannot be driven through the plain C API's SessionAdvanced path at all (verified against the real LiteRT-LM source, not assumed) -- only through the full C++ SDK's InputImage(TensorBuffer) construction, or the Kotlin/Swift app layers. Recording this per-artifact so that gap isn't rediscovered per model.",
-     "properties": {
-      "modality": {
-       "type": "string",
-       "enum": [
-        "text",
-        "vision",
-        "audio",
-        "multimodal"
-       ]
-      },
-      "litertlm_surface": {
-       "type": "array",
-       "minItems": 1,
-       "items": {
-        "type": "string",
-        "enum": [
-         "c_session",
-         "cpp_session_advanced",
-         "kotlin_conversation",
-         "swift_conversation"
-        ]
-       },
-       "description": "Which integration surface(s) this artifact's modality actually requires. c_session (engine.h's plain C API) is confirmed multimodal-incapable -- it can only construct InputImage from raw encoded bytes, which SessionAdvanced's PreprocessContents rejects for anything but text. cpp_session_advanced is the verified-real, heavier full-C++-SDK path (InputImage(TensorBuffer), CMake+Abseil-cpp build, same shape as the LiteRT CompiledModel spike's C++ SDK path) that Cerebrate's existing native-worker architecture could still reach without an Android app. kotlin_conversation/swift_conversation are the model card's only currently-documented working paths, both requiring an actual app, not a native binary."
+    "worker": {
+      "type": "object",
+      "required": [
+        "binary",
+        "port"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "binary": {
+          "type": "string",
+          "description": "Which Android worker process type serves this model, e.g. cerebrate-infer, cerebrate-generate."
+        },
+        "port": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 65535
+        }
       }
-     }
     },
-    "cerebrate_support": {
-     "type": "object",
-     "additionalProperties": false,
-     "properties": {
-      "native_c_session": {
-       "type": "boolean",
-       "description": "Whether this artifact's required litertlm_surface is reachable from the existing plain-C-API native worker pattern (cerebrate-generate) without further build/architecture changes."
-      },
-      "validated": {
-       "type": "boolean",
-       "description": "Whether native_c_session was actually exercised end-to-end on-device, not assumed from reading the API surface alone."
+    "requirements": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "disk_mb": {
+          "type": "number"
+        },
+        "ram_mb": {
+          "type": [
+            "number",
+            "null"
+          ],
+          "description": "null where genuinely not yet measured -- do not fill in a guessed value."
+        }
       }
-     }
     }
-   }
-  },
-  "source": {
-   "type": "object",
-   "description": "Exactly one provenance shape: a pinned repo revision (e.g. Hugging Face), or a pinned direct-download URL with a checksum.",
-   "oneOf": [
-    {
-     "type": "object",
-     "required": [
-      "repo",
-      "revision"
-     ],
-     "additionalProperties": false,
-     "properties": {
-      "repo": {
-       "type": "string"
-      },
-      "revision": {
-       "type": "string"
-      }
-     }
-    },
-    {
-     "type": "object",
-     "required": [
-      "url",
-      "sha256"
-     ],
-     "additionalProperties": false,
-     "properties": {
-      "url": {
-       "type": "string",
-       "format": "uri"
-      },
-      "sha256": {
-       "type": "string",
-       "pattern": "^[0-9a-f]{64}$"
-      }
-     }
-    }
-   ]
-  },
-  "worker": {
-   "type": "object",
-   "required": [
-    "binary",
-    "port"
-   ],
-   "additionalProperties": false,
-   "properties": {
-    "binary": {
-     "type": "string",
-     "description": "Which Android worker process type serves this model, e.g. cerebrate-infer, cerebrate-generate."
-    },
-    "port": {
-     "type": "integer",
-     "minimum": 1,
-     "maximum": 65535
-    }
-   }
-  },
-  "requirements": {
-   "type": "object",
-   "additionalProperties": false,
-   "properties": {
-    "disk_mb": {
-     "type": "number"
-    },
-    "ram_mb": {
-     "type": [
-      "number",
-      "null"
-     ],
-     "description": "null where genuinely not yet measured -- do not fill in a guessed value."
-    }
-   }
   }
- }
 }

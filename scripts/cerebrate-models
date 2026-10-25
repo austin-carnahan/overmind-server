@@ -1,0 +1,259 @@
+#!/usr/bin/env python3
+"""Cerebrate model inventory: reads models/catalog.yaml + models/variants.yaml.
+
+  cerebrate-models [list]                 models: aliases, variant statuses, endpoint
+  cerebrate-models show <model>           one model: artifacts, aliases, every variant
+  cerebrate-models variants [--status S] [--model M]
+                                          variants with stages, headline benchmark, verdict
+  cerebrate-models tasks                  task selections, resolved, and availability
+  cerebrate-models resolve <ref>          <model>[@alias] | <model>/<variant> | <task>[@selection]
+                                          -> the variant and its serving path
+  cerebrate-models endpoints              MLServer endpoints (staged and production only)
+  cerebrate-models investigations         closed/deferred investigations
+  cerebrate-models hash <file>...         sha256 + bytes, as catalog `files` entries
+  cerebrate-models check-artifacts (--store [ROOT] | --dir DIR | --device [--origin]) [model...]
+                                          verify recorded sha256s: in the artifact store
+                                          (/mnt/models: HF cache, derived/, direct/), files
+                                          named <name> under DIR, or on the phone in
+                                          /data/local/tmp (--origin: at their origin path)
+  cerebrate-models validate               the same checks as scripts/validate-model-catalog
+
+Needs pyyaml + jsonschema (models/README.md). --device needs adb (overmind-01).
+"""
+import argparse
+import subprocess
+import sys
+from pathlib import Path
+
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "models"))
+import registry  # noqa: E402
+
+ADB_SERIAL = "192.168.68.60:5555"
+
+
+def roles_of(reg, model, variant):
+    return [a for a, t in (reg.models[model].get("aliases") or {}).items() if t == variant]
+
+
+def headline(v):
+    b = v.get("benchmarks") or []
+    if not b:
+        return "-"
+    pref = {"connected": 0, "round-trip": 1, "worker": 2, "summed": 3, "device": 4}
+    best = sorted(b, key=lambda x: pref.get(x["measure"], 9))[0]
+    ms = best["ms"]
+    val = f"{ms / 1000:.2f} s" if ms >= 1000 else f"{ms:g} ms"
+    return f"{val} {best['measure']} ({best['covers']})"
+
+
+def stages_text(v):
+    return " -> ".join(f"{s['name']}:{s['accelerator']}/{s['precision']}" for s in v["stages"])
+
+
+def cmd_list(reg, args):
+    eps = {ref: (name, status) for name, ref, status in reg.endpoints()}
+    print(f"{'model':26} {'capabilities':34} {'aliases':48} {'variants':28} endpoint")
+    for key, m in reg.models.items():
+        vs = reg.model_variants(key)
+        counts = {}
+        for v in vs.values():
+            counts[v["status"]] = counts.get(v["status"], 0) + 1
+        aliases = ", ".join(f"{a}={t}" for a, t in (m.get("aliases") or {}).items() if a != "reference")
+        ep = [f"{eps[f'{key}/{var}'][0]} ({eps[f'{key}/{var}'][1]})" for var in vs if f"{key}/{var}" in eps]
+        print(f"{key:26} {','.join(m['capabilities'])[:34]:34} {aliases[:48]:48} "
+              f"{' '.join(f'{n} {s}' for s, n in sorted(counts.items()))[:28]:28} {', '.join(ep) or '-'}")
+
+
+def cmd_show(reg, args):
+    key = reg.canonical_model(args.model)
+    if key is None:
+        sys.exit(f"no model {args.model}")
+    m = reg.models[key]
+    print(f"{key}" + (f"  (previously {', '.join(m['previous_ids'])})" if m.get("previous_ids") else ""))
+    print(f"  {m.get('description', '').strip()}")
+    print(f"  capabilities: {', '.join(m['capabilities'])}   residency: {m['residency']}   "
+          f"ram_mb: {(m.get('requirements') or {}).get('ram_mb')}   disk_mb: {(m.get('requirements') or {}).get('disk_mb')}")
+    if m.get("serving"):
+        print(f"  MLServer: {m['serving'].get('mlserver_model', '-')}  interface: {m['serving']['interface']}")
+    print("  aliases: " + ", ".join(f"{a} -> {t}" for a, t in (m.get("aliases") or {}).items()))
+    print("  artifacts:")
+    for akey, art in m["artifacts"].items():
+        src = art["source"]
+        src_s = f"{src['repo']}@{src['revision'][:8]}" if "repo" in src else src["url"]
+        print(f"    {akey}: {'derived from ' if art.get('derived') else ''}{src_s}" + (f"  [{art['target']}]" if art.get("target") else ""))
+        for f in art.get("files") or []:
+            print(f"      {f['name']:44} {f['bytes']:>11,} B  sha256 {f['sha256'][:16]}" + (f"  (on device at {f['origin']})" if f.get("origin") else ""))
+    print("  variants:")
+    for var, v in reg.model_variants(key).items():
+        roles = roles_of(reg, key, var)
+        print(f"    {var}  [{v['status']}{'; ' + ', '.join(roles) if roles else ''}{'; internal' if v.get('selectable') is False else ''}]")
+        print(f"      stages: {stages_text(v)}")
+        val = v["validation"]
+        print(f"      validation: {val['verdict']} vs {val['reference']}: " + ", ".join(f"{k}={x}" for k, x in val["metrics"].items()))
+        for b in v.get("benchmarks") or []:
+            ms = b["ms"]
+            print(f"      benchmark: {ms:g} ms {b['measure']}{' ' + b['statistic'] if b.get('statistic') else ''} -- {b['covers']}")
+        if v.get("rejected_because"):
+            print(f"      rejected: {v['rejected_because']}")
+        if v.get("serving"):
+            s = v["serving"]
+            print("      serving: " + ", ".join(f"{k}={x}" for k, x in s.items() if k != "runtime_files"))
+        r = (v.get("resources") or {})
+        if r:
+            print("      resources: " + ", ".join(f"{k}={x}" for k, x in r.items() if k != "notes"))
+
+
+def cmd_variants(reg, args):
+    print(f"{'variant':66} {'status':10} {'roles':22} {'verdict':14} headline")
+    for ref, v in reg.variants["variants"].items():
+        model, var = ref.split("/", 1)
+        if args.status and v["status"] != args.status:
+            continue
+        if args.model and model != reg.canonical_model(args.model):
+            continue
+        roles = ",".join(roles_of(reg, model, var)) + (" internal" if v.get("selectable") is False else "")
+        print(f"{ref:66} {v['status']:10} {roles[:22]:22} {v['validation']['verdict']:14} {headline(v)}")
+
+
+def serving_line(reg, ref):
+    v = reg.variant(ref)
+    s = v.get("serving")
+    if v.get("selectable") is False:
+        parents = [r for r, p in reg.variants["variants"].items() if p.get("internal_fallback") == ref]
+        return f"{v['status']}: internal fallback inside {', '.join(parents) or '(nothing)'}"
+    if not s:
+        return f"not served (status {v['status']})"
+    parts = [f"slot {s['slot']}"]
+    if s.get("profile"):
+        parts.append(f"profile {s['profile']}")
+    if s.get("mlserver_model"):
+        parts.append(f"MLServer model {s['mlserver_model']}")
+    return f"{v['status']}: " + ", ".join(parts)
+
+
+def cmd_tasks(reg, args):
+    for task, sel in reg.tasks.items():
+        avail = reg.task_available(task)
+        print(f"{task}  [{'available' if avail else 'not available'}]")
+        for key in ("default", "quality", "fallback"):
+            if key in sel:
+                ref = reg.resolve(sel[key])
+                print(f"  {key:8} {ref:68} {serving_line(reg, ref)}")
+
+
+def cmd_resolve(reg, args):
+    try:
+        ref = reg.resolve(args.ref)
+    except KeyError as exc:
+        sys.exit(str(exc))
+    v = reg.variant(ref)
+    print(ref)
+    print(f"  {stages_text(v)}")
+    print(f"  {serving_line(reg, ref)}")
+    print(f"  headline: {headline(v)}")
+
+
+def cmd_endpoints(reg, args):
+    eps = reg.endpoints()
+    if not eps:
+        print("no endpoints")
+    for name, ref, status in eps:
+        print(f"{name:22} {status:10} {ref}")
+
+
+def cmd_investigations(reg, args):
+    for inv in reg.variants.get("investigations", []):
+        print(f"[{inv.get('status', 'closed')}] {inv['date']} {inv['topic']}")
+        print(f"    {inv['outcome']}")
+        if inv.get("revisit_if"):
+            print(f"    revisit if: {inv['revisit_if']}")
+        if inv.get("record"):
+            print(f"    record: {inv['record']}")
+
+
+def cmd_hash(reg, args):
+    for p in args.files:
+        path = Path(p)
+        print(f"- {{name: {path.name}, sha256: {registry.sha256_file(path)}, bytes: {path.stat().st_size}}}")
+
+
+def device_sha256(paths):
+    out = subprocess.run(["adb", "-s", ADB_SERIAL, "shell", "sha256sum " + " ".join(paths) + " 2>/dev/null"],
+                         capture_output=True, text=True, timeout=600).stdout
+    got = {}
+    for line in out.splitlines():
+        parts = line.split()
+        if len(parts) == 2:
+            got[parts[1]] = parts[0]
+    return got
+
+
+def cmd_check(reg, args):
+    rows = [(m, a, f) for m, a, f in reg.artifact_files() if not args.models or m in [reg.canonical_model(x) for x in args.models]]
+    bad = 0
+    if args.device:
+        paths = {}
+        for m, a, f in rows:
+            if reg.models[m]["artifacts"][a].get("target") == "guest":
+                continue
+            rel = f.get("origin") if args.origin and f.get("origin") else f["name"]
+            paths[f"{registry.DEVICE_DIR}/{rel}"] = (m, a, f)
+        got = device_sha256(list(paths))
+        for p, (m, a, f) in paths.items():
+            status = "ok" if got.get(p) == f["sha256"] else ("missing" if p not in got else "MISMATCH")
+            bad += status != "ok"
+            print(f"{status:8} {m}/{a}: {p}")
+    elif args.store:
+        for m, a, f in rows:
+            path = reg.store_path(m, a, f, args.store)
+            status = "missing" if not path.exists() else ("ok" if registry.sha256_file(path) == f["sha256"] else "MISMATCH")
+            bad += status != "ok"
+            print(f"{status:8} {m}/{a}: {path}")
+    else:
+        base = Path(args.dir)
+        for m, a, f in rows:
+            cands = [base / f["name"], base / m / f["name"]] + ([base / f["upstream_name"]] if f.get("upstream_name") else [])
+            found = next((c for c in cands if c.exists()), None)
+            if found is None:
+                status = "missing"
+            else:
+                status = "ok" if registry.sha256_file(found) == f["sha256"] else "MISMATCH"
+            bad += status != "ok"
+            print(f"{status:8} {m}/{a}: {found or f['name']}")
+    sys.exit(1 if bad else 0)
+
+
+def cmd_validate(reg, args):
+    errors = reg.validate()
+    for e in errors:
+        print(f"error: {e}", file=sys.stderr)
+    if not errors:
+        print("OK")
+    sys.exit(1 if errors else 0)
+
+
+def main():
+    ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
+    sub = ap.add_subparsers(dest="cmd")
+    sub.add_parser("list")
+    p = sub.add_parser("show"); p.add_argument("model")
+    p = sub.add_parser("variants"); p.add_argument("--status"); p.add_argument("--model")
+    sub.add_parser("tasks")
+    p = sub.add_parser("resolve"); p.add_argument("ref")
+    sub.add_parser("endpoints")
+    sub.add_parser("investigations")
+    p = sub.add_parser("hash"); p.add_argument("files", nargs="+")
+    p = sub.add_parser("check-artifacts"); g = p.add_mutually_exclusive_group(required=True)
+    g.add_argument("--dir"); g.add_argument("--device", action="store_true")
+    g.add_argument("--store", nargs="?", const=registry.STORE_ROOT, help="the artifact store (default /mnt/models)")
+    p.add_argument("--origin", action="store_true"); p.add_argument("models", nargs="*")
+    sub.add_parser("validate")
+    args = ap.parse_args()
+    reg = registry.Registry.load()
+    {"list": cmd_list, None: cmd_list, "show": cmd_show, "variants": cmd_variants, "tasks": cmd_tasks,
+     "resolve": cmd_resolve, "endpoints": cmd_endpoints, "investigations": cmd_investigations,
+     "hash": cmd_hash, "check-artifacts": cmd_check, "validate": cmd_validate}[args.cmd](reg, args)
+
+
+if __name__ == "__main__":
+    main()

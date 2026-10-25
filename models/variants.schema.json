@@ -1,0 +1,135 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "Cerebrate Pixel 6 execution variants",
+  "description": "How each model configuration executes: immutable variant ids (<model>/<variant>, named for what runs where at which precision), lifecycle status, stages, validation evidence, benchmarks with their measurement kind, resources, and the serving profile. Experimental reports stay in the ledgers; entries point at them. Checked with models/schema.json by scripts/validate-model-catalog.",
+  "type": "object",
+  "required": ["schema_version", "variants"],
+  "additionalProperties": false,
+  "properties": {
+    "schema_version": {"const": 1},
+    "variants": {
+      "type": "object",
+      "propertyNames": {"pattern": "^[A-Za-z0-9._-]+/[A-Za-z0-9._-]+$"},
+      "additionalProperties": {"$ref": "#/definitions/variant"}
+    },
+    "investigations": {
+      "type": "array",
+      "description": "Closed or deferred investigations, so they aren't repeated: what was tried, the outcome, and when to revisit.",
+      "items": {"$ref": "#/definitions/investigation"}
+    }
+  },
+  "definitions": {
+    "variant": {
+      "type": "object",
+      "required": ["status", "stages", "validation"],
+      "additionalProperties": false,
+      "properties": {
+        "status": {
+          "type": "string",
+          "enum": ["validated", "staged", "production", "rejected"],
+          "description": "validated = passed the validation stages, not served; staged = serving path built and tested beside production, not live; production = live (an MLServer endpoint, or a deployed profile a production endpoint can be pointed at); rejected = failed validation or not adopted."
+        },
+        "previous_ids": {"type": "array", "items": {"type": "string"}},
+        "selectable": {
+          "type": "boolean",
+          "description": "false = used only inside another variant (e.g. a GPU fallback loaded in a TPU+GPU worker); can't be an alias or task target."
+        },
+        "internal_fallback": {"type": "string", "description": "<model>/<variant> loaded inside this one's worker and used when its preferred stage fails."},
+        "stages": {"type": "array", "minItems": 1, "items": {"$ref": "#/definitions/stage"}},
+        "preparation": {
+          "type": "array",
+          "items": {"type": "string"},
+          "description": "Compatibility transformations applied to the original model, each marked exact or approximate."
+        },
+        "limitations": {"type": "array", "items": {"type": "string"}},
+        "rejected_because": {"type": "string"},
+        "validation": {"$ref": "#/definitions/validation"},
+        "benchmarks": {"type": "array", "items": {"$ref": "#/definitions/benchmark"}},
+        "resources": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "ram_mb": {"type": ["number", "null"], "description": "Worker RSS; null = not measured."},
+            "startup_ms": {"type": ["number", "null"]},
+            "thermal": {"type": ["string", "null"]},
+            "notes": {"type": "string"}
+          }
+        },
+        "serving": {"$ref": "#/definitions/serving"},
+        "notes": {"type": "string"}
+      }
+    },
+    "stage": {
+      "type": "object",
+      "required": ["name", "accelerator", "precision"],
+      "additionalProperties": false,
+      "properties": {
+        "name": {"type": "string"},
+        "artifact": {"type": "string", "description": "Artifact key of the model in models/catalog.yaml (absent for host steps)."},
+        "accelerator": {"type": "string", "enum": ["tpu", "gpu", "cpu", "gpu+cpu", "host"]},
+        "precision": {
+          "type": "string",
+          "enum": ["fp32", "fp16acc32", "fp16", "fp16-relaxed", "int8", "n/a"],
+          "description": "Compute precision. fp16-relaxed = fp32 graph on the Edge TPU with NNAPI's allow_fp16; host steps use n/a."
+        },
+        "weights": {"type": "string", "enum": ["fp32", "fp16", "int8"]},
+        "runtime": {"type": "string", "enum": ["litert-2.3.0", "tflite-2.16.1-nnapi", "litert-lm", "numpy"]},
+        "phase": {"type": "string", "enum": ["image", "prompt"], "description": "image = once per image (cacheable); prompt = once per prompt."},
+        "notes": {"type": "string"}
+      }
+    },
+    "validation": {
+      "type": "object",
+      "required": ["reference", "metrics", "verdict"],
+      "additionalProperties": false,
+      "properties": {
+        "reference": {"type": "string", "description": "The original implementation compared against."},
+        "inputs": {"type": "string"},
+        "metrics": {"type": "object", "description": "Task-level metrics, named for what they measure."},
+        "verdict": {"type": "string", "enum": ["exact", "correct", "near-identical", "degraded", "failed"]},
+        "record": {"type": "string", "description": "Repo path#heading-anchor of the ledger entry."}
+      }
+    },
+    "benchmark": {
+      "type": "object",
+      "required": ["measure", "ms", "covers"],
+      "additionalProperties": false,
+      "properties": {
+        "measure": {
+          "type": "string",
+          "enum": ["device", "worker", "round-trip", "summed", "connected"],
+          "description": "device = synchronized end to end on the phone (input write through output read) for the graph(s) named; worker = cerebrate-hetero's inference time; round-trip = from the guest through MLServer and back; summed = calculated from separately measured stages; connected = measured as one connected pipeline."
+        },
+        "ms": {"type": "number"},
+        "statistic": {"type": "string", "enum": ["p50", "median", "mean", "p90", "p99"]},
+        "covers": {"type": "string"},
+        "record": {"type": "string"}
+      }
+    },
+    "serving": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "slot": {"type": "string"},
+        "profile": {"type": "string"},
+        "worker_config": {"type": "string", "description": "Repo path of the cerebrate-hetero config the profile starts."},
+        "mlserver_model": {"type": "string", "description": "Set only on the variant actually behind that MLServer endpoint."},
+        "runtime_files": {"type": "array", "items": {"type": "string"}, "description": "Shared runtime files the worker config names besides the artifacts (e.g. libtensorflowlite_jni.so)."}
+      }
+    },
+    "investigation": {
+      "type": "object",
+      "required": ["topic", "date", "outcome"],
+      "additionalProperties": false,
+      "properties": {
+        "topic": {"type": "string"},
+        "models": {"type": "array", "items": {"type": "string"}},
+        "date": {"type": "string", "pattern": "^\\d{4}-\\d{2}-\\d{2}$"},
+        "status": {"type": "string", "enum": ["closed", "deferred"]},
+        "outcome": {"type": "string"},
+        "revisit_if": {"type": "string"},
+        "record": {"type": "string"}
+      }
+    }
+  }
+}
