@@ -145,7 +145,9 @@ class Mutations(unittest.TestCase):
         self.assertCaught(m, "tasks.inpainting.default")
 
     def test_available_task_selecting_unserved_variant(self):
-        def m(c, v):
+        def m(c, v):   # independent of which tasks are served: make the default unserved, then advertise it
+            v["variants"]["mi-gan-512/gpu-fp16"]["status"] = "validated"
+            v["variants"]["mi-gan-512/gpu-fp16"].pop("serving", None)
             c["tasks"]["inpainting"]["available"] = True
         self.assertCaught(m, "advertised as available")
 
