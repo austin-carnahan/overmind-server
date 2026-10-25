@@ -949,3 +949,13 @@ instead of 4.6 / 5.5 MB; YOLOE round trip 278 ms (412 after step 1, ~600
 originally); EdgeSAM photo + 1 box 412 ms, cached box 120 ms; MLServer peak
 memory flat at +28 MB from 1 to 96 EdgeSAM boxes (was +229 MB with swapping).
 
+## 2026-10-25 — Deployed: image transport (both steps) and EdgeSAM
+
+Production since 05:50 UTC (MLServer downtime ~61 s). Gate on production
+gRPC: YOLOE results = validated postprocessing 8/8, raw bit-identical 8/8,
+280 ms round trip, ~25 KB responses; EdgeSAM results 8/8, cached 8/8,
+photo + 1 box 438 ms, cached box 121 ms; both workers start on demand in
+2.2 s from the compilation cache; MobileNet 20/20. EdgeSAM's configurations
+are now `production` in the catalog: the `box-refinement` task default is
+served.
+

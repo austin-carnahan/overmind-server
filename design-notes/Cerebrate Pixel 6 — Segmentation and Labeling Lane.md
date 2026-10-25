@@ -1254,4 +1254,8 @@ conditions in Section 4.4).
   returns JSON with compact masks: responses ~25–32 KB instead of
   4.6–5.5 MB, YOLOE round trip 278 ms, MLServer memory flat at +28 MB up to
   96 boxes. EdgeSAM released with it.
+- **2026-10-25** — **Deployed: image transport and EdgeSAM.** Production
+  takes photos and returns JSON results for YOLOE (prompt-free detection
+  and masks) and EdgeSAM (box refinement, the task default); gate passed
+  on production gRPC, MLServer downtime ~61 s. Next: MI-GAN on the TPU.
 

@@ -564,7 +564,7 @@ runbook:
 Rollback A (YOLOE-only build) and B (pre-deployment, `.prev` + guest
 `248c6e3` + the saved unit) remain available.
 
-## Image transport release: photo in, final results out, EdgeSAM served (prepared 2026-10-25)
+## Image transport release: photo in, final results out, EdgeSAM served (deployed 2026-10-25)
 
 One restart for both transport steps and EdgeSAM's release. Phone side:
 the uint8-capable worker (`cerebrate-hetero` `7554324e`) and the four config
@@ -601,4 +601,31 @@ STOP the workers; on the phone move the `*.combined` files back; in the guest
 check out `196f8d0`; start MLServer. OpenCV can stay (unused) or be removed
 (its `cv2/`, `opencv_python_headless*` entries in `site-packages`). Rollbacks A
 and B above remain available behind that.
+
+### Deploy record (2026-10-25, 05:49–05:51 UTC)
+
+1. Pre-flight: `.transport` files verified by hash; guest clean at `196f8d0`;
+   `LIST`: `infer`, `generate`, `gguf`, `graph3` RUNNING, hetero slots
+   STOPPED.
+2. 05:49:24 MLServer stopped; the four workers STOPPED through the
+   supervisor.
+3. Phone: `cerebrate-hetero` (`fad6e56c`) and the four configs kept as
+   `*.combined`; `7554324e` and the uint8 configs moved into place, hashes
+   verified.
+4. Guest: OpenCV wheel (`10818d91…`) unpacked into the venv's
+   `site-packages` (`cv2/`, `opencv_python_headless.libs/`, its dist-info;
+   nothing pre-existing touched); `import cv2` → 5.0.0.
+5. Guest `git pull` → `03aade6`.
+6. 05:50:25 MLServer active, seven models READY including `edgesam3x-box`.
+   **MLServer downtime ~61 s.**
+7. Gate — **PASS** (`mlserver_result_test.py` on production gRPC): YOLOE
+   result mode = the validated postprocessing 8/8, raw mode bit-identical
+   8/8, responses ~25 KB, round trip 280 ms; EdgeSAM result mode 8/8, cached
+   8/8, photo + 1 box 438 ms, cached box 121 ms, 96 boxes in a 144 KB
+   response; both workers started on demand from the compilation cache
+   (2.2 s); MobileNet 20/20; catalog valid; TPU 35 °C, GPU 36 °C. MLServer's
+   peak rose to +107 MB during the test's **raw-mode** EdgeSAM requests
+   (raw tensors still go through MLServer's list encoding) and stayed there
+   through the 24- and 96-box result requests: raw mode is a debug path,
+   not for many boxes.
 

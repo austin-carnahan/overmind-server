@@ -751,7 +751,7 @@ refcounts 0. Through MLServer, an EdgeSAM request with 21 boxes takes ~3.1 s
 round trip against ~1.8 s in the worker (~13 MB in, ~6 MB out through
 MLServer's encode/decode) — part of the transport work after deployment.
 
-## Image transport, step 1: photo input (validated 2026-10-25, not deployed)
+## Image transport, step 1: photo input (deployed 2026-10-25 with step 2)
 
 Models with `cerebrate_graph_photo` in their settings (`yoloe` for
 `yoloe-v8s-pf`, `sam` for the held `edgesam3x-box`) accept the **encoded
@@ -797,7 +797,7 @@ The image-side memory is gone; the per-box response cost (MLServer
 list-converts the raw 256 × 256 logits) is step 2's, so EdgeSAM stays held
 until then.
 
-## Image transport, step 2: final results (validated 2026-10-25; deployed with step 1)
+## Image transport, step 2: final results (deployed 2026-10-25 with step 1; EdgeSAM released)
 
 Photo requests now return **one BYTES output, `result`, holding a JSON
 document** in photo coordinates ([`photo_postprocess.py`](models/cerebrate-graph/photo_postprocess.py),
@@ -845,6 +845,9 @@ Measured on a test MLServer beside production (gRPC, raw inputs):
 | EdgeSAM photo + 1 box / cached + 1 box | 444 / 123 ms | 412 / 120 ms |
 | MLServer peak memory, EdgeSAM + 96 boxes | +229 MB (guest swapping) | **+28 MB** (flat from 1 to 96 boxes) |
 
-This removed the reason EdgeSAM was held: `edgesam3x-box` moves from
-`held-models/` back to `models/` with this release.
+This removed the reason EdgeSAM was held: `edgesam3x-box` moved from
+`held-models/` back to `models/` with this release (deploy record in the
+supervisor README). Raw mode (`output: raw`) still returns raw tensors
+through MLServer's list encoding — keep it for debugging, not for many
+boxes.
 
