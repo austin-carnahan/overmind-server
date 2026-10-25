@@ -5,7 +5,7 @@ vs the validated out-fast), MobileNet (deterministic probe, must classify
 795). Phases: each alone, then all three concurrently. Whether the two
 hetero workers serialize the TPU through tpu_lock depends on how they were
 started (run once per configuration; the label says which).
-usage: hetero_contention3.py <host> <edgesam port> <yoloe port> <infer port> <seconds per phase> <edgesam dir> <hetero dir> <label>"""
+usage: hetero_contention3.py <host> <edgesam port> <yoloe port> <infer port> <seconds per phase> <edgesam dir> <hetero dir> <label> [concurrent]"""
 import sys, socket, threading, time
 import numpy as np
 sys.path.insert(0, "/home/droid/cg-test/mlserver/models/cerebrate-graph")
@@ -38,7 +38,12 @@ def yoloe(stop, rec):
 def mobilenet(stop, rec):
     s = socket.create_connection((HOST, IP)); s.setsockopt(socket.IPPROTO_TCP, socket.TCP_NODELAY, 1); f = s.makefile("rb")
     while not stop.is_set():
-        t = time.perf_counter(); s.sendall(probe); line = f.readline().decode().strip(); dt = (time.perf_counter() - t) * 1000
+        t = time.perf_counter()
+        try:
+            s.sendall(probe); line = f.readline().decode().strip()
+        except (ConnectionError, OSError):
+            line = ""
+        dt = (time.perf_counter() - t) * 1000
         kv = dict(x.split("=", 1) for x in line.split() if "=" in x)
         if "inference_us" not in kv:   # cerebrate-infer's known reset under sustained ~400 req/s: reconnect, count it
             rec.append((dt, 0, 0, -1, None)); s.close()
@@ -60,9 +65,10 @@ def run(names):
         print(f"  {n:9s} {len(r):5d} req | round trip p50 {pct([x[0] for x in r], .5):6.1f} p99 {pct([x[0] for x in r], .99):6.1f} ms | "
               f"worker inference p50 {pct([x[1] for x in r], .5):6.1f} p99 {pct([x[1] for x in r], .99):6.1f} ms"
               + (f" | tpu p50 {pct(tpu, .5):5.1f} p99 {pct(tpu, .99):5.1f} ms" if tpu else "")
-              + f" | correct {sum(checked)}/{len(checked)} | backends {sorted({x[3] for x in r})}", flush=True)
+              + f" | correct {sum(checked)}/{len(checked)} | backends {sorted({x[3] for x in r})}"
+              + (f" | connection resets {sum(1 for x in r if x[3] == -1)}" if n == "mobilenet" else ""), flush=True)
 
 print(f"== {LABEL}")
-for n in ("edgesam", "yoloe", "mobilenet"):
+for n in (() if sys.argv[9:] == ["concurrent"] else ("edgesam", "yoloe", "mobilenet")):
     print(f" alone: {n}"); run([n])
 print(" all three concurrently"); run(["edgesam", "yoloe", "mobilenet"])

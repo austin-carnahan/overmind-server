@@ -137,9 +137,10 @@ models:
       yoloe-v8s-seg-pf): boxes, masks and one of 4,585 built-in labels per
       object, no prompt. Segmentation and Labeling Lane, Step 2B. Served by
       cerebrate-hetero through the supervisor's hetero1 slot as MLServer
-      model yoloe-v8s-pf. Prepared and tested off production 2026-10-24;
-      deployment scheduled (see cerebrate-supervisor's README, "hetero1
-      slot"), so not yet live.
+      model yoloe-v8s-pf. Deployment staged with EdgeSAM (combined worker
+      build fad6e56c, config-file profiles with the NNAPI compilation cache)
+      and tested beside production 2026-10-24; not yet live -- see
+      cerebrate-supervisor's README, "Combined deployment".
     # Capability names beyond catalog v4's initial list, introduced by the
     # lane for prompt-free detection and masks.
     capabilities:
@@ -188,6 +189,31 @@ models:
     worker:
       binary: cerebrate-hetero
       port: 8772
+    # Configurations by identity (staged = deployment prepared, not live).
+    variants:
+      tpu-fp16r-gpu-head-fp16acc32:
+        role: fast
+        status: staged
+        serving: {slot: hetero1, profile: yoloe-v8s-fast}
+        latency_ms: 78
+        benchmark: >-
+          Worker-side inference p50 (combined build, config profile), 640x640
+          input; 132/132 detections vs the original, box IoU >= 0.965, mask
+          IoU mean 0.996. Round trip from the guest ~150 ms. Startup 2.2 s
+          from the compilation cache. experiments/pixel6/results.md.
+        notes: TPU backbone with the max-pool padding correction; GPU-only mixed model inside as the fallback.
+      gpu-fp32:
+        role: default
+        status: staged
+        serving: {slot: hetero1, profile: yoloe-v8s-default}
+        latency_ms: 202
+        benchmark: Worker-side inference; exact (132/132, box and mask IoU 1.0000).
+      gpu-mixed:
+        role: fallback-internal
+        status: staged
+        latency_ms: 107
+        benchmark: Worker-side inference, fp16 + fp32 accumulation; 132/132 plus one extra detection.
+        notes: Not a profile -- loaded inside tpu-fp16r-gpu-head-fp16acc32 and used when its TPU stage can't load or fails (DONE backend code 2).
     # The three-way backend distinction, most- to least-preferred. Each maps
     # to a fixed supervisor profile (the slot's "backend" field):
     #   fast     tpu_gpu_hybrid: TPU fp16-relaxed backbone + GPU fp16acc32
@@ -217,3 +243,137 @@ models:
       # Worker RSS, fast profile with its fallback loaded; measured flat
       # over a 3-minute sustained run. The default profile's not measured.
       ram_mb: 713
+
+  edgesam3x:
+    description: >-
+      EdgeSAM-3x promptable segmentation (box prompt -> mask), our
+      conversions of the original (bicubic) model. Segmentation and Labeling
+      Lane, Step 4: the task default for box refinement. Served by
+      cerebrate-hetero through the supervisor's hetero2 slot as MLServer
+      model edgesam3x-box: one request carries image (ResizeLongestSide 1024,
+      normalized, padded, NHWC float32), image_id (int64) and boxes
+      [N,1,4]; the worker caches each image's embedding (4 images, LRU), so
+      later boxes for the same image_id skip the encoder. Deployment staged
+      with YOLOE (combined build fad6e56c) and tested beside production
+      2026-10-24; not yet live. Licence: S-Lab License 1.0, non-commercial
+      use only.
+    capabilities:
+      - refine-box-mask
+    # Our own conversions of the one checkpoint (no published LiteRT/TPU
+    # conversion; the authors' ONNX swaps the trained bicubic upsample for
+    # bilinear). Derived files from hosts/cerebrate-pixel6/spikes/edgesam-tpu.
+    artifacts:
+      tflite_tpu_trunk:
+        # edgesam3x-enc-tpu-fp32.tflite, sha256 112fe4df... (trunk + fuse,
+        # exact bicubic construction, tanh GELU -- an approximate rewrite)
+        source: {repo: chongzhou/EdgeSAM, revision: e0564124628944e1622973d4e0f68158b46f035a}
+        validated:
+          pixel6_tflite_nnapi_tpu_fp16relaxed: passed
+      tflite_gpu_neck:
+        # edgesam3x-enc-neck-gpu.tflite, sha256 d73e25b1... (LayerNorm neck)
+        source: {repo: chongzhou/EdgeSAM, revision: e0564124628944e1622973d4e0f68158b46f035a}
+        validated:
+          pixel6_litert_compiled_gpu: passed
+      tflite_gpu_encoder:
+        # edgesam3x-enc-gpu.tflite, sha256 0506eb5d... (whole encoder,
+        # near-exact GELU: 3 px over 132 masks at fp32)
+        source: {repo: chongzhou/EdgeSAM, revision: e0564124628944e1622973d4e0f68158b46f035a}
+        validated:
+          pixel6_litert_compiled_gpu: passed
+          pixel6_litert_compiled_gpu_fp16acc32: passed
+      tflite_gpu_box_decoder:
+        # edgesam3x-box-decoder.tflite, sha256 3ca83921... + five constant
+        # input files (constants as inputs: baked, the G1 GPU got them wrong)
+        source: {repo: chongzhou/EdgeSAM, revision: e0564124628944e1622973d4e0f68158b46f035a}
+        validated:
+          pixel6_litert_compiled_gpu: passed
+          pixel6_litert_compiled_gpu_fp16acc32: passed
+    worker:
+      binary: cerebrate-hetero
+      port: 8773
+    variants:
+      tpu-fp16r-gpu-neck-fp32:
+        role: fast
+        status: staged
+        serving: {slot: hetero2, profile: edgesam3x-fast}
+        latency_ms: 194
+        benchmark: >-
+          Worker-side, image + 1 box (+10 boxes 692 ms; a box against a cached
+          image 52-54 ms); round trip from the guest +~260 ms for the 12.6 MB
+          image. vs the original: worst mask IoU 0.944, mean 0.9983 (132 YOLOE
+          boxes); vs LVIS ground truth 87.1% mean IoU, same as the original.
+          Startup: 45 s cold, 2.2 s from the compilation cache.
+          experiments/pixel6/results.md.
+        notes: >-
+          Preparation: gelu tanh-approximation (approximate functional
+          rewrite), bicubic restoration (exact), chain-form elementwise ops
+          (TPU compiler op-order workaround), neck on the GPU at fp32. GPU
+          fp32 box decoder. The exact GPU fp32 encoder is loaded as the
+          fallback.
+      gpu-fp32:
+        role: default
+        status: staged
+        serving: {slot: hetero2, profile: edgesam3x-default}
+        latency_ms: 313
+        benchmark: Worker-side, image + 1 box (a box against a cached image 57 ms); exact vs the original (1 px over 132 masks); 87.1% vs LVIS ground truth.
+      gpu-mixed:
+        role: alternate
+        status: validated
+        latency_ms: 169
+        benchmark: Encoder only (fp16 + fp32 accumulation), worst mask IoU 0.920 vs the original. Not served.
+    residency: on_demand
+    requirements:
+      # The four models and five decoder constants, MiB.
+      disk_mb: 64.62
+      # Worker RSS after a 3-minute sustained run (fast profile).
+      ram_mb: 593
+
+  sam2.1-hiera-tiny:
+    description: >-
+      SAM 2.1 Hiera-Tiny (facebook/sam2.1-hiera-tiny), the higher-quality box
+      refiner: 88.3% mean IoU vs LVIS ground truth (EdgeSAM 87.1%), notably
+      better on large deformable objects (87.6% vs 83.0%), at ~7x the
+      latency. Validated on the Pixel 6 GPU (spike sam21-gpu: our prepared
+      encoder + the constants-as-inputs box decoder, exact at fp32); no
+      serving worker yet.
+    capabilities:
+      - refine-box-mask
+    artifacts:
+      tflite_gpu_encoder:
+        # our prepared encoder (spikes/sam21-gpu/prepare_encoder.py)
+        source: {repo: facebook/sam2.1-hiera-tiny, revision: de431c4043854a71d8101e17995dfe596bf101a5}
+        validated:
+          pixel6_litert_compiled_gpu: passed
+          pixel6_litert_compiled_gpu_fp16acc32: passed
+      tflite_gpu_box_decoder:
+        # constants-as-inputs box decoder (spikes/sam21-gpu/bisect_box_decoder.py)
+        source: {repo: facebook/sam2.1-hiera-tiny, revision: de431c4043854a71d8101e17995dfe596bf101a5}
+        validated:
+          pixel6_litert_compiled_gpu: passed
+    variants:
+      gpu-fp32:
+        role: default
+        status: validated
+        latency_ms: 1460
+        benchmark: Encoder 1.38 s + ~80 ms per box (one box), measured separately; exact vs the original.
+      gpu-mixed:
+        role: fast
+        status: validated
+        latency_ms: 770
+        benchmark: Encoder only (fp16 + fp32 accumulation), worst mask IoU ~0.98.
+    residency: manual
+
+# Task-level selection (lane Step 4 decision, 2026-10-24), separate from each
+# model's own aliases. Default and fallback must be served configurations.
+tasks:
+  box-refinement:
+    default: edgesam3x/tpu-fp16r-gpu-neck-fp32
+    quality: sam2.1-hiera-tiny/gpu-fp32
+    fallback: edgesam3x/gpu-fp32
+    notes: >-
+      EdgeSAM for ordinary object masks; SAM 2.1 for bedding, fabric, large
+      deformable objects and explicit quality-sensitive requests (no serving
+      worker yet). EdgeSAM's best-of-3 is not an automatic fallback.
+  prompt-free-segmentation:
+    default: yoloe-v8s-pf/tpu-fp16r-gpu-head-fp16acc32
+    fallback: yoloe-v8s-pf/gpu-fp32

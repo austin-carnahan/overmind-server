@@ -76,6 +76,7 @@
 #include <fcntl.h>
 #include <signal.h>
 #include <sys/file.h>
+#include <sys/stat.h>
 #include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -556,7 +557,10 @@ int main(int argc, char** argv) {
   std::string config_desc, token;
   long tpu_load_us = 0;
   if (cfg.mode == "tpu+gpu") {
-    if (!cfg.nnapi_cache_dir.empty()) token = cache_token(cfg.tpu);  // empty if unreadable: the load below fails too
+    if (!cfg.nnapi_cache_dir.empty()) {
+      mkdir(cfg.nnapi_cache_dir.c_str(), 0777);  // one level; NNAPI writes nothing into a missing directory
+      token = cache_token(cfg.tpu);  // empty if unreadable: the load below fails too
+    }
     long t = now_us();
     bool readable = cfg.nnapi_cache_dir.empty() || !token.empty();
     if (readable && tpu_init(cfg.tflite_lib.c_str(), cfg.tpu.c_str(), 1, token.empty() ? NULL : cfg.nnapi_cache_dir.c_str(), token.empty() ? NULL : token.c_str()) == 0) {

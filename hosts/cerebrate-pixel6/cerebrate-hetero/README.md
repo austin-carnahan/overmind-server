@@ -5,10 +5,11 @@
 MLServer model `yoloe-v8s-pf` (on demand) and the catalog entry are built and
 tested side by side with production; the production swap waits for its
 window ([runbook](../cerebrate-supervisor/README.md#scheduled-deploy-runbook)).
-The staged deployment uses the first build (`bfcb8e8b`); the **serving-worker
-build below (`86e1c006`) adds prompt models, per-image caching, compilation
-caching and health, and serves YOLOE bit-identically** — whether the
-scheduled deploy takes it is open.
+**Combined deployment staged (2026-10-24):** the serving-worker build
+(`fad6e56c`) for both YOLOE (`hetero1`) and EdgeSAM (`hetero2`), one process
+per model, config-file profiles with compilation caching — see the
+supervisor README's "Combined deployment"; the first build (`bfcb8e8b`)
+stays staged as `cerebrate-hetero.yoloe-only` for rollback.
 
 Heterogeneous inference worker for the Pixel 6: one model served as a
 pipeline of accelerator stages — **stage 1 on the Edge TPU, stage 2 on the

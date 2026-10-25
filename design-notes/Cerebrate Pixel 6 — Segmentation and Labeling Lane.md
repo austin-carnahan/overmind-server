@@ -1215,4 +1215,17 @@ conditions in Section 4.4).
   and over a 3-minute sustained run. Not yet deployed: supervisor profiles
   and MLServer models for EdgeSAM, and whether the scheduled YOLOE deploy
   takes this build.
+- **2026-10-24** — **Combined YOLOE + EdgeSAM deployment prepared** for the
+  scheduled window: supervisor slot `hetero2` for EdgeSAM beside `hetero1`
+  (one process per model, config-file profiles with the persistent
+  compilation cache and validated GPU fallbacks), MLServer model
+  `edgesam3x-box` (on demand), catalog variants with production/staged/
+  validated roles and the `box-refinement` / `prompt-free-segmentation` task
+  maps (validator checks that defaults and fallbacks are served). Side by
+  side with production: supervisor chains for both models, MLServer
+  integration (start, inference, cache, idle stop, crash recovery, unload),
+  contention with production MobileNet (p99 5 → 32 ms accepted and
+  documented), a rehearsed rollback to the YOLOE-only build. Found: MLServer
+  gRPC's 4 MB default request cap (a runbook decision). Next after the
+  deploy: image transport, then MI-GAN on the TPU.
 

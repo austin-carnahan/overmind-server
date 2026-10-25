@@ -380,36 +380,102 @@ untouched.
 
 ### Scheduled deploy runbook
 
-Already staged on the device (new filenames only): `cerebrate-hetero`
-(sha256 `bfcb8e8b…1d49`) and the three `.tflite` files (hashes in
-`models/catalog.yaml`). The new supervisor binary is this directory's
-`cerebrate-supervisor` (sha256 `0921ae22…068a`, built with the Deploy
-command above). An MLServer **restart** is required — a repository `load`
-would import the cached old adapter module, which ignores on-demand
-residency. Expected MLServer downtime about a minute.
+Superseded by the combined YOLOE + EdgeSAM deployment below (same window,
+newer worker and supervisor builds); its rollback A returns to this
+YOLOE-only state.
+
+## Combined deployment: YOLOE + EdgeSAM (prepared 2026-10-24, deploy scheduled)
+
+**Staged and tested beside production; not deployed.** One worker binary
+(`cerebrate-hetero` build `fad6e56c`), **one process per model**:
+
+| Slot | Port | Profiles (fixed `--config` file in /data/local/tmp) | MLServer model |
+| --- | --- | --- | --- |
+| `hetero1` | 8772 | `yoloe-v8s-fast` (TPU + GPU, GPU mixed fallback), `yoloe-v8s-default` (GPU fp32) | `yoloe-v8s-pf` (fast, on demand) |
+| `hetero2` | 8773 | `edgesam3x-fast` (TPU trunk + GPU neck + GPU box decoder, exact GPU encoder fallback), `edgesam3x-default` (GPU fp32) | `edgesam3x-box` (fast, on demand) |
+
+Each slot accepts only its own model's profiles. Every profile is a config
+file ([`cerebrate-hetero/configs/`](../cerebrate-hetero/configs/)) with the
+persistent NNAPI compilation cache (`/data/local/tmp/nnapi-cache`, already
+populated by the tests, so the first production start is warm) and the
+validated GPU fallback. The YOLOE request/response API and outputs are
+unchanged. Workers bind only after every model is compiled, and MLServer's
+adapter confirms model and profile by DESCRIBE before serving.
+
+**Staged on the device** (hashes verified): `cerebrate-hetero` (`fad6e56c`,
+the combined build) and `cerebrate-hetero.yoloe-only` (`bfcb8e8b`, the
+previous build, kept for rollback A); the four `.conf` files; EdgeSAM's
+four `.tflite` files and five decoder constants (hashes in
+`models/catalog.yaml`); the YOLOE files from the earlier staging. The new
+supervisor binary is this directory's `cerebrate-supervisor` (`bad5bed3`).
+
+### Tests (2026-10-24, test supervisor on 8777, test MLServer on 18080–18082)
+
+| Test | Result |
+| --- | --- |
+| [`edgesam_supervisor_chain.py`](../cerebrate-hetero/tests/edgesam_supervisor_chain.py) | 14/14: each slot refuses the other model's profiles; `edgesam3x-fast` START 46.4 s cold (empty cache, directory created), **2.5 s** from the cache, outputs bit-identical across the restart; masks vs the original: fast worst IoU 0.9441 / mean 0.99830 (the validated chain), default exact (1 px); worker-side image + 1 box 193–197 ms fast, 313 ms default; a cached box 52–57 ms |
+| [`hetero_supervisor_chain.py`](../cerebrate-hetero/tests/hetero_supervisor_chain.py) (YOLOE, config profiles) | both profiles bit-identical to the validated outputs (8/8); START 6.1 s cold, ~2.2 s cached |
+| [`mlserver_combined_test.py`](../cerebrate-hetero/tests/mlserver_combined_test.py) | both on-demand models READY with no workers; first requests start them from the cache; YOLOE and EdgeSAM outputs bit-identical to the direct runs, EdgeSAM cache hit identical; idle stop after the window, restart on the next request; EdgeSAM worker `kill -9` → one failed request, model stays READY, next request restarts it; unload → all slots STOPPED, refcounts 0; pinned canary unaffected |
+| contention, supervisor-launched deployment configs + production MobileNet ([`hetero_contention3.py`](../cerebrate-hetero/tests/hetero_contention3.py)) | all outputs correct, no fallbacks, no MobileNet resets; EdgeSAM worker p50 195 → 248 ms, YOLOE p50 78 → 86 ms (p99 225), MobileNet p99 5.4 → 32 ms |
+| rollback A rehearsal: supervisor from `aa1d8cd` (test build) + `cerebrate-hetero.yoloe-only` | 16/16, YOLOE bit-identical in both profiles, `hetero2` unknown; combined build restored and verified |
+
+Found: **MLServer's gRPC endpoint caps requests at 4 MB** by default — YOLOE's
+image (4.9 MB) and EdgeSAM's (12.6 MB) are over it; REST is unaffected
+(see step 4 below). Production processes, models and the guest checkout
+were unchanged throughout.
+
+### MobileNet under TPU contention (accepted tradeoff)
+
+With both heterogeneous workers busy, production MobileNet stays correct on
+every response, its median is unchanged (2.5 ms round trip), and its p99
+rises from ~5 ms to ~32–37 ms: its requests queue behind EdgeSAM's 128 ms
+TPU job, since the driver runs one TPU job at a time. A lock between our
+workers changes nothing (measured), so scheduling stays as it is.
+Accepted 2026-10-24: MobileNet has no latency target, and the tail only
+appears while EdgeSAM is encoding. Revisit if a caller needs a MobileNet
+latency bound (options then: a TPU-time budget per EdgeSAM request, or
+splitting EdgeSAM's TPU stage).
+
+### Runbook (combined)
+
+Expected MLServer downtime about a minute; a restart is required (the adapter
+module changed).
 
 1. Record `LIST` from the production supervisor (expected: `infer`,
    `generate`, `gguf`, `graph3` RUNNING).
-2. In the guest: `sudo systemctl stop cerebrate-mlserver`. Its unloads STOP
-   the workers they started; confirm `LIST` shows everything STOPPED and
-   `STOP` anything left.
-3. Swap the supervisor (as in the 2026-10-23 deploy record): push the new
-   binary as `cerebrate-supervisor.new`; copy the running one (`908f5620…48fd9`)
-   over `cerebrate-supervisor.prev`; kill the old supervisor; move the new
-   one into place; relaunch with the `nohup setsid` command. Its READY line
-   must list `…,graph3,hetero1`.
-4. In the guest: `git pull --ff-only` (adapter with on-demand residency and
-   the `yoloe-v8s-pf` model folder).
-5. `sudo systemctl start cerebrate-mlserver`. The pinned models START their
-   workers through the new supervisor; `yoloe-v8s-pf` loads without one.
-6. Verify: repository index all READY including `yoloe-v8s-pf`; `LIST`
-   shows the four workers RUNNING and `hetero1` STOPPED; MobileNet still
-   classifies 795; `hetero_ondemand.py first http://127.0.0.1:8080 <gateway>
-   8767 /home/droid/cg-test/hetero` → 4/4 bit-identical, `hetero1` RUNNING;
-   a temperature reading. Ten minutes later `hetero1` is STOPPED again.
+2. In the guest: `sudo systemctl stop cerebrate-mlserver`; confirm `LIST`
+   shows everything STOPPED; `STOP` anything left.
+3. Swap the supervisor: push this directory's binary as
+   `cerebrate-supervisor.new` (`bad5bed3`); copy the running one
+   (`908f5620…48fd9`) over `cerebrate-supervisor.prev`; kill the old
+   supervisor; move the new one into place; relaunch with the `nohup
+   setsid` command. Its READY line must list `…,graph3,hetero1,hetero2`.
+4. **Decision at the window — gRPC message limit.** To accept image
+   requests over gRPC, add `Environment=MLSERVER_GRPC_MAX_MESSAGE_LENGTH=67108864`
+   to `/etc/systemd/system/cerebrate-mlserver.service` (and to the unit
+   block in the MLServer README), then `sudo systemctl daemon-reload`. REST
+   works either way.
+5. In the guest: `git pull --ff-only` (the adapter, both model folders).
+6. `sudo systemctl start cerebrate-mlserver`.
+7. Verify: repository index all READY including `yoloe-v8s-pf` and
+   `edgesam3x-box`; `LIST` shows the four workers RUNNING and `hetero1`,
+   `hetero2` STOPPED; MobileNet classifies 795; then (with step 4)
+   `mlserver_combined_test.py infer 127.0.0.1:8081 <gateway> 8767
+   /home/droid/cg-test/hetero /home/droid/cg-test/edgesam` → every output
+   identical and both slots RUNNING (or, without step 4,
+   `hetero_ondemand.py first http://127.0.0.1:8080 <gateway> 8767
+   /home/droid/cg-test/hetero` for YOLOE); a temperature reading. Ten
+   minutes later both slots are STOPPED again.
 
-**Rollback:** stop MLServer and confirm every slot is STOPPED (including
-`hetero1`); kill the supervisor; `mv cerebrate-supervisor.prev
-cerebrate-supervisor`; relaunch; in the guest check out `248c6e3` (the
-commit before this change) or revert this commit; start MLServer. The
-staged hetero files are inert without the slot and can stay or be removed.
+**Rollback A — to the YOLOE-only build** (rehearsed): stop MLServer,
+confirm every slot STOPPED; kill the supervisor; install the supervisor
+binary from commit `aa1d8cd` (`git show
+aa1d8cd:hosts/cerebrate-pixel6/cerebrate-supervisor/cerebrate-supervisor`,
+`0921ae22…068a`) and relaunch; `cp cerebrate-hetero.yoloe-only
+cerebrate-hetero`; in the guest check out `aa1d8cd`; start MLServer.
+
+**Rollback B — to the pre-deployment state:** stop MLServer, confirm every
+slot STOPPED; kill the supervisor; `mv cerebrate-supervisor.prev
+cerebrate-supervisor`; relaunch; in the guest check out `248c6e3`; start
+MLServer. Staged files and the compilation cache are inert without the
+slots.

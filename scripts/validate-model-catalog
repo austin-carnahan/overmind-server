@@ -43,6 +43,26 @@ def main() -> int:
             print(f"error: {path}: {err.message}", file=sys.stderr)
         return 1
 
+    # Cross-references the schema can't express: task targets must exist, and
+    # a task's default and fallback must be served (a worker and a profile).
+    models = catalog.get("models", {})
+    problems = []
+    for task, sel in (catalog.get("tasks") or {}).items():
+        for key in ("default", "quality", "fallback"):
+            if key not in sel:
+                continue
+            name, variant = sel[key].split("/", 1)
+            m = models.get(name)
+            v = (m or {}).get("variants", {}).get(variant)
+            if v is None:
+                problems.append(f"tasks.{task}.{key}: {sel[key]} is not a cataloged model variant")
+            elif key != "quality" and ("worker" not in m or "serving" not in v):
+                problems.append(f"tasks.{task}.{key}: {sel[key]} has no serving worker/profile")
+    if problems:
+        for p in problems:
+            print(f"error: {p}", file=sys.stderr)
+        return 1
+
     model_count = len(catalog.get("models", {}))
     print(f"OK: {CATALOG_PATH.relative_to(REPO_ROOT)} is valid ({model_count} model(s))")
     return 0

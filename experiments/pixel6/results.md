@@ -889,3 +889,30 @@ G1 GPU defect, again rule 3: the box decoder with the prompt encoder's tiny
 constants (2×128 Gaussian matrix, 2×256 corner embeddings) baked in gave mean
 mask IoU 0.35 on the GPU (exact on the CPU); fed as inputs it is exact.
 
+## 2026-10-24 — Combined YOLOE + EdgeSAM deployment: integration tests (staged, not live)
+
+Worker build `fad6e56c`, supervisor `bad5bed3` (slots `hetero1`, `hetero2`),
+config-file profiles with the persistent NNAPI compilation cache; tested
+beside production (test supervisor on 8777, test MLServer on 18080–18082).
+
+| Check | Result |
+| --- | --- |
+| EdgeSAM supervisor chain | 14/14; START 46.4 s cold, 2.5 s cached; fast masks = validated chain, default exact; image + 1 box 193–197 ms (fast), 313 ms (default); cached box 52–57 ms |
+| YOLOE supervisor chain (config profiles) | outputs bit-identical, both profiles; START 6.1 s cold, ~2.2 s cached |
+| MLServer, both models on demand (gRPC, raw bytes) | outputs bit-identical to direct runs; cache hit; idle stop + restart; crash recovery; unload clean |
+| Contention with production MobileNet | all correct; EdgeSAM p50 195 → 248 ms, YOLOE p50 78 → 86 ms, MobileNet p99 5.4 → 32 ms, 0 resets |
+| Rollback A (YOLOE-only build) | 16/16, YOLOE bit-identical |
+| MLServer gRPC | default 4 MB request cap refuses both image models; 64 MB setting works |
+
+**Deployment state of the variant registry** (`models/catalog.yaml`):
+
+| Model | Configuration | Role | Status | Serving | Latency (Pixel 6) |
+| --- | --- | --- | --- | --- | --- |
+| yoloe-v8s-pf | tpu-fp16r-gpu-head-fp16acc32 | fast (task default) | staged | hetero1 / yoloe-v8s-fast | 78 ms worker |
+| yoloe-v8s-pf | gpu-fp32 | default (task fallback) | staged | hetero1 / yoloe-v8s-default | 202 ms worker |
+| yoloe-v8s-pf | gpu-mixed | inside fast | staged | — | 107 ms |
+| edgesam3x | tpu-fp16r-gpu-neck-fp32 | fast (box-refinement default) | staged | hetero2 / edgesam3x-fast | 194 ms image + 1 box; 52–54 ms per cached box |
+| edgesam3x | gpu-fp32 | default (box-refinement fallback) | staged | hetero2 / edgesam3x-default | 313 ms image + 1 box |
+| edgesam3x | gpu-mixed | alternate | validated | — | 169 ms encoder |
+| sam2.1-hiera-tiny | gpu-fp32 | box-refinement quality | validated | — (no worker) | ~1.46 s one box |
+

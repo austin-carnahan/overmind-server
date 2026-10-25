@@ -704,3 +704,38 @@ image and ~5 MB of outputs as JSON number lists. Fine for occasional calls;
 real use wants a smaller payload (uint8 image, only the outputs
 post-processing needs) or a binary path, which is the planned transport
 work.
+
+## Combined deployment: `edgesam3x-box` beside `yoloe-v8s-pf` (prepared 2026-10-24, deploy scheduled)
+
+**Staged and tested beside production; deploy in the scheduled window**
+(runbook: [supervisor README, "Combined deployment"](../cerebrate-supervisor/README.md#combined-deployment-yoloe--edgesam-prepared-2026-10-24-deploy-scheduled)).
+
+- **`models/edgesam3x-box/`** — EdgeSAM-3x box refinement on slot `hetero2`
+  (port 8773), profile `edgesam3x-fast`, on demand with a 10-minute idle
+  stop; same shared graph adapter (symlinks), no adapter change. Inputs:
+  `image` FP32 `[1,1024,1024,3]` (ResizeLongestSide 1024, SAM
+  normalization, padded, NHWC), `image_id` INT64 `[1]`, `boxes` FP32
+  `[N,1,4]` (xyxy in that 1024 frame); outputs `mask_logits [N,1,256,256]`
+  (upscale with the original `postprocess_masks`) and `iou [N,1,1]`. A
+  request without `image` decodes against the worker's cached embedding
+  for `image_id`; after an idle stop or eviction it fails with "send the
+  image again". Task-level selection lives in `models/catalog.yaml`
+  (`box-refinement`).
+- **gRPC message limit:** MLServer's gRPC endpoint refuses requests over
+  4 MB by default ("Received message larger than max"), which both image
+  models exceed; `MLSERVER_GRPC_MAX_MESSAGE_LENGTH=67108864` lifts it (the
+  test instance ran with it). REST is unaffected but costs JSON encoding
+  (~2 s per YOLOE request); gRPC with raw tensor bytes is the efficient
+  path. Adding it to the unit is a decision in the runbook.
+
+Tested with a second MLServer instance hosting both models plus a pinned
+canary (gRPC, raw tensor bytes;
+[`mlserver_combined_test.py`](../cerebrate-hetero/tests/mlserver_combined_test.py)):
+READY without workers; first requests start both workers from the
+compilation cache; outputs bit-identical to the direct runs (EdgeSAM's
+cache hit too); idle stop and restart; EdgeSAM worker killed → one failed
+request, model stays READY, next request restarts it; unload → all STOPPED,
+refcounts 0. Through MLServer, an EdgeSAM request with 21 boxes takes ~3.1 s
+round trip against ~1.8 s in the worker (~13 MB in, ~6 MB out through
+MLServer's encode/decode) — part of the transport work after deployment.
+

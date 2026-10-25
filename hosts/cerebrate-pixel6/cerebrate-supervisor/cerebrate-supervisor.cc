@@ -48,6 +48,11 @@
 // declared model and its complete command line, so a client still chooses
 // only among fixed configurations -- never a path or an argument. The
 // backend field widened from 8 to 32 characters for the profile names.
+// A second slot, "hetero2" (port 8773), serves EdgeSAM the same way; each
+// slot accepts only its own model's profiles (one model per process). Every
+// profile now starts the worker from a fixed config file in the staging
+// directory (persistent NNAPI compilation cache, validated GPU fallback);
+// the file's contents are the deployment's, not the client's.
 //
 // Deliberately NOT built: arbitrary command execution, arbitrary binary
 // paths, arbitrary ports, orphan-worker adoption after a supervisor
@@ -88,14 +93,18 @@ struct HeteroProfile {
   const char* argv[10];  // NULL-terminated
 };
 static const HeteroProfile kHeteroProfiles[] = {
-  {"yoloe-v8s-fast", STAGING_DIR "/yoloe-v8s-pf-backbone-tpu-fp32.tflite",
-   {"tpu+gpu", STAGING_DIR "/libtensorflowlite_jni.so", STAGING_DIR "/yoloe-v8s-pf-backbone-tpu-fp32.tflite",
-    STAGING_DIR "/yoloe-v8s-pf-head-gpu.tflite", "fp16acc32", STAGING_DIR "/yoloe-v8s-pf-gpu-nhwc.tflite", "fp16acc32", NULL}},
-  {"yoloe-v8s-default", STAGING_DIR "/yoloe-v8s-pf-gpu-nhwc.tflite",
-   {"gpu", STAGING_DIR "/yoloe-v8s-pf-gpu-nhwc.tflite", "fp32", NULL}},
+  // YOLOE-v8s prompt-free: fast = TPU backbone + GPU fp16acc32 head (GPU mixed
+  // fallback); default = GPU fp32.
+  {"yoloe-v8s-fast", STAGING_DIR "/yoloe-v8s-pf-backbone-tpu-fp32.tflite", {"--config", STAGING_DIR "/yoloe-v8s-fast.conf", NULL}},
+  {"yoloe-v8s-default", STAGING_DIR "/yoloe-v8s-pf-gpu-nhwc.tflite", {"--config", STAGING_DIR "/yoloe-v8s-default.conf", NULL}},
+  // EdgeSAM-3x box refinement: fast = TPU trunk + GPU fp32 neck + GPU fp32 box
+  // decoder (exact GPU fp32 encoder as fallback); default = GPU fp32.
+  {"edgesam3x-fast", STAGING_DIR "/edgesam3x-enc-tpu-fp32.tflite", {"--config", STAGING_DIR "/edgesam3x-fast.conf", NULL}},
+  {"edgesam3x-default", STAGING_DIR "/edgesam3x-enc-gpu.tflite", {"--config", STAGING_DIR "/edgesam3x-default.conf", NULL}},
 };
 static const int kNumHeteroProfiles = sizeof(kHeteroProfiles) / sizeof(kHeteroProfiles[0]);
 #define kHeteroBackends "yoloe-v8s-fast,yoloe-v8s-default"
+#define kEdgesamBackends "edgesam3x-fast,edgesam3x-default"
 
 struct WorkerSlot {
   const char* name;         // protocol identifier, e.g. "infer"
@@ -127,6 +136,8 @@ static WorkerSlot g_slots[] = {
   {"graph2", STAGING_DIR "/cerebrate-graph", 8770, 1, 0, kGraphBackends, 120000, STOPPED, 0, "", "", "", 0, 0, NULL},
   {"graph3", STAGING_DIR "/cerebrate-graph", 8771, 1, 0, kGraphBackends, 120000, STOPPED, 0, "", "", "", 0, 0, NULL},
   {"hetero1", STAGING_DIR "/cerebrate-hetero", 8772, 1, 0, kHeteroBackends, 120000, STOPPED, 0, "", "", "", 0,
+   1, STAGING_DIR "/litert-2.3.0:" STAGING_DIR},
+  {"hetero2", STAGING_DIR "/cerebrate-hetero", 8773, 1, 0, kEdgesamBackends, 120000, STOPPED, 0, "", "", "", 0,
    1, STAGING_DIR "/litert-2.3.0:" STAGING_DIR},
 };
 
@@ -548,7 +559,7 @@ int main(int argc, char** argv) {
     char cmd[16], worker[32], model[256], backend[32], mmproj[256];
     read_request(client, cmd, worker, model, backend, mmproj);
 
-    char response[2048];  // LIST: one status line per slot, seven slots
+    char response[2048];  // LIST: one status line per slot, eight slots
     if (cmd[0] == '\0') {
       snprintf(response, sizeof(response), "ERROR: empty request\n");
     } else {
