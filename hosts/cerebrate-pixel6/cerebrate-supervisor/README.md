@@ -548,7 +548,9 @@ runbook:
    validated outputs, backend 1 (TPU + GPU), worker 78–81 ms, round trip
    ~0.6 s; `hetero1` started on demand from the compilation cache
    (`load_us` 2.16 s); MobileNet 20/20 classified 795; catalog valid;
-   TPU 24 °C, GPU 25 °C, big cores 29 °C.
+   TPU 24 °C, GPU 25 °C, big cores 29 °C. Idle stop: `hetero1` STOPPED at
+   03:55:37, ten minutes after the last gate request, with every model
+   still READY.
 
 Rollback A (YOLOE-only build) and B (pre-deployment, `.prev` + guest
 `248c6e3` + the saved unit) remain available.
