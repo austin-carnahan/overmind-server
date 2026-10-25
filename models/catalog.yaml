@@ -751,7 +751,7 @@ tasks:
     available: false
   image-embedding:
     default: dinov2-s14/gpu-fp32
-    available: false
+    available: true
   fixed-class-segmentation:
     default: rf-detr-seg-nano/gpu-fp16acc32
     quality: rf-detr-seg-nano/gpu-fp32

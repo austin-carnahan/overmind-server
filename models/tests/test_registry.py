@@ -25,8 +25,9 @@ GOLDEN = {
     ("relative-depth", "quality"): ("depth-anything-v2-small/gpu-fp32", "gpu-depth", "depth-anything-v2-small-default", None),
     ("inpainting", "default"): ("mi-gan-512/gpu-fp16", "gpu-migan", "mi-gan-512-fast", "mi-gan-512"),
     ("inpainting", "quality"): ("mi-gan-512/gpu-fp32", "gpu-migan", "mi-gan-512-default", None),
+    ("image-embedding", "default"): ("dinov2-s14/gpu-fp32", "gpu-dinov2", "dinov2-s14-default", "dinov2-s14"),
 }
-AVAILABLE = {"prompt-free-segmentation", "box-refinement", "relative-depth", "inpainting"}
+AVAILABLE = {"prompt-free-segmentation", "box-refinement", "relative-depth", "inpainting", "image-embedding"}
 
 
 class RealRegistry(unittest.TestCase):

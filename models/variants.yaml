@@ -569,7 +569,7 @@ variants:
 
   # ---- DINOv2 ViT-S/14 ------------------------------------------------------
   dinov2-s14/gpu-fp32:
-    status: staged
+    status: production
     stages:
       - {name: model, artifact: tflite_gpu_erf, accelerator: gpu, precision: fp32, weights: fp16, runtime: litert-2.3.0, phase: image}
     validation:
