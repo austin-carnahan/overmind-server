@@ -627,5 +627,7 @@ and B above remain available behind that.
    peak rose to +107 MB during the test's **raw-mode** EdgeSAM requests
    (raw tensors still go through MLServer's list encoding) and stayed there
    through the 24- and 96-box result requests: raw mode is a debug path,
-   not for many boxes.
+   not for many boxes. Idle stop: `hetero1` and `hetero2` both STOPPED at
+   06:01:53, ten minutes after the gate's last requests, every model still
+   READY.
 
