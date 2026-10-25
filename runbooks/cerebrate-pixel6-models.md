@@ -193,8 +193,13 @@ first.
       -DSTAGING_DIR="/data/local/tmp/cerebrate-stage"`) from
       `/data/local/tmp/cerebrate-stage/`. That directory holds the profiles
       file, configs, and symlinks to the staged models.
-   2. Run a test MLServer in the guest on ports 18080–18082 from a copy of the
-      held settings, with `cerebrate_graph_supervisor_port: 8777`.
+   2. Build the test repository from the checkout with
+      [`make_test_repository.py`](../hosts/cerebrate-pixel6/cerebrate-hetero/tests/make_test_repository.py)
+      `<checkout> ~/cg-test/stage/mlserver/models <endpoint>...`. It applies
+      exactly two overrides: the supervisor port (8777), and the model path
+      moved into the test staging directory, the only place the test
+      supervisor approves. Then run a test MLServer on ports 18080–18082
+      from that repository.
    3. Run [`mlserver_staged_test.py`](../hosts/cerebrate-pixel6/cerebrate-hetero/tests/mlserver_staged_test.py).
 
    The test MLServer command:

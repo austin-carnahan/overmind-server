@@ -156,7 +156,7 @@ need no new code.
    - Our conversions go into `derived/<model>/`, with `derived: true` and
      `produced_by`.
 
-   Then run `scripts/cerebrate-models check-artifacts --store`.
+   Then run `scripts/cerebrate-models check-artifacts --store <model>`.
 3. **Stage it.** `scripts/stage-model <model>`, then
    `check-artifacts --device`.
 4. **Write the worker config.** Write
@@ -191,8 +191,10 @@ need no new code.
    - the profile is in the slot;
    - the endpoint serves the profile;
    - the folder is in the right place.
-9. **Test side by side.** Run the test supervisor and test MLServer with
-   `tests/mlserver_staged_test.py`, and record the results.
+9. **Test side by side.** Run the test supervisor, then build a test
+   MLServer repository from the checkout with
+   `tests/make_test_repository.py`. Run `tests/mlserver_staged_test.py` and
+   record the results.
 10. **Promote, in a window.** Move the folder to `models/`, set the variant to
     `production`, load the endpoint, and run the promotion gate
     (`mlserver_staged_test.py --only <endpoint>`). A task becomes

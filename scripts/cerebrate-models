@@ -205,7 +205,7 @@ def cmd_check(reg, args):
             print(f"{status:8} {m}/{a}: {p}")
     elif args.store:
         for m, a, f in rows:
-            path = reg.store_path(m, a, f, args.store)
+            path = reg.store_path(m, a, f, args.store_root)
             status = "missing" if not path.exists() else ("ok" if registry.sha256_file(path) == f["sha256"] else "MISMATCH")
             bad += status != "ok"
             print(f"{status:8} {m}/{a}: {path}")
@@ -245,7 +245,8 @@ def main():
     p = sub.add_parser("hash"); p.add_argument("files", nargs="+")
     p = sub.add_parser("check-artifacts"); g = p.add_mutually_exclusive_group(required=True)
     g.add_argument("--dir"); g.add_argument("--device", action="store_true")
-    g.add_argument("--store", nargs="?", const=registry.STORE_ROOT, help="the artifact store (default /mnt/models)")
+    g.add_argument("--store", action="store_true", help="the artifact store (--store-root, default /mnt/models)")
+    p.add_argument("--store-root", default=registry.STORE_ROOT)
     p.add_argument("--origin", action="store_true"); p.add_argument("models", nargs="*")
     sub.add_parser("validate")
     args = ap.parse_args()
