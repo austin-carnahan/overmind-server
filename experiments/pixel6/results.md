@@ -869,3 +869,23 @@ not an automatic fallback: vs its single mask it helps > 5 points on 6
 objects and hurts on 8 (mirror 0.78 → 0.58, blanket 0.65 → 0.46, person
 0.95 → 0.83), large objects 83.1% vs 83.0%.
 
+## 2026-10-24 — cerebrate-hetero as the common serving worker (EdgeSAM + YOLOE)
+
+Code: [cerebrate-hetero](../../hosts/cerebrate-pixel6/cerebrate-hetero/README.md)
+(build `86e1c006`): config files, prompt model with per-image embedding
+cache, NNAPI compilation cache, health in DESCRIBE, optional TPU lock.
+
+| Check | Result |
+| --- | --- |
+| EdgeSAM fast, 132 boxes | identical to the validated chain (worst mask IoU 0.9441, mean 0.99830 vs the original) |
+| single-process latency (worker side) | image + 1 box 194 ms, + 10 boxes 692 ms; cached image + 1 box 54 ms, + 10 boxes 646 ms |
+| startup | cold 44.8 s (TPU compile 42.7 s), from the compilation cache 2.2 s (TPU 0.1 s) |
+| fallback (no TPU model) | exact GPU fp32 encoder, masks exact, 312 ms for image + 1 box |
+| YOLOE fast, positional mode | 8/8 bit-identical to the validated outputs |
+| contention with YOLOE + production MobileNet | all outputs correct; EdgeSAM p50 195 → 250 ms, YOLOE 78 → 84–115 ms, MobileNet p99 5 → 37 ms; TPU lock: no material effect |
+| sustained 3 min (image + 4 boxes) | p50 352–353 ms flat, outputs identical; TPU ≤ 47 °C, GPU ≤ 48 °C; RSS 593 MB |
+
+G1 GPU defect, again rule 3: the box decoder with the prompt encoder's tiny
+constants (2×128 Gaussian matrix, 2×256 corner embeddings) baked in gave mean
+mask IoU 0.35 on the GPU (exact on the CPU); fed as inputs it is exact.
+

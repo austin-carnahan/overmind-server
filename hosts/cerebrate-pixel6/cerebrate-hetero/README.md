@@ -5,6 +5,10 @@
 MLServer model `yoloe-v8s-pf` (on demand) and the catalog entry are built and
 tested side by side with production; the production swap waits for its
 window ([runbook](../cerebrate-supervisor/README.md#scheduled-deploy-runbook)).
+The staged deployment uses the first build (`bfcb8e8b`); the **serving-worker
+build below (`86e1c006`) adds prompt models, per-image caching, compilation
+caching and health, and serves YOLOE bit-identically** — whether the
+scheduled deploy takes it is open.
 
 Heterogeneous inference worker for the Pixel 6: one model served as a
 pipeline of accelerator stages — **stage 1 on the Edge TPU, stage 2 on the
@@ -93,6 +97,57 @@ Load: `fast` 5.1–5.2 s (TPU compile ~3.8 s); `default` 1.2 s. Resident:
   requests/s (≈60 MB/s) to `cerebrate-infer` gets reset roughly once per
   30 s — reproduced with this worker stopped. Clients should reconnect on
   reset.
+
+## Serving worker: prompt models, image cache, compilation cache, health (2026-10-24)
+
+One worker for both validated heterogeneous pipelines (YOLOE-v8s, EdgeSAM),
+not a framework: the positional forms above are unchanged; a config file
+(`--config`, see the source header; examples in [`configs/`](configs/))
+adds:
+
+- **NNAPI compilation caching** for the TPU stage (`nnapi_cache_dir`; token =
+  file name + FNV-1a 64 of the model's contents + precision + runtime, so a
+  changed model never reaches an old blob — the G1 driver also rejects stale
+  ones). EdgeSAM's trunk: cold load 42.7 s, then **0.1 s**; the whole
+  worker (TPU + three GPU models) is ready in 2.2 s.
+- **A prompt model** run once per prompt against the pipeline's outputs,
+  each input sourced from a pipeline output, the request (stacked
+  `[N, ...]`), or a constant file (written into its resident buffer once at
+  load; pipeline outputs once per request). For EdgeSAM: the box decoder
+  against the image embedding, `boxes [N,1,4]` in, `mask_logits
+  [N,1,256,256]` + `iou [N,1,1]` out.
+- **Per-image cache** of pipeline outputs under a caller's `image_id`
+  (int64), LRU, `cache_entries`: `{image, image_id, boxes}` encodes, caches
+  and decodes; `{image_id, boxes}` decodes against the cache (refused with
+  "send the image again" when evicted); `{image, image_id}` just encodes.
+- **Health** in DESCRIBE: requests, pipeline runs, TPU failures, fallback
+  runs, prompt runs, cache hits/misses, cached images, errors, last error;
+  plus real input shapes and the prompt interface.
+- **Readiness** unchanged: binds only after every model is compiled.
+- **`tpu_lock`** (optional flock around TPU runs among workers sharing the
+  path). Measured: no benefit — the driver already serializes TPU jobs —
+  so the example configs leave it off.
+
+The box decoder takes the box itself (prompt encoding in the graph), with
+the prompt encoder's 2×128 Gaussian matrix and corner embeddings fed as
+**inputs**: baked into the graph, even these tiny constants made the G1 GPU
+wrong (mean mask IoU 0.35; exact on the CPU) — lane §4.5 rule 3 holds at any
+size.
+
+### Tests (Pixel 6, hand-launched on spare ports; [`tests/`](tests/))
+
+| Test | Result |
+| --- | --- |
+| EdgeSAM fast, 8 photos × all 132 YOLOE boxes ([`edgesam_worker_test.py`](tests/edgesam_worker_test.py)) | masks vs the original EdgeSAM: worst IoU 0.9441, mean 0.99830 — identical to the validated chain (same 7,392 px); outputs bit-identical across builds |
+| single-process latency, worker side (round trip from the guest) | image + 1 box **194 ms** (470), image + 10 boxes **692 ms** (1,006), cached + 1 box 54 ms (58), cached + 10 boxes 646 ms (688); decoder ~55–58 ms per box |
+| cache | the 4 most recent images served from the cache, bit-identical; evicted ones refused |
+| fallback (TPU model missing) | warning, then every request on the exact GPU fp32 encoder (backend 2): masks exact (1 px), image + 1 box 312 ms |
+| YOLOE fast on this build, positional mode ([`yoloe_regression.py`](tests/yoloe_regression.py)) | 8/8 photos bit-identical to the validated outputs |
+| contention: EdgeSAM + YOLOE + production MobileNet, 30 s phases, with and without `tpu_lock` ([`hetero_contention3.py`](tests/hetero_contention3.py)) | every output identical to solo, MobileNet 795 on every response, no fallbacks; EdgeSAM p50 195 → 250 ms concurrent (mostly GPU sharing with YOLOE's head; its TPU p50 stays 128 ms), YOLOE p50 78 → 84–115 ms, MobileNet p99 5 → 37 ms (queued behind EdgeSAM's 128 ms TPU job); the lock changes nothing material |
+| sustained, 3 min of image + 4 boxes ([`edgesam_sustained.py`](tests/edgesam_sustained.py)) | p50 352–353 ms in every 30 s window, all outputs identical, backend 1 throughout; TPU ≤ 47 °C, GPU ≤ 48 °C, big cores ≤ 76 °C; worker RSS 593 MB afterwards (YOLOE's 708 MB), 2.4 GB free with both running |
+
+The ~260 ms between worker time and round trip is the 12.6 MB fp32 image over
+the AVF path — the transport item (uint8 input) is still open.
 
 ## Build
 

@@ -283,7 +283,9 @@ on this device:
    shape-dependent steps for the fixed input size (DINOv2: precompute the
    interpolated position embeddings; use the class token without expanding it),
    which removed `BROADCAST_TO` and `GATHER_ND`.
-3. **No large baked constants consumed directly** (SAM decoder: the
+3. **No baked constants consumed directly — of any size** (EdgeSAM's box
+   decoder, 2026-10-24: a 2×128 projection matrix and 2×256 embeddings baked
+   in gave mean mask IoU 0.35; fed as inputs, exact). (SAM decoder: the
    `[1,256,64,64]` dense prompt and `[4096,256]` positional table). Feed them
    as model inputs, written once per process — the fully GPU-resident decoder
    went from mask IoU ≈ 0 to exact. (Size/dtype threshold not established;
@@ -1201,4 +1203,16 @@ conditions in Section 4.4).
   box. EdgeSAM is weaker on large deformable objects (beds, blankets) and
   better on small ones. Step 4 status has the table; the choice of default
   refiner is pending.
+- **2026-10-24** — **Box refinement decided** (EdgeSAM fast default, SAM 2.1
+  quality alternative, EdgeSAM gpu-fp32 fallback; Step 4) and **one serving
+  worker for both heterogeneous pipelines**: `cerebrate-hetero` gained
+  config files, a prompt model with a per-image embedding cache, NNAPI
+  compilation caching (ready in 2.2 s instead of 45 s), health in DESCRIBE
+  and an optional TPU lock (measured: unnecessary). EdgeSAM in one process:
+  194 ms for an image + 1 box, 54 ms per box against a cached image, results
+  identical to the validated chain; fallback exact; YOLOE bit-identical on the
+  same build; correct under contention with YOLOE and production MobileNet
+  and over a 3-minute sustained run. Not yet deployed: supervisor profiles
+  and MLServer models for EdgeSAM, and whether the scheduled YOLOE deploy
+  takes this build.
 

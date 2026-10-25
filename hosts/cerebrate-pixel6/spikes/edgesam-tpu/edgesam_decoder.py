@@ -12,8 +12,14 @@ computed on the host by the original prompt encoder), dense [4096,256],
 image_pe [4096,256], output_tokens [5,256]. Outputs: low-res mask logits
 [1,256,256] for mask token 0 and its IoU score [1,1]; the host upscales
 with the original postprocess_masks.
-Stage 1: eager re-authoring vs the original decoder on all 132 boxes (from
-the reference embeddings). Stage 2: converted vs eager. Writes device inputs.
+Second graph, for the serving worker (which stays model-agnostic): the same
+decoder taking the box itself, [1,4] xyxy in model-input pixels (the
+image's ResizeLongestSide frame), with the prompt encoder's box embedding in
+the graph (shift by 0.5, normalize by 1024, the 2x128 Gaussian projection,
+sin/cos, corner embeddings added -- small weights, not constant activations).
+Stage 1: both eager re-authorings vs the original decoder on all 132 boxes
+(from the reference embeddings). Stage 2: converted vs eager. Writes device
+inputs.
 usage: edgesam_decoder.py <dl-edgesam dir> <out dir (ref*.npz)> <decoder dir>"""
 import sys, os
 import numpy as np, torch
@@ -87,8 +93,26 @@ class EdgeBoxDecoder(nn.Module):
         return mask, self.iou_head(queries[0:1])[:, 0:1]
 
 
+class EdgeBoxDecoderBox(EdgeBoxDecoder):
+    """As EdgeBoxDecoder, with the box -> corner tokens step of the original
+    prompt encoder (PromptEncoder._embed_boxes) in the graph."""
+    def __init__(self, sam):
+        super().__init__(sam)
+        pe = sam.prompt_encoder
+        self.register_buffer("gauss", pe.pe_layer.positional_encoding_gaussian_matrix.detach().clone())
+        self.register_buffer("corner_embed", torch.cat([pe.point_embeddings[2].weight, pe.point_embeddings[3].weight], 0).detach().clone())
+        self.img_size = float(pe.input_image_size[0])
+    def forward(self, emb_nhwc, box, dense, image_pe, output_tokens):
+        c = ((box.reshape(2, 2) + 0.5) / self.img_size) * 2 - 1
+        c = 2 * np.pi * (c @ self.gauss)
+        sparse = (torch.cat([torch.sin(c), torch.cos(c)], -1) + self.corner_embed).reshape(1, 2, 256)
+        return super().forward(emb_nhwc, sparse, dense, image_pe, output_tokens)
+
+
 sam, pred = load_edgesam(D, "bicubic")
+assert tuple(sam.prompt_encoder.input_image_size) == (1024, 1024)
 net = EdgeBoxDecoder(sam).eval()
+netb = EdgeBoxDecoderBox(sam).eval()
 with torch.no_grad():
     pe = sam.prompt_encoder
     dense = pe.no_mask_embed.weight.reshape(1, 256).expand(4096, 256).contiguous()
@@ -97,6 +121,7 @@ with torch.no_grad():
 for name, t in (("dense", dense), ("image_pe", image_pe), ("output_tokens", out_tokens)):
     t.numpy().astype(np.float32).tofile(f"{DEC}/inputs/{name}.bin")
 worst_iou, worst_logit, worst_score, n, lines, example = 1.0, 0.0, 0.0, 0, [], None
+worst_box_logit, box_lines, example_b = 0.0, [], None
 index = []
 for i in range(8):
     ref = np.load(f"{OUT}/ref{i}.npz")
@@ -109,6 +134,11 @@ for i in range(8):
             sparse, _ = pe(points=None, boxes=box, masks=None)
             _, iou_ref, low_ref = pred.predict_torch(emb, None, None, box, None, 1, return_logits=True, use_stability_score=False)
             mask, iou = net(emb_nhwc, sparse, dense, image_pe, out_tokens)
+            mask_b, iou_b = netb(emb_nhwc, box.reshape(1, 4), dense, image_pe, out_tokens)
+        worst_box_logit = max(worst_box_logit, float(np.abs(mask_b.numpy()[0] - low_ref.numpy()[0, 0]).max()))
+        box.reshape(1, 4).numpy().astype(np.float32).tofile(f"{DEC}/inputs/box{i}_{j}.bin")
+        box_lines.append(",".join(f"/data/local/tmp/edgesam/dec/inputs/{f}.bin" for f in (f"emb{i}", f"box{i}_{j}", "dense", "image_pe", "output_tokens")))
+        if example_b is None: example_b = (emb_nhwc, box.reshape(1, 4), dense, image_pe, out_tokens)
         a, r = mask.numpy()[0] > 0, low_ref.numpy()[0, 0] > 0
         worst_iou = min(worst_iou, (a & r).sum() / max(1, (a | r).sum()))
         worst_logit = max(worst_logit, float(np.abs(mask.numpy()[0] - low_ref.numpy()[0, 0]).max()))
@@ -119,7 +149,9 @@ for i in range(8):
         if example is None: example = (emb_nhwc, sparse, dense, image_pe, out_tokens)
 print(f"stage 1 ({n} boxes, eager re-authoring vs original, low-res logits): worst thresholded IoU {worst_iou:.6f}, "
       f"max |logit diff| {worst_logit:.2e}, max |score diff| {worst_score:.2e}", flush=True)
+print(f"stage 1, box-input graph: max |logit diff| vs original {worst_box_logit:.2e}", flush=True)
 open(f"{DEC}/inputs.txt", "w").write("\n".join(lines) + "\n")
+open(f"{DEC}/inputs-box.txt", "w").write("\n".join(box_lines) + "\n")
 np.save(f"{DEC}/index.npy", np.array(index))
 edge = litert_torch.convert(net, example)
 path = f"{DEC}/edgesam3x-box-decoder-fp32.tflite"; edge.export(path)
@@ -127,3 +159,32 @@ with torch.no_grad():
     em, ei = net(*example)
 gm, gi = (np.asarray(t) for t in edge(*example))
 print(f"stage 2 (converted vs eager, box 0): mask max |diff| {np.abs(gm - em.numpy()).max():.2e}, score diff {abs(float(gi.ravel()[0]) - ei.item()):.2e} | {path}", flush=True)
+edge_b = litert_torch.convert(netb, example_b)
+path_b = f"{DEC}/edgesam3x-box-decoder-boxin-fp32.tflite"; edge_b.export(path_b)
+with torch.no_grad():
+    em, ei = netb(*example_b)
+gm, gi = (np.asarray(t) for t in edge_b(*example_b))
+print(f"stage 2, box-input graph: mask max |diff| {np.abs(gm - em.numpy()).max():.2e}, score diff {abs(float(gi.ravel()[0]) - ei.item()):.2e} | {path_b}", flush=True)
+
+
+class EdgeBoxDecoderBoxConstIn(EdgeBoxDecoder):
+    """Box-input decoder with the prompt encoder's Gaussian matrix and corner
+    embeddings fed as inputs too (lane rule 3), after the baked version gave
+    wrong masks on the G1 GPU (mean IoU 0.35) while exact on the CPU."""
+    def forward(self, emb_nhwc, box, dense, image_pe, output_tokens, gauss, corner_embed):
+        c = ((box.reshape(2, 2) + 0.5) / 1024.0) * 2 - 1
+        c = 2 * np.pi * (c @ gauss)
+        sparse = (torch.cat([torch.sin(c), torch.cos(c)], -1) + corner_embed).reshape(1, 2, 256)
+        return super().forward(emb_nhwc, sparse, dense, image_pe, output_tokens)
+
+
+netc = EdgeBoxDecoderBoxConstIn(sam).eval()
+netb.gauss.numpy().astype(np.float32).tofile(f"{DEC}/inputs/gauss.bin"); netb.corner_embed.numpy().astype(np.float32).tofile(f"{DEC}/inputs/corner_embed.bin")
+example_c = example_b + (netb.gauss.clone(), netb.corner_embed.clone())
+with torch.no_grad():
+    assert float((netc(*example_c)[0] - netb(*example_b)[0]).abs().max()) == 0.0
+edge_c = litert_torch.convert(netc, example_c)
+path_c = f"{DEC}/edgesam3x-box-decoder-boxin-constin-fp32.tflite"; edge_c.export(path_c)
+gm, gi = (np.asarray(t) for t in edge_c(*example_c))
+print(f"stage 2, box-input constants-as-inputs graph: mask max |diff| {np.abs(gm - em.numpy()).max():.2e} | {path_c}", flush=True)
+open(f"{DEC}/inputs-box-constin.txt", "w").write("\n".join(l + ",/data/local/tmp/edgesam/dec/inputs/gauss.bin,/data/local/tmp/edgesam/dec/inputs/corner_embed.bin" for l in box_lines) + "\n")

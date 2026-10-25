@@ -1,10 +1,15 @@
-// TPU stage of the YOLOE pipeline: the TFLite 2.16.1 C API + NNAPI delegate
+// TPU stage of cerebrate-hetero's pipeline: the TFLite 2.16.1 C API + NNAPI delegate
 // (pinned to google-edgetpu, NNAPI CPU fallback disallowed, optional fp16
 // relaxation), loaded *privately* with dlopen(RTLD_LOCAL) and called through
 // function pointers, so it can share a process with LiteRT 2.3 (which exports
 // the same TfLite* names). libtensorflowlite_jni.so has no dynamic
 // relocations against those names, so its internal calls stay bound to itself.
+// With a cache directory and token, the delegate uses NNAPI compilation
+// caching: the G1 driver then loads a compiled model in ~0.2 s instead of
+// recompiling (EdgeSAM's trunk: 43 s), and rejects a stale blob rather than
+// reusing it (spikes/edgesam-tpu).
 #include <dlfcn.h>
+#include <stdint.h>
 #include <stdio.h>
 #include <string.h>
 
@@ -25,6 +30,8 @@ struct Api {
   decltype(&TfLiteInterpreterGetOutputTensorCount) GetOutputTensorCount;
   decltype(&TfLiteInterpreterGetOutputTensor) GetOutputTensor;
   decltype(&TfLiteTensorByteSize) TensorByteSize;
+  decltype(&TfLiteTensorNumDims) TensorNumDims;
+  decltype(&TfLiteTensorDim) TensorDim;
   decltype(&TfLiteTensorCopyFromBuffer) CopyFromBuffer;
   decltype(&TfLiteTensorCopyToBuffer) CopyToBuffer;
   decltype(&TfLiteInterpreterInvoke) Invoke;
@@ -36,7 +43,8 @@ TfLiteInterpreter* interp = nullptr;
   api.field = (decltype(api.field))dlsym(h, name);                        \
   if (!api.field) { fprintf(stderr, "FATAL: dlsym %s\n", name); return 1; }
 
-extern "C" int tpu_init(const char* lib, const char* model_path, int fp16) {
+// cache_dir and model_token: both NULL (no compilation caching) or both set.
+extern "C" int tpu_init(const char* lib, const char* model_path, int fp16, const char* cache_dir, const char* model_token) {
   void* h = dlopen(lib, RTLD_NOW | RTLD_LOCAL);
   if (!h) { fprintf(stderr, "FATAL: dlopen %s: %s\n", lib, dlerror()); return 1; }
   SYM(ModelCreateFromFile, "TfLiteModelCreateFromFile");
@@ -51,6 +59,8 @@ extern "C" int tpu_init(const char* lib, const char* model_path, int fp16) {
   SYM(GetOutputTensorCount, "TfLiteInterpreterGetOutputTensorCount");
   SYM(GetOutputTensor, "TfLiteInterpreterGetOutputTensor");
   SYM(TensorByteSize, "TfLiteTensorByteSize");
+  SYM(TensorNumDims, "TfLiteTensorNumDims");
+  SYM(TensorDim, "TfLiteTensorDim");
   SYM(CopyFromBuffer, "TfLiteTensorCopyFromBuffer");
   SYM(CopyToBuffer, "TfLiteTensorCopyToBuffer");
   SYM(Invoke, "TfLiteInterpreterInvoke");
@@ -63,6 +73,8 @@ extern "C" int tpu_init(const char* lib, const char* model_path, int fp16) {
   n.execution_preference = TfLiteNnapiDelegateOptions::kSustainedSpeed;
   n.disallow_nnapi_cpu = 1;
   n.allow_fp16 = fp16;
+  n.cache_dir = cache_dir;
+  n.model_token = model_token;
   TfLiteDelegate* d = api.NnapiCreate(&n);
   if (!d) { fprintf(stderr, "FATAL: NNAPI delegate\n"); return 1; }
   api.AddDelegate(o, d);
@@ -71,6 +83,12 @@ extern "C" int tpu_init(const char* lib, const char* model_path, int fp16) {
   return 0;
 }
 extern "C" size_t tpu_input_bytes() { return api.TensorByteSize(api.GetInputTensor(interp, 0)); }
+extern "C" int tpu_input_dims(int64_t* dims, int max_rank) {
+  const TfLiteTensor* t = api.GetInputTensor(interp, 0);
+  int rank = api.TensorNumDims(t);
+  for (int d = 0; d < rank && d < max_rank; d++) dims[d] = api.TensorDim(t, d);
+  return rank;
+}
 extern "C" int tpu_num_outputs() { return api.GetOutputTensorCount(interp); }
 extern "C" size_t tpu_output_bytes(int k) { return api.TensorByteSize(api.GetOutputTensor(interp, k)); }
 extern "C" int tpu_run(const void* in, void* const* outs) {
