@@ -373,7 +373,7 @@ variants:
 
   # ---- RF-DETR-Seg-Nano ------------------------------------------------------
   rf-detr-seg-nano/gpu-fp32:
-    status: staged
+    status: production
     stages:
       - {name: graph A, artifact: tflite_gpu_graph_a, accelerator: gpu, precision: fp32, weights: fp16, runtime: litert-2.3.0, phase: image}
       - {name: host step, accelerator: host, precision: n/a, runtime: numpy, phase: image, notes: "top-100 proposals by class score -> reference points; memory * 0.5 (model card, verbatim)"}
@@ -396,7 +396,7 @@ variants:
       profile: rf-detr-seg-nano-default
       worker_config: hosts/cerebrate-pixel6/cerebrate-hetero/configs/rf-detr-seg-nano-default.conf
   rf-detr-seg-nano/gpu-fp16acc32:
-    status: staged
+    status: production
     stages:
       - {name: graph A, artifact: tflite_gpu_graph_a, accelerator: gpu, precision: fp16acc32, weights: fp16, runtime: litert-2.3.0, phase: image}
       - {name: host step, accelerator: host, precision: n/a, runtime: numpy, phase: image}

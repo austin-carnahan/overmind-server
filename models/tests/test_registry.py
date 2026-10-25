@@ -27,8 +27,10 @@ GOLDEN = {
     ("inpainting", "quality"): ("mi-gan-512/gpu-fp32", "gpu-migan", "mi-gan-512-default", None),
     ("image-embedding", "default"): ("dinov2-s14/gpu-fp32", "gpu-dinov2", "dinov2-s14-default", "dinov2-s14"),
     # yoloe-11s-pf/gpu-fp32: production endpoint, not selected by a task
+    ("fixed-class-segmentation", "default"): ("rf-detr-seg-nano/gpu-fp16acc32", "gpu-rfdetr", "rf-detr-seg-nano-fast", "rf-detr-seg-nano"),
+    ("fixed-class-segmentation", "quality"): ("rf-detr-seg-nano/gpu-fp32", "gpu-rfdetr", "rf-detr-seg-nano-default", None),
 }
-AVAILABLE = {"prompt-free-segmentation", "box-refinement", "relative-depth", "inpainting", "image-embedding"}
+AVAILABLE = {"prompt-free-segmentation", "box-refinement", "relative-depth", "inpainting", "image-embedding", "fixed-class-segmentation"}
 
 
 class RealRegistry(unittest.TestCase):

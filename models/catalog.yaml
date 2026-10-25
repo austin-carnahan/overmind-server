@@ -755,4 +755,4 @@ tasks:
   fixed-class-segmentation:
     default: rf-detr-seg-nano/gpu-fp16acc32
     quality: rf-detr-seg-nano/gpu-fp32
-    available: false
+    available: true
