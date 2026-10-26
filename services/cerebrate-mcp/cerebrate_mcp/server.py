@@ -100,13 +100,16 @@ def create_app() -> FastMCP:
                               "CPU on overmind, about 2 s for a 1,100x700 region"}}
 
     @mcp.tool
-    def segment_region(image: str, boxes: list[list[float]], target: str = "box-refinement") -> dict:
+    def segment_region(image: str, boxes: list[list[float]], target: str = "box-refinement",
+                       candidates: bool = False) -> dict:
         """Precise masks for regions of an image, one per box [x0, y0, x1, y1] (image pixels). target: a
         task such as "box-refinement" (fast, default) or "box-refinement@quality", or a model id. Returns
         per box: score, the mask as polygons and in a compact encoding, and mask_png (an artifact:// PNG,
-        white = region, with a url where configured)."""
+        white = region, with a url where configured). candidates=True (SAM 2.1, i.e. box-refinement@quality):
+        also the decoder's three masks for the box -- roughly whole object, part, sub-part -- best first, from
+        the same run (no extra cost); pick the one that covers the object you mean."""
         return run("segment_region", target, image,
-                   lambda photo, size: c.segment_region_request(photo, boxes),
+                   lambda photo, size: c.segment_region_request(photo, boxes, candidates),
                    lambda doc, rid, size: c.segment_region_result(doc, post, artifacts, rid, size))
 
     @mcp.tool

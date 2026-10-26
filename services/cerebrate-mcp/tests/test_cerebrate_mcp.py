@@ -90,6 +90,10 @@ class FakeMLServer(BaseHTTPRequestHandler):
             boxes = [flat[i:i + 4] for i in range(0, len(flat), 4)]
             doc = {"image": image, "image_id": inputs["image_id"]["data"][0],
                    "masks": [{"box": b, "score": 0.9, "mask": post.encode_mask(box_mask(b))} for b in boxes]}
+            if (body.get("parameters") or {}).get("masks") == "all":     # SAM 2.1: three candidates, best first
+                for m, b in zip(doc["masks"], boxes):
+                    m["candidates"] = [{"score": 0.9 - k / 10, "mask": post.encode_mask(box_mask([b[0], b[1], b[2] - 2 * k, b[3]]))}
+                                       for k in range(3)]
         elif "mask" in inputs:      # "inpaint": the sent photo with the masked pixels painted FILL
             photo = np.array(Image.open(io.BytesIO(base64.b64decode(inputs["photo"]["data"][0]))).convert("RGB"))
             hole = np.asarray(Image.open(io.BytesIO(base64.b64decode(inputs["mask"]["data"][0])))) >= 128
@@ -430,6 +434,18 @@ class CerebrateMCP(unittest.TestCase):
             self.call("seamless_blend", image=b64(src), mask=b64(np.zeros((10, 10), np.uint8)), destination=b64(bg))
         caps = self.call("list_capabilities")
         self.assertIn("seamless_blend", caps["image_operations"])
+
+    def test_segment_region_candidates(self):
+        img = base64.b64encode(PHOTO).decode()
+        out = self.call("segment_region", image=img, boxes=[[4, 5, 30, 20]], target="box-refinement@quality", candidates=True)
+        self.assertEqual(FakeMLServer.requests[-1][1].get("parameters"), {"masks": "all"})
+        cands = out["masks"][0]["candidates"]
+        self.assertEqual([round(x["score"], 2) for x in cands], [0.9, 0.8, 0.7])
+        self.assertEqual(cands[1]["polygons"][0]["points"], [4, 5, 4, 20, 28, 20, 28, 5])
+        self.assertTrue(Path(cands[2]["mask_png"]["path"]).is_file())
+        out = self.call("segment_region", image=img, boxes=[[4, 5, 30, 20]])
+        self.assertNotIn("candidates", out["masks"][0])
+        self.assertNotIn("masks", FakeMLServer.requests[-1][1].get("parameters") or {})
 
     def test_target_resolution(self):
         img = base64.b64encode(PHOTO).decode()

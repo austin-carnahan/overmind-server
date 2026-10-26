@@ -116,13 +116,13 @@ def mask_polygons(post, enc: dict, scale: float = 1.0, eps: float = 1.0, min_are
 
 
 # ---- requests: MCP arguments -> (V2 inputs, parameters) ----------------------
-def segment_region_request(photo: bytes, boxes: list) -> tuple[list, dict]:
+def segment_region_request(photo: bytes, boxes: list, candidates: bool = False) -> tuple[list, dict]:
     if not boxes or any(len(b) != 4 for b in boxes):
         raise InputError("boxes: a non-empty list of [x0, y0, x1, y1]")
     flat = [float(v) for b in boxes for v in b]
     return [bytes_input("photo", b64(photo)),
             tensor_input("image_id", "INT64", [1], [image_id(photo)]),
-            tensor_input("boxes", "FP32", [len(boxes), 4], flat)], {}
+            tensor_input("boxes", "FP32", [len(boxes), 4], flat)], ({"masks": "all"} if candidates else {})
 
 
 def photo_request(photo: bytes, **parameters) -> tuple[list, dict]:
@@ -187,9 +187,13 @@ def inpaint_request(post, photo: bytes, size: tuple, mask: bytes, mask_size: tup
 def segment_region_result(doc: dict, post, art: Artifacts, run: str, size: tuple) -> dict:
     masks = []
     for i, m in enumerate(doc["masks"]):
-        masks.append({"box": m["box"], "score": m["score"], "mask": m["mask"],
-                      "polygons": mask_polygons(post, m["mask"]),
-                      "mask_png": mask_png(post, art, run, f"mask-{i}.png", m["mask"], size)})
+        item = {"box": m["box"], "score": m["score"], "mask": m["mask"], "polygons": mask_polygons(post, m["mask"]),
+                "mask_png": mask_png(post, art, run, f"mask-{i}.png", m["mask"], size)}
+        if "candidates" in m:       # SAM 2.1 with masks=all: the decoder's three masks, best first
+            item["candidates"] = [{"score": cnd["score"], "mask": cnd["mask"], "polygons": mask_polygons(post, cnd["mask"]),
+                                   "mask_png": mask_png(post, art, run, f"mask-{i}-candidate-{k}.png", cnd["mask"], size)}
+                                  for k, cnd in enumerate(m["candidates"])]
+        masks.append(item)
     return {"image": doc["image"], "masks": masks}
 
 

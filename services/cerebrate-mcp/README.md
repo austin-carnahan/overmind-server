@@ -22,7 +22,7 @@ not per model, plus discovery:
 | Tool | Contract | Default target | Inputs → output |
 | --- | --- | --- | --- |
 | `list_capabilities` | — | — | → every tool's callable endpoints, the tasks and their selections, the models |
-| `segment_region` | `photo-box-masks-v1` | `box-refinement` (EdgeSAM; `@quality` = SAM 2.1) | image, boxes → per box: score, polygons, compact mask, `mask_png` |
+| `segment_region` | `photo-box-masks-v1` | `box-refinement` (EdgeSAM; `@quality` = SAM 2.1) | image, boxes → per box: score, polygons, compact mask, `mask_png`; with `candidates` (SAM 2.1), its three masks per box |
 | `detect_objects` | `photo-detections-v1` | `fixed-class-segmentation` (RF-DETR; `prompt-free-segmentation` = YOLOE) | image → labels, scores, boxes, polygons, compact masks (PNGs optional) |
 | `segment_by_text` | `photo-text-segmentation-v1` | `text-prompted-segmentation` (EfficientSAM3) | image, phrases, optional `threshold` → per phrase: presence, instances with polygons and mask PNGs |
 | `detect_by_text` | `photo-text-detection-v1` | `open-vocabulary-detection` (OWLv2) | image, queries → boxes per query |
