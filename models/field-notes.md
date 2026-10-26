@@ -242,6 +242,71 @@ the room's own pixels worked. Mean difference from the prototype: 1.8 levels
 - The geometry was done by hand, as an operator. It isn't automated or in
   Buckminster's recipe yet.
 
+**2026-10-26, Experiment 2: protect what stays, then rebuild (prototype
+`exp2/proto6.py`, then `bedroom-v1.xcf`).** The goal was "good enough, and
+learn why", not a perfect plate. Lessons, in the order they bit:
+
+- **Protection map first.**
+  - **Three classes:**
+    - known foreground: rug, nightstand and stool masks, protected;
+    - structural surface;
+    - an uncertain band, within 10 px of both.
+  - **The footprint** is the bed and its parts, grown and with its contact
+    shadow, minus protected. Its overlap with protected objects went from 11%
+    of the rug to zero.
+- **Sources exclude stationary objects' shadows too,** not just the objects:
+  each protected mask smeared 50 px down. Without this, the floor search
+  copied the nightstand's shadow into the corner (a dark dab).
+- **The blend destination along a protected edge must be the surface, not the
+  object.** In a 15 px band inside the protected object next to the
+  footprint, the destination gets the main floor move's texture, and the
+  result is clipped to the footprint. Otherwise Poisson pulls the floor
+  toward the rug's white (a haze along its edge).
+- **Bound the surface by everything the lines don't describe.** The
+  baseboard lines know nothing about doorframes or a side wall. A secondary
+  floor piece was copied from the right wall (a grey wedge at the rug tip),
+  so valid sources are now cut at both doorframes.
+- **Blend a secondary piece against its floor neighbours only.** A
+  per-piece Poisson blend, with the surrounding composite as destination,
+  read the still-unfilled original (the bed's white sheet) at its edge, and
+  produced a white band along the baseboard. Fix: the destination is the
+  neighbouring floor where there is one, and the piece's own pixels
+  elsewhere. In GIMP, the simpler feather (Phase C) is used instead. It's
+  fine once each piece's sources are valid.
+- **Accepted, not chased:** a soft dark band along the footprint's bottom
+  edge. The main floor source there is about 20 levels darker than the
+  floor around it, and the global blend corrects only half of that at the
+  bounding box's bottom row. A brighter source or a second move would fix
+  it; it isn't worth a rule.
+
+**`bedroom-v1.xcf`, built in GIMP from the photo with agent operations
+(script `exp2/v1_build.py`; stages in
+`~/DesignStudio/workspaces/bedroom/bedroom-v1/`).**
+- **Layers:**
+  - Rug: its own group, in front;
+  - Bed: the SAM 2.1 body plus two pillow layers;
+  - Room: "Behind the bed (rebuilt)", with Walls / Baseboard / Floor pieces
+    and the blended layer, over "Room (original)";
+  - the original photograph, hidden.
+- **The blend destination** was a temporary group at the bottom: the photo,
+  plus the band layer. It was removed after the import, and the canvas
+  never changed.
+- **Protected pixels unchanged:**
+  - away from the footprint's edge, nothing outside it differs from GIMP's
+    own decode of the photo;
+  - 1,104 px differ, all within 2 px of the edge: the polygon selection's
+    antialiasing, 209 of them on the rug and nightstand.
+  - (PIL and GIMP decode the JPEG up to 3 levels apart on 286k px: compare
+    against GIMP's layer, not PIL's decode.)
+- **Timing:** 21 s for the surfaces (7 pieces), 13 s for the objects, 6 s for
+  the destination. The blend loop took 16 s: publish ×2 (6.7 s), blend 7.8 s,
+  import 1.7 s.
+- **Uncertain band, new lesson:** along the rug's top edge, its mask keeps a
+  thin grey sliver of the bed skirt. Hidden while the bed sits there, it
+  will show once the bed moves (Experiment 3). Where a protected object
+  meets a moving one, the protected mask's edge needs a trim, and the
+  uncertain band is exactly where to look.
+
 ### Depth (Depth Anything V2)
 - **2026-10-26, hotel-room.jpg (sample run).** Very good. No issues seen.
 

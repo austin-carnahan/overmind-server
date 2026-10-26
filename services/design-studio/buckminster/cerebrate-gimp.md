@@ -239,6 +239,12 @@ Blend them with Cerebrate's Poisson blend, about 2 s on overmind:
 3. Publish **the original** over the same region:
    `overmind-publish` with `{"mode": "region", "x":…, "y":…, "width":…, "height":…, "source": <the original layer>}`.
    It returns `destination_url` as its second value.
+   **If a protected object (a rug) borders the rebuilt area,** the blend
+   would pull the surface toward the object's colour (a haze along it).
+   Publish instead a temporary group at the bottom of the stack, where it
+   can't change the canvas. It holds a copy of the original and, above it,
+   the main surface copy cut to a 15 px band inside the protected object,
+   next to the rebuilt area. Remove the group after the import.
 4. `gimp-selection-none`, then
    `cerebrate__seamless_blend(image=image_url, mask=mask_url, destination=destination_url)`.
    The destination must be the original: with the reconstruction there,
