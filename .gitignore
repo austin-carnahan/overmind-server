@@ -28,6 +28,10 @@ settings.json
 !/models/schema.json
 !/models/catalog.yaml
 !/models/README.md
+!/models/variants.yaml
+!/models/variants.schema.json
+!/models/registry.py
+!/models/tests/
 /inbox/
 *.log
 *.pid
@@ -49,6 +53,8 @@ __pycache__/
 *.chd
 *.cue
 *.bin
+# small model constants the MLServer adapter needs (sha256 in models/catalog.yaml)
+!/hosts/cerebrate-pixel6/mlserver/models/cerebrate-graph/assets/*.bin
 *.z64
 *.n64
 *.nes

@@ -1,20 +1,24 @@
-# Cerebrate Pixel 6 model catalog -- Stage 1 (Phase A) of the Operational
-# Model Catalog, design-notes/cerebrate_pixel6_operational_model_catalog_v4.md.
+# Cerebrate Pixel 6 model catalog: what each model is and does -- identity,
+# capabilities, artifacts (upstream provenance + the exact deployed files and
+# their sha256), model-level aliases, serving interface, and task selections.
+# How each configuration executes (stages, precisions, validation evidence,
+# benchmarks, serving profile) lives in models/variants.yaml. Validate both
+# with scripts/validate-model-catalog; browse with scripts/cerebrate-models.
+# Conventions: models/README.md.
 #
-# Deliberately small: entries for the two models already in production,
-# populated with real, verified data (not placeholders), to prove the
-# schema can represent what already exists before extending it to
-# anything new. Validate against schema.json before committing changes.
-#
-# Honest gap this stage surfaced, worth calling out rather than fixing
-# quietly: neither model actually has automated start/stop behavior
-# today. Both Android workers are plain `adb shell`-launched foreground
-# processes with no supervision, auto-restart-on-boot, or idle-based
-# stop -- they're running because a human explicitly started them and
-# they've stayed up, not because a PINNED or ON_DEMAND policy is being
-# enforced anywhere. `residency: manual` below reflects that current
-# reality, not an aspiration. Phase B (worker process lifecycle through
-# MLServer) is where PINNED/ON_DEMAND become real.
+# Started as Stage 1 (Phase A) of the Operational Model Catalog
+# (design-notes/cerebrate_pixel6_operational_model_catalog_v4.md) with the
+# two then-production models.
+
+# One serving policy for every Pixel model (2026-10-25): every worker starts on
+# demand and stops when idle or to make room; no start takes the phone below
+# reserve_mb (each configuration's capacity cost is its measured load_mb in
+# variants.yaml). Generated into the supervisor's profiles file and the
+# adapter's serving_policy.json by `scripts/cerebrate-models generate`.
+serving_policy:
+  reserve_mb: 1000
+  idle_stop_s: 600
+  capacity_wait_s: 30
 
 models:
   mobilenetv1:
@@ -63,13 +67,17 @@ models:
           pixel6_ort_cpu: passed
           pixel6_ort_xnnpack: failed
           pixel6_ort_nnapi: passed
+        files:
+          - {name: mobilenet_v1_1.0_224_quant.tflite, sha256: ecc3a67c47c5a609ec35f6a58a7d97532834e43df4cb7d3f1204a8164b7d20dd, bytes: 4276352}
     worker:
       binary: cerebrate-infer
       port: 8765
+    aliases:
+      default: tpu-int8
+      reference: tpu-int8
     execution_preferences:
       pixel6:
         - tflite_nnapi
-    residency: manual
     requirements:
       disk_mb: 4.08
       # Never measured -- MLServer's own RSS was tracked extensively
@@ -118,15 +126,656 @@ models:
         cerebrate_support:
           native_c_session: true
           validated: true
+        files:
+          - {name: SmolLM2_135M_Instruct.litertlm, sha256: ccdc5c85735743f081b7d44ca309cab569f76c0f2f0e8e163449a63721969c37, bytes: 142819328}
     worker:
       binary: cerebrate-generate
       port: 8766
+    aliases:
+      default: litertlm-cpu
+      reference: litertlm-cpu
     execution_preferences:
       pixel6:
         - litertlm_cpu
         - litertlm_gpu
-    residency: manual
     requirements:
-      disk_mb: 136.19
+      disk_mb: 136.2
       # Never measured -- same gap as mobilenetv1 above.
       ram_mb: null
+
+  granite-docling-258m:
+    description: >-
+      IBM Granite-Docling 258M, a document vision-language model (page or
+      figure image + prompt -> DocTags), as GGUF (bf16 weights, f16
+      multimodal projector). cerebrate-gguf runs llama.cpp's llama-mtmd-cli
+      in a child process per request: ~100 s per image on the CPU, almost all
+      vision encoding. Serves the Doclet service on overmind-01
+      (services/doclet).
+    capabilities:
+      - convert-document-image
+    artifacts:
+      gguf:
+        source: {repo: ibm-granite/granite-docling-258M-GGUF, revision: e1e344cb19bae46a1d5edb4f04a27ebe0c268f72}
+        files:
+          - {name: granite-docling-258M-bf16.gguf, sha256: 13fbc786212d647c540d31c90dc421775de6edde2b8b8cd061951ed86f16935c, bytes: 331641120}
+          - {name: mmproj-model-f16.gguf, sha256: 4b7b2c4ed3162bd9cb323668c188e2324838b8f8ca4f3f9767f16c4c600d43ad, bytes: 190031712}
+    worker:
+      binary: cerebrate-gguf
+      port: 8768
+    serving:
+      mlserver_model: cerebrate-gguf
+      interface: image-prompt-text-v1
+    aliases:
+      default: cpu-bf16
+      reference: cpu-bf16
+    requirements:
+      disk_mb: 497.5
+      ram_mb: null
+
+  yoloe-v8s-pf:
+    description: >-
+      YOLOE-v8s prompt-free instance segmentation (Ultralytics 8.4.184
+      yoloe-v8s-seg-pf): boxes, masks and one of 4,585 built-in labels per
+      object, no prompt. Segmentation and Labeling Lane, Step 2B. Served by
+      cerebrate-hetero through the supervisor's hetero1 slot as MLServer
+      model yoloe-v8s-pf (live since 2026-10-25, on demand); takes the encoded
+      photo and returns JSON detections in photo coordinates.
+    # Capability names beyond catalog v4's initial list, introduced by the
+    # lane for prompt-free detection and masks.
+    capabilities:
+      - detect-objects
+      - segment-objects
+    # All three are our own conversions of the one upstream checkpoint (no
+    # published LiteRT/TPU conversion exists): source = the checkpoint,
+    # verified by hash against the release asset; files = what is deployed.
+    # Produced by hosts/cerebrate-pixel6/spikes/yoloe-tpu. Accuracy is
+    # task-level against the original model on the lane's eight photos (132
+    # detections), not tensor similarity.
+    artifacts:
+      tflite_tpu_backbone:
+        # Backbone + neck, max-pool padding corrected; Edge TPU via NNAPI with
+        # fp16 relaxation.
+        source:
+          url: https://github.com/ultralytics/assets/releases/download/v8.3.0/yoloe-v8s-seg-pf.pt
+          sha256: df213f389d69a0df544cc1a3e500f567176468e4b4ed2ce933b8073c27539ac1
+        derived: true
+        produced_by: hosts/cerebrate-pixel6/spikes/yoloe-tpu/yoloe_fp16_tpu_prep.py
+        files:
+          - {name: yoloe-v8s-pf-backbone-tpu-fp32.tflite, sha256: f4bfb17807c6f11e60001283e237a96de068a01dc6c668f24134ae14e43a8be1, bytes: 36082040}
+        validated:
+          pixel6_tflite_nnapi_tpu_fp16relaxed: passed
+      tflite_gpu_head:
+        # Head with native int32 argmax; LiteRT 2.3 GPU.
+        source:
+          url: https://github.com/ultralytics/assets/releases/download/v8.3.0/yoloe-v8s-seg-pf.pt
+          sha256: df213f389d69a0df544cc1a3e500f567176468e4b4ed2ce933b8073c27539ac1
+        derived: true
+        produced_by: hosts/cerebrate-pixel6/spikes/yoloe-tpu/yoloe_head_gpu.py
+        files:
+          - {name: yoloe-v8s-pf-head-gpu.tflite, sha256: 4001f7e83c55c6c02dc7ab0cb62bfdfe819a36b9945e4604b6bc2c2025943c54, bytes: 18324116}
+        validated:
+          pixel6_litert_compiled_gpu_fp16acc32: passed
+      tflite_gpu_full:
+        # The whole model on the GPU, NHWC input: the default variant (fp32)
+        # and the fast variant's internal fallback (fp16 + fp32 accumulation).
+        source:
+          url: https://github.com/ultralytics/assets/releases/download/v8.3.0/yoloe-v8s-seg-pf.pt
+          sha256: df213f389d69a0df544cc1a3e500f567176468e4b4ed2ce933b8073c27539ac1
+        derived: true
+        produced_by: hosts/cerebrate-pixel6/spikes/yoloe-tpu/yoloe_convert_gpu.py
+        files:
+          - {name: yoloe-v8s-pf-gpu-nhwc.tflite, sha256: dc504b3bf8467a8f39e7fac752ec99698891b152aa0d2e91d60f068e89f018ac, bytes: 54455484}
+        validated:
+          pixel6_litert_compiled_gpu: passed
+          pixel6_litert_compiled_gpu_fp16acc32: passed
+          pixel6_litert_compiled_gpu_fp16: failed
+    worker:
+      binary: cerebrate-hetero
+      port: 8772
+    aliases:
+      default: gpu-fp32
+      reference: gpu-fp32
+      fast: tpu-fp16r-gpu-head-fp16acc32
+    serving:
+      mlserver_model: yoloe-v8s-pf
+      interface: photo-detections-v1
+    execution_preferences:
+      pixel6:
+        - tpu_gpu_hybrid
+        - litert_gpu_fp16acc32
+        - litert_gpu_fp32
+    requirements:
+      # The three .tflite files, MiB (the default variant alone: 51.93).
+      disk_mb: 103.82
+      # Worker RSS, fast profile with its fallback loaded; flat over a
+      # 3-minute sustained run. The default profile's is not measured.
+      ram_mb: 713
+
+  yoloe-11s-pf:
+    description: >-
+      YOLOE-11s prompt-free instance segmentation (Ultralytics 8.4.184
+      yoloe-11s-seg-pf), the non-preferred alternative to yoloe-v8s-pf: the
+      same 4,585 labels and output contract, GPU FP32 only (its mixed mode
+      loses a detection) and no TPU path (its fp16-relaxed TPU compile
+      exhausted the phone's memory). Kept servable for comparison, not
+      selected by any task.
+    capabilities:
+      - detect-objects
+      - segment-objects
+    artifacts:
+      tflite_gpu_full:
+        # NCHW input [1,3,640,640]; outputs boxes, score, cls (float), coef, protos.
+        source:
+          url: https://github.com/ultralytics/assets/releases/download/v8.3.0/yoloe-11s-seg-pf.pt
+          sha256: 292bdf157a9ec7315f34b567cb93467c5043cd1889a1cc18abbfdeb88d7a948d
+        derived: true
+        produced_by: hosts/cerebrate-pixel6/spikes/yoloe-tpu/yoloe_convert_gpu.py
+        files:
+          - {name: yoloe-11s-seg-pf-fp32.tflite, sha256: f4463648ef63b29784da5e9df363cd177c8b74e079977812f06d45a03491a5cc, bytes: 47663940, origin: yoloe/gpu/yoloe-11s-seg-pf-fp32.tflite}
+        validated:
+          pixel6_litert_compiled_gpu: passed
+          pixel6_litert_compiled_gpu_fp16acc32: failed
+          pixel6_litert_compiled_gpu_fp16: failed
+    worker:
+      binary: cerebrate-hetero
+      port: 8778
+    serving:
+      mlserver_model: yoloe-11s-pf
+      interface: photo-detections-v1
+    aliases:
+      default: gpu-fp32
+      reference: gpu-fp32
+    requirements:
+      disk_mb: 45.46
+      ram_mb: null
+
+  edgesam-3x:
+    previous_ids: [edgesam3x]
+    description: >-
+      EdgeSAM-3x promptable segmentation (box prompt -> mask), our conversions
+      of the original (bicubic) model. Segmentation and Labeling Lane, Step 4:
+      the task default for box refinement. Served by cerebrate-hetero through
+      the supervisor's hetero2 slot as MLServer model edgesam3x-box: a request
+      carries the encoded photo, image_id and boxes in photo pixels, and
+      returns JSON masks in photo coordinates; the worker caches each image's
+      embedding (4 images, LRU). Live from 2026-10-25. Licence: S-Lab License
+      1.0, non-commercial use only.
+    capabilities:
+      - refine-box-mask
+    # Our own conversions of the one checkpoint (no published LiteRT/TPU
+    # conversion; the authors' ONNX swaps the trained bicubic upsample for
+    # bilinear). Produced by hosts/cerebrate-pixel6/spikes/edgesam-tpu.
+    artifacts:
+      tflite_tpu_trunk:
+        # trunk + fuse, exact bicubic construction, tanh GELU (an approximate rewrite)
+        source: {repo: chongzhou/EdgeSAM, revision: e0564124628944e1622973d4e0f68158b46f035a}
+        derived: true
+        produced_by: hosts/cerebrate-pixel6/spikes/edgesam-tpu/edgesam_tpu_fragments.py
+        files:
+          - {name: edgesam3x-enc-tpu-fp32.tflite, sha256: 112fe4dfdda0aa03b6ee45377b7919f7f2931d77865bb57522045d447f4f0be5, bytes: 19545512}
+        validated:
+          pixel6_tflite_nnapi_tpu_fp16relaxed: passed
+      tflite_gpu_neck:
+        # LayerNorm neck (the TPU rejects channel-axis LayerNorm)
+        source: {repo: chongzhou/EdgeSAM, revision: e0564124628944e1622973d4e0f68158b46f035a}
+        derived: true
+        produced_by: hosts/cerebrate-pixel6/spikes/edgesam-tpu/edgesam_tpu_fragments.py
+        files:
+          - {name: edgesam3x-enc-neck-gpu.tflite, sha256: d73e25b1e2ffb2fad6eab2b6fd48ad01b032de3f4110d33e0fbcd1fc407daa58, bytes: 2631312}
+        validated:
+          pixel6_litert_compiled_gpu: passed
+      tflite_gpu_encoder:
+        # whole encoder, near-exact GELU (3 px over 132 masks at fp32)
+        source: {repo: chongzhou/EdgeSAM, revision: e0564124628944e1622973d4e0f68158b46f035a}
+        derived: true
+        produced_by: hosts/cerebrate-pixel6/spikes/edgesam-tpu/edgesam_tpu_fragments.py
+        files:
+          - {name: edgesam3x-enc-gpu.tflite, sha256: 0506eb5d5344c0b0d049b76733707aef25abcfd2673a05300fb2b3a84044515f, bytes: 22234440}
+        validated:
+          pixel6_litert_compiled_gpu: passed
+          pixel6_litert_compiled_gpu_fp16acc32: passed
+      tflite_gpu_box_decoder:
+        # box-input decoder + five constant inputs (constants as inputs: baked,
+        # the G1 GPU got them wrong)
+        source: {repo: chongzhou/EdgeSAM, revision: e0564124628944e1622973d4e0f68158b46f035a}
+        derived: true
+        produced_by: hosts/cerebrate-pixel6/spikes/edgesam-tpu/edgesam_decoder.py
+        files:
+          - {name: edgesam3x-box-decoder.tflite, sha256: 3ca8392162d1dc4555be0a4ac1af25227e8f823149ac79f364234423b33ad294, bytes: 14951076}
+          - {name: edgesam3x-dec-dense.bin, sha256: 9f2f518ac1eec7eaf2652a039568daf2e98c094f8c3eeabf1f5bc4a3fd343e41, bytes: 4194304}
+          - {name: edgesam3x-dec-image_pe.bin, sha256: 723ab5bfa0e6204cecc0a4c1fa7d7cb28bc2f6aba8a8012220efd0299b2db2d9, bytes: 4194304}
+          - {name: edgesam3x-dec-output_tokens.bin, sha256: 908a98672257671c27e575bdb7d145f9fe4d3c6f81f7e7a640aae0c2a09ce73c, bytes: 5120}
+          - {name: edgesam3x-dec-gauss.bin, sha256: 9bf5b8dcada0e312a19b3a4c98a913f44df480d6aa72aedc2ea4558f979beff4, bytes: 1024}
+          - {name: edgesam3x-dec-corner_embed.bin, sha256: 967b3d4abe49e7e85fdcf15703f7ded2b63791a98f1d7a7a50e8b4335f1f7797, bytes: 2048}
+        validated:
+          pixel6_litert_compiled_gpu: passed
+          pixel6_litert_compiled_gpu_fp16acc32: passed
+    worker:
+      binary: cerebrate-hetero
+      port: 8773
+    aliases:
+      default: gpu-fp32
+      reference: gpu-fp32
+      fast: tpu-fp16r-gpu-neck-fp32
+    serving:
+      mlserver_model: edgesam3x-box
+      interface: photo-box-masks-v1
+    requirements:
+      # The four models and five decoder constants, MiB.
+      disk_mb: 64.62
+      # Worker RSS after a 3-minute sustained run (fast profile).
+      ram_mb: 593
+
+  sam2.1-hiera-tiny:
+    description: >-
+      SAM 2.1 Hiera-Tiny (facebook/sam2.1-hiera-tiny), the higher-quality box
+      refiner: 88.3% mean IoU vs LVIS ground truth (EdgeSAM 87.1%), notably
+      better on large deformable objects, at ~7x the latency. Our prepared
+      encoder + the constants-as-inputs box decoder (spike sam21-gpu), exact
+      at fp32 on the Pixel 6 GPU. The box prompt's sparse embedding is
+      computed on the host (SAM 2.1's prompt encoder: two box corners).
+    capabilities:
+      - refine-box-mask
+    artifacts:
+      tflite_gpu_encoder:
+        # prepared: <=4-D windowing, q/k/v split, baked position embedding,
+        # unused neck encodings dropped, no-memory embedding folded (all exact)
+        source: {repo: facebook/sam2.1-hiera-tiny, revision: de431c4043854a71d8101e17995dfe596bf101a5}
+        derived: true
+        produced_by: hosts/cerebrate-pixel6/spikes/sam21-gpu/prepare_encoder.py
+        files:
+          - {name: sam21t-encoder-prepared-fp32.tflite, sha256: 844dce0a5851b617748d80449993f9059f4ed77f80149be0fb0993093a068a90, bytes: 134253432}
+        validated:
+          pixel6_litert_compiled_gpu: passed
+          pixel6_litert_compiled_gpu_fp16acc32: passed
+          pixel6_litert_compiled_gpu_fp16: failed
+      tflite_gpu_box_decoder:
+        # GPU-clean box decoder (adapted from litert-community's Apache-2.0
+        # re-authoring) with its three large constants fed as inputs
+        source: {repo: facebook/sam2.1-hiera-tiny, revision: de431c4043854a71d8101e17995dfe596bf101a5}
+        derived: true
+        produced_by: hosts/cerebrate-pixel6/spikes/sam21-gpu/bisect_box_decoder.py
+        files:
+          - {name: sam21t-box-decoder-constin-fp32.tflite, sha256: 94caa4e47de51f80c17cbe56bc8357af95a6921157150c5efee73fb596241d43, bytes: 16628400, origin: boxbisect/constin-full/model.tflite}
+          - {name: sam21t-dec-dense.bin, sha256: 5ffb3ae01eaa85846b04bfbc6438bf9de2f40b77fe679b295218319048d442ec, bytes: 4194304, origin: boxbisect/constin-full/in4.bin}
+          - {name: sam21t-dec-image_pe.bin, sha256: 18d3b6c2c5ea258fa64630a08de20ebb09733865a6c068219e43df94a0f40139, bytes: 4194304, origin: boxbisect/constin-full/in5.bin}
+          - {name: sam21t-dec-output_tokens.bin, sha256: 13cd3028240581da1426bb0376e75734086bd117cad7ae7c1b6d231f98baccf4, bytes: 6144, origin: boxbisect/constin-full/in6.bin}
+        validated:
+          pixel6_litert_compiled_gpu: passed
+          pixel6_litert_compiled_gpu_fp16acc32: passed
+          pixel6_litert_compiled_gpu_fp16: failed
+      host_prompt_encoder:
+        # SAM 2.1's box prompt encoder constants for the guest adapter
+        # (gaussian [2,128], corner embeddings, not-a-point), float32 .npz
+        source: {repo: facebook/sam2.1-hiera-tiny, revision: de431c4043854a71d8101e17995dfe596bf101a5}
+        derived: true
+        produced_by: hosts/cerebrate-pixel6/spikes/sam21-gpu/export_prompt_encoder.py
+        target: guest
+        files:
+          - {name: sam2.1-hiera-tiny-prompt-encoder.npz, sha256: bf9ce0c7076f1632cea0ac880b3a8e2fea8cf49eb6df657db28414c85f24dc02, bytes: 5366}
+    worker:
+      binary: cerebrate-hetero
+      port: 8779
+    serving:
+      mlserver_model: sam2.1-hiera-tiny
+      interface: photo-box-masks-v1
+    aliases:
+      default: gpu-fp32
+      reference: gpu-fp32
+      quality: gpu-fp32
+      fast: gpu-fp16acc32
+    requirements:
+      disk_mb: 151.9
+      ram_mb: null
+
+  efficientsam3-rvm:
+    description: >-
+      EfficientSAM3 RV-M (fine-tuned full model): SAM 3's text-prompted
+      concept segmentation -- every instance of a phrase, with masks -- with
+      a RepViT-M1.1 image encoder and a MobileCLIP-S0 text encoder. Our
+      LiteRT conversions (spikes efficientsam3-gpu, efficientsam3-tpu):
+      vision on the GPU once per image, text on the CPU (17 ms per phrase,
+      cacheable), grounding on the GPU per prompt (early fusion: not
+      cacheable). Validated on the 11-sample phone-native chain (20
+      detections, against the original model). Edge TPU ruled out for the
+      vision encoder (2026-10-25). Apache-2.0.
+    capabilities:
+      - segment-by-text
+    # Every artifact derives from the one checkpoint
+    # (efficientsam3_ft/efficientsam3_repvit.pt).
+    artifacts:
+      tflite_gpu_vision:
+        # unprepared, 340 ops
+        source: {repo: Simon7108528/EfficientSAM3, revision: 85b05896928f974e308f889d7ccb2eefc069de98}
+        derived: true
+        produced_by: hosts/cerebrate-pixel6/spikes/efficientsam3-gpu/esam3_convert.py
+        files:
+          - {name: esam3-rvm-vision-fp32.tflite, sha256: 775baa8b0ebdd671f3c3c9d77c0832ef5d72d55bf22d2e90d9768d7d14773d45, bytes: 99154672, origin: esam3/esam3-rvm-vision-fp32.tflite}
+        validated:
+          pixel6_litert_compiled_gpu: passed
+          # reduced precision over the whole graph drops a borderline detection
+          pixel6_litert_compiled_gpu_fp16acc32: failed
+      tflite_gpu_vision_trunk:
+        # RepViT + head + resize -> 72x72x1024
+        source: {repo: Simon7108528/EfficientSAM3, revision: 85b05896928f974e308f889d7ccb2eefc069de98}
+        derived: true
+        produced_by: hosts/cerebrate-pixel6/spikes/efficientsam3-tpu/esam3_tpu_prep.py
+        files:
+          - {name: esam3-rvm-vision-trunk-fp32.tflite, sha256: 25301c5aa52ec3be9e5503521e7a0493c07eae47866eee05653f173776c159ac, bytes: 70977556, origin: esam3-tpu/esam3-rvm-vision-trunk-fp32.tflite}
+        validated:
+          pixel6_litert_compiled_gpu: passed
+      tflite_gpu_vision_neck:
+        # simple FPN -> 288/144/72 x 256
+        source: {repo: Simon7108528/EfficientSAM3, revision: 85b05896928f974e308f889d7ccb2eefc069de98}
+        derived: true
+        produced_by: hosts/cerebrate-pixel6/spikes/efficientsam3-tpu/esam3_tpu_prep.py
+        files:
+          - {name: esam3-rvm-vision-neck-fp32.tflite, sha256: a5f11036ce9f7b297396bf28d98915afce8ba84b08cd29d8b6bc760797160239, bytes: 27803192, origin: esam3-tpu/esam3-rvm-vision-neck-fp32.tflite}
+        validated:
+          pixel6_litert_compiled_gpu: passed
+          pixel6_litert_compiled_gpu_fp16acc32: passed
+      tflite_cpu_text:
+        source: {repo: Simon7108528/EfficientSAM3, revision: 85b05896928f974e308f889d7ccb2eefc069de98}
+        derived: true
+        produced_by: hosts/cerebrate-pixel6/spikes/efficientsam3-gpu/esam3_convert.py
+        files:
+          - {name: esam3-rvm-text-fp32.tflite, sha256: dfdace733b5f1fbdfb0edee9b23ee08b2dc4c6298ca0c1e66239ca2499925b5d, bytes: 169183576, origin: esam3/esam3-rvm-text-fp32.tflite}
+        validated:
+          pixel6_litert_compiled_cpu: passed
+      tflite_gpu_grounding:
+        # six exact rewrites + five host constant inputs (positional encoding,
+        # layer-0 reference boxes, geometry-token start, learned queries, presence token)
+        source: {repo: Simon7108528/EfficientSAM3, revision: 85b05896928f974e308f889d7ccb2eefc069de98}
+        derived: true
+        produced_by: hosts/cerebrate-pixel6/spikes/efficientsam3-gpu/esam3_convert_prepared.py
+        files:
+          - {name: esam3-rvm-grounding-prepared-fp32.tflite, sha256: e20b1e1bb16a54b2fc4d57ab3bd5aa74fd4d639488ce71e80e67531754e034ff, bytes: 114092788, origin: esam3/esam3-rvm-grounding-prepared-fp32.tflite}
+          - {name: esam3-const-pos.bin, sha256: 3c7bf47c9a522bff92adc71e1b405b7a2cd9231d017bbe7a1eb2b9ffe47f87e0, bytes: 5308416, origin: esam3/pos.bin}
+          - {name: esam3-const-refboxes.bin, sha256: b0b796a35416a1afba403141521ba0c11bd662f7d3f221ad3984f94e8640a89a, bytes: 3200, origin: esam3/ref0.bin}
+          - {name: esam3-const-geo.bin, sha256: 44d576d2a9a99db82c69ec8aa702afdd96d9f1d0d09fa9650f3c6568c97d80d7, bytes: 1024, origin: esam3/geo0.bin}
+          - {name: esam3-const-queries.bin, sha256: 6c55d64012e392cab69a1d0abed1525d8dd5bf788c4cdf4d9a8de973eaba8e89, bytes: 204800, origin: esam3/query0.bin}
+          - {name: esam3-const-presence.bin, sha256: 67e3ef1432ed86dd66d7a690d3dbf3376e9d9bafcebc14467ce01c6c16b8767b, bytes: 1024, origin: esam3/presence0.bin}
+        validated:
+          pixel6_litert_compiled_gpu: passed
+          pixel6_litert_compiled_gpu_fp16acc32: passed
+          pixel6_litert_compiled_gpu_fp16: failed
+      host_tokenizer:
+        # OpenAI CLIP's BPE merges (MIT), for the guest's stdlib tokenizer
+        # (mlserver/models/cerebrate-graph/clip_bpe.py; also OWLv2's)
+        # The EfficientSAM3 code repository's copy (sam3/assets/), pinned to a
+        # commit; it isn't in the Hugging Face weights repository. Store:
+        # direct/efficientsam3-rvm/.
+        source: {url: "https://raw.githubusercontent.com/SimonZeng7108/efficientsam3/bd0936c788fed8d51fa799437f05abd97b401b06/sam3/assets/bpe_simple_vocab_16e6.txt.gz", sha256: 924691ac288e54409236115652ad4aa250f48203de50a9e4722a6ecd48d6804a}
+        target: guest
+        files:
+          - {name: bpe_simple_vocab_16e6.txt.gz, sha256: 924691ac288e54409236115652ad4aa250f48203de50a9e4722a6ecd48d6804a, bytes: 1356917}
+    worker:
+      binary: cerebrate-hetero
+      port: 8781
+    serving:
+      mlserver_model: efficientsam3-rvm
+      interface: photo-text-segmentation-v1
+    aliases:
+      default: gpu-fp32
+      reference: gpu-fp32
+      fast: gpu-trunk-fp32-neck-fp16acc32-grounding-fp16acc32
+    requirements:
+      # The five graphs and the host constant inputs, MiB.
+      disk_mb: 464.18
+      ram_mb: null
+
+  rf-detr-seg-nano:
+    description: >-
+      RF-DETR-Seg-Nano (Roboflow), fixed-class (COCO, 91 ids) detection with
+      instance masks at 312x312: litert-community's published two-graph
+      conversion (graph A: backbone + encoder + proposals; graph B: decoder +
+      heads + masks) with a host step between them (top-100 proposal
+      selection, verbatim from the model card) and constants fed as inputs.
+      FP16 weights; correct at FP32 compute and at FP16 with FP32
+      accumulation on the Pixel 6 GPU.
+    capabilities:
+      - detect-objects
+      - segment-objects
+    artifacts:
+      tflite_gpu_graph_a:
+        source: {repo: litert-community/RF-DETR-Seg-Nano-LiteRT, revision: 8fee237c534786c1e7593dde45a0f806ffa31afd}
+        files:
+          - {name: rfdetrseg_graphA_fp16.tflite, sha256: 1b85a919c19a1832b729f546c3f60ceca179b669258d7ab244fac96890bf630a, bytes: 47028736, origin: rfdetr/rfdetrseg_graphA_fp16.tflite}
+          - {name: rfdetr-clspos.bin, upstream_name: clspos.bin, sha256: 11371e5ccb86a769f96e5eeb658f303715da8f26c4ff6158fef726a2ebd69bd8, bytes: 1536, origin: rfdetr/clspos.bin}
+          - {name: rfdetr-pospatch.bin, upstream_name: pospatch.bin, sha256: f7e9ba735aa5b820ed4eb4604bea7c2082873815381b5ef069f67d881beb1d81, bytes: 1038336, origin: rfdetr/pospatch.bin}
+        validated:
+          pixel6_litert_compiled_gpu: passed
+          pixel6_litert_compiled_gpu_fp16acc32: passed
+          pixel6_litert_compiled_gpu_fp16: failed
+      tflite_gpu_graph_b:
+        source: {repo: litert-community/RF-DETR-Seg-Nano-LiteRT, revision: 8fee237c534786c1e7593dde45a0f806ffa31afd}
+        files:
+          - {name: rfdetrseg_graphB_fp16.tflite, sha256: 71ad26d20f3f5bc15b8fc73384a1ce3ad0ceb6b4f994bb042662641aea071ae7, bytes: 14783408, origin: rfdetr/rfdetrseg_graphB_fp16.tflite}
+          - {name: rfdetr-query_feat.bin, upstream_name: query_feat.bin, sha256: 936babdfe6f5f52c246d9b4453d879cb2743339868a99d23b90e7c88f34adec2, bytes: 102400, origin: rfdetr/query_feat.bin}
+        validated:
+          pixel6_litert_compiled_gpu: passed
+          pixel6_litert_compiled_gpu_fp16acc32: passed
+          pixel6_litert_compiled_gpu_fp16: failed
+      host_refpoint_embed:
+        # used by the host step in the guest adapter
+        source: {repo: litert-community/RF-DETR-Seg-Nano-LiteRT, revision: 8fee237c534786c1e7593dde45a0f806ffa31afd}
+        target: guest
+        files:
+          - {name: rfdetr-refpoint_embed.bin, upstream_name: refpoint_embed.bin, sha256: e5713e5fe84a3df26598af65ce29e3a513097b20071849019b3e1f3a8c156c26, bytes: 1600}
+    worker:
+      binary: cerebrate-hetero
+      port: 8780
+    serving:
+      mlserver_model: rf-detr-seg-nano
+      interface: photo-detections-v1
+    aliases:
+      default: gpu-fp32
+      reference: gpu-fp32
+      fast: gpu-fp16acc32
+    requirements:
+      disk_mb: 60.04
+      ram_mb: null
+
+  depth-anything-v2-small:
+    description: >-
+      Depth Anything V2 Small: relative (affine-invariant inverse) depth for
+      depth-aware edits. litert-community's published FP32 conversion, fixed
+      input [1,3,518,686] (the photo stretched), output [1,518,686]; judged
+      after least-squares scale and shift against the original Transformers
+      checkpoint (depth-anything/Depth-Anything-V2-Small-hf, revision
+      5426e4f0).
+    capabilities:
+      - estimate-depth
+    artifacts:
+      tflite_gpu:
+        source: {repo: litert-community/depth-anything-v2-small, revision: 178427e448dbf4da93b1e7b1b2abc103ad329bd6}
+        files:
+          - {name: depth_anything_v2_small.tflite, upstream_name: tflite/depth_anything_v2_small.tflite, sha256: 651415f1774e02d06de946eccf2e6dbbc5f499a9e932d9de7ada3d59637d2e8e, bytes: 99530468, origin: depth/depth_anything_v2_small.tflite}
+        validated:
+          pixel6_litert_compiled_gpu: passed
+          pixel6_litert_compiled_gpu_fp16acc32: passed
+          pixel6_litert_compiled_gpu_fp16: failed
+    worker:
+      binary: cerebrate-hetero
+      port: 8774
+    serving:
+      mlserver_model: depth-anything-v2-small
+      interface: photo-depth-v1
+    aliases:
+      default: gpu-fp32
+      reference: gpu-fp32
+      fast: gpu-fp16acc32
+    requirements:
+      disk_mb: 94.92
+      ram_mb: null
+
+  mi-gan-512:
+    description: >-
+      MI-GAN 512 Places2: inpainting for object removal and correction.
+      litert-community's published conversion (FP16 weights); input
+      concat(keep - 0.5, rgb * keep) [1,4,512,512] with rgb in [-1, 1], output
+      [1,3,512,512] in [-1, 1]. Judged inside the removed region of the
+      composite against the fp32 generator extracted from the author-hosted
+      migan.onnx (andraniksargsyan/migan, revision 406830d0, MIT). Edge TPU
+      ruled out (2026-10-25).
+    capabilities:
+      - inpaint
+    artifacts:
+      tflite_gpu:
+        source: {repo: litert-community/MI-GAN-512-Places2-LiteRT, revision: 179a35d8e8a518f6253f9c42fc9b412c6438cf7c}
+        files:
+          - {name: migan_fp16.tflite, sha256: ef53f8dca69e5ce29629441128322c4d9a0a527b2a043703e0ab497f2463c25f, bytes: 16312640, origin: migan/migan_fp16.tflite}
+        validated:
+          pixel6_litert_compiled_gpu: passed
+          pixel6_litert_compiled_gpu_fp16acc32: passed
+          pixel6_litert_compiled_gpu_fp16: passed
+    worker:
+      binary: cerebrate-hetero
+      port: 8775
+    serving:
+      mlserver_model: mi-gan-512
+      interface: photo-inpaint-v1
+    aliases:
+      default: gpu-fp32
+      reference: gpu-fp32
+      fast: gpu-fp16
+    requirements:
+      disk_mb: 15.56
+      ram_mb: null
+
+  owlv2-b16:
+    description: >-
+      OWLv2 B/16 ensemble (google/owlv2-base-patch16-ensemble): open-vocabulary
+      detection by text query or image exemplar. Our conversions (spike
+      owlv2-gpu), split so the vocabulary is data: image tower (GPU, 960x960,
+      per-patch class embeddings, box logits, objectness) and text tower
+      (token ids [32,16] -> embeddings [32,512]); logits and the box bias are
+      computed on the host. FP32 only on the Pixel 6 (both reduced modes
+      fail). Seconds per image: per-request, not interactive.
+    capabilities:
+      - detect-objects-by-text
+      - detect-objects-by-exemplar
+    artifacts:
+      tflite_gpu_image_tower:
+        # position table fed as an input; class-token merge as a broadcast
+        # multiply; box-bias add moved to the host (the G1 GPU broadcast it wrongly)
+        source: {repo: google/owlv2-base-patch16-ensemble, revision: cfd3195ba4ea9592eec887ded089f4c08eff231d}
+        derived: true
+        produced_by: hosts/cerebrate-pixel6/spikes/owlv2-gpu/convert_owlv2.py
+        files:
+          - {name: owlv2-b16-image-tower-fp32.tflite, sha256: ba7818f17593d3c79955099ca49abb8666f1f19f4c4b1d2f1a0814a3f3e0b16a, bytes: 353870972, origin: owlv2/owlv2-b16-image-tower-fp32.tflite}
+          - {name: owlv2-const-pos.bin, sha256: 75ff9421c92511a21cb04ae8666939376b8f630781f16122c78ebebf0cf3e4e3, bytes: 11062272, origin: owlv2/pos.bin}
+        validated:
+          pixel6_litert_compiled_gpu: passed
+          pixel6_litert_compiled_gpu_fp16acc32: failed
+          pixel6_litert_compiled_gpu_fp16: failed
+      tflite_text_tower:
+        source: {repo: google/owlv2-base-patch16-ensemble, revision: cfd3195ba4ea9592eec887ded089f4c08eff231d}
+        derived: true
+        produced_by: hosts/cerebrate-pixel6/spikes/owlv2-gpu/convert_owlv2_text.py
+        files:
+          - {name: owlv2-b16-text-tower-fp32.tflite, sha256: a5166847cec312b1d5b9c2282fdea9cc445e401617497dd160f1e15b765b98a6, bytes: 253917364, origin: owlv2/text/owlv2-b16-text-tower-fp32.tflite}
+        validated:
+          pixel6_litert_compiled_cpu: passed
+          pixel6_litert_compiled_gpu_cpu: passed
+      host_box_bias:
+        # the box-head bias [3600,4] float32, added on the host (the G1 GPU broadcast it wrongly)
+        source: {repo: google/owlv2-base-patch16-ensemble, revision: cfd3195ba4ea9592eec887ded089f4c08eff231d}
+        derived: true
+        produced_by: hosts/cerebrate-pixel6/spikes/owlv2-gpu/convert_owlv2.py
+        target: guest
+        files:
+          - {name: owlv2-box_bias.bin, sha256: bf4be1d28eddbfe1fa93c3947309a1fe3cef0e58e06f5adb7dd993f625944de3, bytes: 57600}
+    worker:
+      binary: cerebrate-hetero
+      port: 8782
+    serving:
+      mlserver_model: owlv2-b16
+      interface: photo-text-detection-v1
+    aliases:
+      default: gpu-fp32
+      reference: gpu-fp32
+    requirements:
+      disk_mb: 590.18
+      ram_mb: null
+
+  dinov2-s14:
+    description: >-
+      DINOv2 ViT-S/14 image embeddings: litert-community's published
+      conversion at 448x448 (FP16 weights), final-normalized patch tokens
+      [1,1024,384]; judged against the original timm model
+      (vit_small_patch14_dinov2.lvd142m at 448) by token cosine and image
+      similarity ranking from mean-pooled patch features. FP32 compute only
+      (FP16 with FP32 accumulation fails here).
+    capabilities:
+      - embed-image
+    artifacts:
+      tflite_gpu_erf:
+        # exact GELU (the activation the original uses)
+        source: {repo: litert-community/DINOv2-ViT-S14-LiteRT, revision: f3be8d98c2e3241ee59dd39a6c24f8d5ea72f593}
+        files:
+          - {name: dinov2_s_erf_fp16.tflite, sha256: b0280983afe490b4efb26ab36bd7a80d2c3301948764386fafab5d869d936b86, bytes: 44866640, origin: dino448/dinov2_s_erf_fp16.tflite}
+        validated:
+          pixel6_litert_compiled_gpu: passed
+          pixel6_litert_compiled_gpu_fp16acc32: failed
+          pixel6_litert_compiled_gpu_fp16: failed
+      tflite_gpu_tanh:
+        # tanh-approximated GELU
+        source: {repo: litert-community/DINOv2-ViT-S14-LiteRT, revision: f3be8d98c2e3241ee59dd39a6c24f8d5ea72f593}
+        files:
+          - {name: dinov2_s_fp16.tflite, sha256: c0697093316b777de2c79ed895f74c864136840309ecb2aab6f51cbe0c228e7f, bytes: 44893248, origin: dino448/dinov2_s_fp16.tflite}
+        validated:
+          pixel6_litert_compiled_gpu: passed
+    worker:
+      binary: cerebrate-hetero
+      port: 8776
+    serving:
+      mlserver_model: dinov2-s14
+      interface: photo-embedding-v1
+    aliases:
+      default: gpu-fp32
+      reference: gpu-fp32
+    requirements:
+      # Both published files (the default variant alone: 42.79).
+      disk_mb: 85.6
+      ram_mb: null
+
+# Task-level selection (lane Step 4 decision, 2026-10-24), separate from each
+# model's own aliases. A task advertised as available must select production
+# variants with serving for default and fallback (validator).
+tasks:
+  prompt-free-segmentation:
+    default: yoloe-v8s-pf/tpu-fp16r-gpu-head-fp16acc32
+    fallback: yoloe-v8s-pf/gpu-fp32
+    available: true
+  box-refinement:
+    default: edgesam-3x/tpu-fp16r-gpu-neck-fp32
+    quality: sam2.1-hiera-tiny/gpu-fp32
+    fallback: edgesam-3x/gpu-fp32
+    available: true
+    notes: >-
+      EdgeSAM for ordinary object masks; SAM 2.1 for bedding, fabric, large
+      deformable objects and explicit quality-sensitive requests. EdgeSAM's
+      best-of-3 is not an automatic fallback.
+  text-prompted-segmentation:
+    default: efficientsam3-rvm/gpu-trunk-fp32-neck-fp16acc32-grounding-fp16acc32
+    quality: efficientsam3-rvm/gpu-fp32
+    available: true
+  relative-depth:
+    default: depth-anything-v2-small/gpu-fp16acc32
+    quality: depth-anything-v2-small/gpu-fp32
+    available: true
+  inpainting:
+    default: mi-gan-512/gpu-fp16
+    quality: mi-gan-512/gpu-fp32
+    available: true
+  open-vocabulary-detection:
+    default: owlv2-b16/gpu-fp32
+    available: true
+  image-embedding:
+    default: dinov2-s14/gpu-fp32
+    available: true
+  fixed-class-segmentation:
+    default: rf-detr-seg-nano/gpu-fp16acc32
+    quality: rf-detr-seg-nano/gpu-fp32
+    available: true

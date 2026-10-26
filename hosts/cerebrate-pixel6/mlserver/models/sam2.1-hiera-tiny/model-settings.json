@@ -1,0 +1,15 @@
+{
+  "name": "sam2.1-hiera-tiny",
+  "implementation": "cerebrate_graph_runtime.CerebrateGraphRuntime",
+  "parameters": {
+    "version": "v0.1.0",
+    "extra": {
+      "cerebrate_graph_worker": "gpu-sam2",
+      "cerebrate_graph_port": 8779,
+      "cerebrate_graph_model_path": "/data/local/tmp/sam21t-encoder-prepared-fp32.tflite",
+      "cerebrate_graph_backend": "sam2.1-hiera-tiny-default",
+      "cerebrate_graph_request_timeout_s": 120,
+      "cerebrate_graph_photo": "sam2"
+    }
+  }
+}

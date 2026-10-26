@@ -1,0 +1,15 @@
+{
+  "name": "mi-gan-512",
+  "implementation": "cerebrate_graph_runtime.CerebrateGraphRuntime",
+  "parameters": {
+    "version": "v0.1.0",
+    "extra": {
+      "cerebrate_graph_worker": "gpu-migan",
+      "cerebrate_graph_port": 8775,
+      "cerebrate_graph_model_path": "/data/local/tmp/migan_fp16.tflite",
+      "cerebrate_graph_backend": "mi-gan-512-fast",
+      "cerebrate_graph_request_timeout_s": 120,
+      "cerebrate_graph_photo": "migan"
+    }
+  }
+}

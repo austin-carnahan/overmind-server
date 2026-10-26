@@ -1,0 +1,5 @@
+{
+  "_generated_by": "scripts/cerebrate-models generate, from models/catalog.yaml serving_policy",
+  "idle_stop_s": 600,
+  "capacity_wait_s": 30
+}

@@ -25,6 +25,7 @@ ml-dtypes==0.5.4
 mlserver==1.7.1
 multidict==6.8.0
 numpy==2.5.3
+opencv-python-headless==5.0.0.93
 opentelemetry-api==1.44.0
 opentelemetry-exporter-otlp-proto-common==1.44.0
 opentelemetry-exporter-otlp-proto-grpc==1.44.0
@@ -39,7 +40,12 @@ opentelemetry-util-http==0.65b0
 orjson==3.12.0
 packaging==26.3
 pandas==3.0.5
-pillow==12.3.0
+# 13.0.0 (was 12.3.0): the published-model references (Depth Anything, DINOv2,
+# RF-DETR, SAM 2.1, MI-GAN) resize with PIL, and 12.3's bicubic differs from
+# 13.0's by up to 11 levels when the aspect ratio changes; 13.0 reproduces
+# them exactly. EdgeSAM's bilinear ResizeLongestSide is identical in both
+# (8/8 photos). wheel sha256 8bf295fe459343bc6093c8e5e0df60bfa189e0fcb775a22e2c2488fdeccc6c0d
+pillow==13.0.0
 prometheus-client==0.26.0
 propcache==0.5.4
 protobuf==6.33.6

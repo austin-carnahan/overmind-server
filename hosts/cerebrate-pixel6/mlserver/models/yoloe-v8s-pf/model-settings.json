@@ -1,0 +1,14 @@
+{
+  "name": "yoloe-v8s-pf",
+  "implementation": "cerebrate_graph_runtime.CerebrateGraphRuntime",
+  "parameters": {
+    "version": "v0.1.0",
+    "extra": {
+      "cerebrate_graph_worker": "hetero1",
+      "cerebrate_graph_port": 8772,
+      "cerebrate_graph_model_path": "/data/local/tmp/yoloe-v8s-pf-backbone-tpu-fp32.tflite",
+      "cerebrate_graph_backend": "yoloe-v8s-fast",
+      "cerebrate_graph_photo": "yoloe"
+    }
+  }
+}

@@ -34,11 +34,54 @@
 //
 //   START\nworker: gguf\nmodel: /data/local/tmp/foo.gguf\nmmproj: /data/local/tmp/foo-mmproj.gguf\n\n
 //
+// The Segmentation and Labeling Lane (Step 1) added three identical slots,
+// "graph1".."graph3" (cerebrate-graph, ports 8769-8771), with no protocol
+// change: one model per process means a pipeline needing several graphs
+// resident at once (detector + SAM encoder + SAM decoder) needs several
+// processes. Backend validation moved from a hardcoded cpu|gpu check to a
+// per-slot allowed list, and the readiness wait became per-slot, since large
+// ONNX models and NNAPI compilation can take far longer than 15s to load.
+//
+// cerebrate-hetero (TPU + GPU pipeline worker) added one slot, "hetero1"
+// (port 8772), with no protocol change. Its "backend" field names one of a
+// fixed set of profiles compiled in below; each profile carries its
+// declared model and its complete command line, so a client still chooses
+// only among fixed configurations -- never a path or an argument. The
+// backend field widened from 8 to 32 characters for the profile names.
+// A second slot, "hetero2" (port 8773), serves EdgeSAM the same way; each
+// slot accepts only its own model's profiles (one model per process). Every
+// profile now starts the worker from a fixed config file in the staging
+// directory (persistent NNAPI compilation cache, validated GPU fallback);
+// the file's contents are the deployment's, not the client's.
+//
+// The model registry (2026-10-25) added an optional, deployment-owned
+// profiles file, STAGING_DIR/cerebrate-profiles.conf, read once at startup:
+//   slot <name> <port> <binary file> [ready_timeout_ms]
+//   profile <name> <slot> <declared model file> <config file>
+// File names are flat files in STAGING_DIR, like every compiled-in path; a
+// file slot runs cerebrate-hetero profiles exactly like hetero1/hetero2, and
+// may not reuse a compiled-in name or port. LIST answers with up to 8 KB.
+//
+// Capacity (2026-10-25): one rule for every START, whatever the worker. The
+// profiles file (generated from the model registry, models/) carries the
+// system reserve and each profile's or worker's measured cost:
+//   reserve_mb <mb>
+//   cost <profile or worker> <mb>
+// A worker starts only if MemAvailable - committed - cost >= reserve, where
+// "committed" is, over running workers, the part of each one's cost it isn't
+// using yet (cost - RSS of the worker and its children, if positive): a
+// cerebrate-gguf worker allocates per request in a child process, so its
+// budget stays reserved while it runs. A START without a recorded cost is
+// refused (fail closed). Refusals start with "ERROR: capacity:", so the
+// MLServer adapter can make room (stop an idle worker) and retry. CAPACITY
+// reports the numbers. Without a reserve_mb line nothing is checked.
+//
 // Deliberately NOT built: arbitrary command execution, arbitrary binary
 // paths, arbitrary ports, orphan-worker adoption after a supervisor
 // restart, or automatic respawn-on-crash (see cerebrate-supervisor's
 // README for what Stage 3 found and why auto-restart is deferred).
 #include <arpa/inet.h>
+#include <dirent.h>
 #include <errno.h>
 #include <fcntl.h>
 #include <netinet/in.h>
@@ -54,33 +97,258 @@
 #include <time.h>
 #include <unistd.h>
 
-#define STAGING_DIR "/data/local/tmp"
-#define CONTROL_PORT 8767
+#ifndef STAGING_DIR
+#define STAGING_DIR "/data/local/tmp"  // overridable at build time for a side-by-side test instance
+#endif
+#ifndef CONTROL_PORT
+#define CONTROL_PORT 8767  // overridable at build time for a side-by-side test instance
+#endif
+#ifndef PORT_OFFSET
+#define PORT_OFFSET 0      // test builds shift every compiled-in worker port (production's are in use)
+#endif
 
 enum WorkerState { STOPPED, RUNNING, EXITED };
+
+// cerebrate-graph's execution providers (see cerebrate-graph.cc).
+#define kGraphBackends "cpu,nnapi,nnapi16,xnnpack,webgpu"
+
+// cerebrate-hetero profiles: the slot's "backend" names one; "model" must
+// equal its declared model. argv follows the port (see cerebrate-hetero.cc).
+// Every path is a flat file in STAGING_DIR, like every other worker's model.
+struct HeteroProfile {
+  const char* name;
+  const char* model;
+  const char* argv[10];  // NULL-terminated
+  const char* slot;      // NULL for compiled-in profiles (their slot lists them)
+};
+static const HeteroProfile kHeteroProfiles[] = {
+  // YOLOE-v8s prompt-free: fast = TPU backbone + GPU fp16acc32 head (GPU mixed
+  // fallback); default = GPU fp32.
+  {"yoloe-v8s-fast", STAGING_DIR "/yoloe-v8s-pf-backbone-tpu-fp32.tflite", {"--config", STAGING_DIR "/yoloe-v8s-fast.conf", NULL}, NULL},
+  {"yoloe-v8s-default", STAGING_DIR "/yoloe-v8s-pf-gpu-nhwc.tflite", {"--config", STAGING_DIR "/yoloe-v8s-default.conf", NULL}, NULL},
+  // EdgeSAM-3x box refinement: fast = TPU trunk + GPU fp32 neck + GPU fp32 box
+  // decoder (exact GPU fp32 encoder as fallback); default = GPU fp32.
+  {"edgesam3x-fast", STAGING_DIR "/edgesam3x-enc-tpu-fp32.tflite", {"--config", STAGING_DIR "/edgesam3x-fast.conf", NULL}, NULL},
+  {"edgesam3x-default", STAGING_DIR "/edgesam3x-enc-gpu.tflite", {"--config", STAGING_DIR "/edgesam3x-default.conf", NULL}, NULL},
+};
+static const int kNumHeteroProfiles = sizeof(kHeteroProfiles) / sizeof(kHeteroProfiles[0]);
+#define kHeteroBackends "yoloe-v8s-fast,yoloe-v8s-default"
+#define kEdgesamBackends "edgesam3x-fast,edgesam3x-default"
 
 struct WorkerSlot {
   const char* name;         // protocol identifier, e.g. "infer"
   const char* binary_path;  // fixed, not client-supplied
   int fixed_port;           // fixed, not client-supplied
-  int needs_backend;        // cerebrate-generate takes cpu|gpu; cerebrate-infer doesn't
+  int needs_backend;        // cerebrate-generate/cerebrate-graph take a backend; others don't
   int needs_mmproj;         // cerebrate-gguf takes a second GGUF (multimodal projector)
+  const char* backends;     // comma-separated allowed backends when needs_backend
+  int ready_timeout_ms;     // how long START waits for the worker's port to answer
 
   // Runtime state
   WorkerState state;
   pid_t pid;
   char model[256];
-  char backend[8];
+  char backend[32];
   char mmproj[256];
   int last_exit_code;
+
+  // Optional, zero for the original slots
+  int is_hetero;                // backend names a kHeteroProfiles entry
+  const char* ld_library_path;  // NULL = STAGING_DIR
 };
 
-static WorkerSlot g_slots[] = {
-  {"infer", STAGING_DIR "/cerebrate-infer", 8765, 0, 0, STOPPED, 0, "", "", "", 0},
-  {"generate", STAGING_DIR "/cerebrate-generate", 8766, 1, 0, STOPPED, 0, "", "", "", 0},
-  {"gguf", STAGING_DIR "/cerebrate-gguf", 8768, 0, 1, STOPPED, 0, "", "", "", 0},
+#define kMaxSlots 24
+static WorkerSlot g_slots[kMaxSlots] = {
+  {"infer", STAGING_DIR "/cerebrate-infer", 8765 + PORT_OFFSET, 0, 0, NULL, 15000, STOPPED, 0, "", "", "", 0, 0, NULL},
+  {"generate", STAGING_DIR "/cerebrate-generate", 8766 + PORT_OFFSET, 1, 0, "cpu,gpu", 15000, STOPPED, 0, "", "", "", 0, 0, NULL},
+  {"gguf", STAGING_DIR "/cerebrate-gguf", 8768 + PORT_OFFSET, 0, 1, NULL, 15000, STOPPED, 0, "", "", "", 0, 0, NULL},
+  {"graph1", STAGING_DIR "/cerebrate-graph", 8769 + PORT_OFFSET, 1, 0, kGraphBackends, 120000, STOPPED, 0, "", "", "", 0, 0, NULL},
+  {"graph2", STAGING_DIR "/cerebrate-graph", 8770 + PORT_OFFSET, 1, 0, kGraphBackends, 120000, STOPPED, 0, "", "", "", 0, 0, NULL},
+  {"graph3", STAGING_DIR "/cerebrate-graph", 8771 + PORT_OFFSET, 1, 0, kGraphBackends, 120000, STOPPED, 0, "", "", "", 0, 0, NULL},
+  {"hetero1", STAGING_DIR "/cerebrate-hetero", 8772 + PORT_OFFSET, 1, 0, kHeteroBackends, 120000, STOPPED, 0, "", "", "", 0,
+   1, STAGING_DIR "/litert-2.3.0:" STAGING_DIR},
+  {"hetero2", STAGING_DIR "/cerebrate-hetero", 8773 + PORT_OFFSET, 1, 0, kEdgesamBackends, 120000, STOPPED, 0, "", "", "", 0,
+   1, STAGING_DIR "/litert-2.3.0:" STAGING_DIR},
 };
-static const int kNumSlots = sizeof(g_slots) / sizeof(g_slots[0]);
+
+static int kNumSlots = 0;            // set at startup: compiled-in slots, then the profiles file's
+static int g_num_compiled_slots = 0;
+
+static void count_compiled_slots(void) {
+  while (g_num_compiled_slots < kMaxSlots && g_slots[g_num_compiled_slots].name) g_num_compiled_slots++;
+  kNumSlots = g_num_compiled_slots;
+}
+
+// Profiles from STAGING_DIR/cerebrate-profiles.conf (strings owned here).
+#define kMaxFileProfiles 48
+static HeteroProfile g_file_profiles[kMaxFileProfiles];
+static int g_num_file_profiles = 0;
+
+// Capacity (profiles file): the reserve and each profile's or worker's cost.
+#define kMaxCosts 64
+static int g_reserve_mb = -1;  // -1: no reserve_mb line, no capacity check
+static char* g_cost_key[kMaxCosts];
+static int g_cost_mb[kMaxCosts];
+static int g_num_costs = 0;
+
+static int cost_of(const char* key) {  // -1 if not recorded
+  for (int i = 0; i < g_num_costs; i++)
+    if (strcmp(g_cost_key[i], key) == 0) return g_cost_mb[i];
+  return -1;
+}
+
+static const HeteroProfile* find_profile(const char* name) {
+  for (int i = 0; i < kNumHeteroProfiles; i++)
+    if (strcmp(kHeteroProfiles[i].name, name) == 0) return &kHeteroProfiles[i];
+  for (int i = 0; i < g_num_file_profiles; i++)
+    if (strcmp(g_file_profiles[i].name, name) == 0) return &g_file_profiles[i];
+  return NULL;
+}
+
+static char* staged_path(const char* file) {  // STAGING_DIR "/" file, heap-owned
+  size_t n = strlen(STAGING_DIR) + strlen(file) + 2;
+  char* p = (char*)malloc(n);
+  snprintf(p, n, STAGING_DIR "/%s", file);
+  return p;
+}
+
+static int flat_name_ok(const char* f) {
+  return f[0] && !strchr(f, '/') && !strstr(f, "..");
+}
+
+// MemAvailable in MB; -1 if unreadable.
+static long mem_available_mb(void) {
+  FILE* f = fopen("/proc/meminfo", "r");
+  if (!f) return -1;
+  char line[128];
+  long kb = -1;
+  while (fgets(line, sizeof(line), f))
+    if (sscanf(line, "MemAvailable: %ld kB", &kb) == 1) break;
+  fclose(f);
+  return kb < 0 ? -1 : kb / 1024;
+}
+
+static int find_slot_name(const char* name) {
+  for (int i = 0; i < kNumSlots; i++) if (strcmp(g_slots[i].name, name) == 0) return 1;
+  return 0;
+}
+
+// RSS in MB of a process and all its descendants (cerebrate-gguf runs each
+// request in a child); 0 if unreadable.
+static long tree_rss_mb(pid_t root) {
+  static pid_t pids[4096], ppids[4096];
+  static long rss_pages[4096];
+  static char in_tree[4096];
+  int n = 0;
+  DIR* d = opendir("/proc");
+  if (!d) return 0;
+  struct dirent* e;
+  while ((e = readdir(d)) != NULL && n < 4096) {
+    if (e->d_name[0] < '0' || e->d_name[0] > '9') continue;
+    char path[64], buf[1024];
+    snprintf(path, sizeof(path), "/proc/%s/stat", e->d_name);
+    FILE* f = fopen(path, "r");
+    if (!f) continue;
+    size_t len = fread(buf, 1, sizeof(buf) - 1, f);
+    fclose(f);
+    buf[len] = '\0';
+    char* rp = strrchr(buf, ')');  // comm may contain spaces
+    if (!rp) continue;
+    char state;
+    int ppid;
+    long rss = 0;
+    // after "comm)": state ppid pgrp session tty_nr tpgid flags minflt cminflt
+    // majflt cmajflt utime stime cutime cstime priority nice num_threads
+    // itrealvalue starttime vsize rss
+    if (sscanf(rp + 2, "%c %d %*d %*d %*d %*d %*u %*u %*u %*u %*u %*u %*u %*d %*d %*d %*d %*d %*d %*u %*u %ld",
+               &state, &ppid, &rss) != 3) continue;
+    pids[n] = (pid_t)atoi(e->d_name);
+    ppids[n] = ppid;
+    rss_pages[n] = rss;
+    n++;
+  }
+  closedir(d);
+  for (int i = 0; i < n; i++) in_tree[i] = pids[i] == root;
+  for (int changed = 1; changed;) {  // add children of members until nothing changes
+    changed = 0;
+    for (int i = 0; i < n; i++) {
+      if (in_tree[i]) continue;
+      for (int j = 0; j < n; j++)
+        if (in_tree[j] && pids[j] == ppids[i]) { in_tree[i] = 1; changed = 1; break; }
+    }
+  }
+  long pages = 0;
+  for (int i = 0; i < n; i++) if (in_tree[i]) pages += rss_pages[i];
+  return pages * (sysconf(_SC_PAGESIZE) / 1024) / 1024;
+}
+
+// Reads the optional profiles file. Returns 0 (also when the file is
+// absent); nonzero on a malformed file -- the supervisor then refuses to
+// start rather than run with half a deployment.
+static int load_profiles_file(void) {
+  FILE* f = fopen(STAGING_DIR "/cerebrate-profiles.conf", "r");
+  if (!f) return 0;
+  char line[512];
+  int lineno = 0;
+  while (fgets(line, sizeof(line), f)) {
+    lineno++;
+    char* hash = strchr(line, '#');
+    if (hash) *hash = '\0';
+    char a[5][256] = {{0}};
+    char kind[16] = "";
+    int n = sscanf(line, "%15s %255s %255s %255s %255s %255s", kind, a[0], a[1], a[2], a[3], a[4]);
+    if (n <= 0) continue;
+    if (strcmp(kind, "slot") == 0 && (n == 4 || n == 5)) {
+      int port = atoi(a[1]);
+      if (kNumSlots >= kMaxSlots || port < 1024 || port > 65535 || !flat_name_ok(a[2])) { fprintf(stderr, "FATAL: profiles file line %d: bad slot\n", lineno); fclose(f); return 1; }
+      for (int i = 0; i < kNumSlots; i++)
+        if (strcmp(g_slots[i].name, a[0]) == 0 || g_slots[i].fixed_port == port || port == CONTROL_PORT) { fprintf(stderr, "FATAL: profiles file line %d: slot %s or port %d already in use\n", lineno, a[0], port); fclose(f); return 1; }
+      WorkerSlot* s = &g_slots[kNumSlots++];
+      memset(s, 0, sizeof(*s));
+      s->name = strdup(a[0]);
+      s->binary_path = staged_path(a[2]);
+      s->fixed_port = port;
+      s->needs_backend = 1;
+      s->backends = "";  // file slots accept their own profiles (find_profile + slot check)
+      s->ready_timeout_ms = n == 5 ? atoi(a[3]) : 120000;
+      s->state = STOPPED;
+      s->is_hetero = 1;
+      s->ld_library_path = STAGING_DIR "/litert-2.3.0:" STAGING_DIR;
+    } else if (strcmp(kind, "reserve_mb") == 0 && n == 2) {
+      g_reserve_mb = atoi(a[0]);
+      if (g_reserve_mb <= 0) { fprintf(stderr, "FATAL: profiles file line %d: bad reserve_mb\n", lineno); fclose(f); return 1; }
+    } else if (strcmp(kind, "cost") == 0 && n == 3) {
+      int mb = atoi(a[1]);
+      if (g_num_costs >= kMaxCosts || mb <= 0 || cost_of(a[0]) >= 0) { fprintf(stderr, "FATAL: profiles file line %d: bad or duplicate cost\n", lineno); fclose(f); return 1; }
+      g_cost_key[g_num_costs] = strdup(a[0]);
+      g_cost_mb[g_num_costs++] = mb;
+    } else if (strcmp(kind, "profile") == 0 && n == 5) {
+      if (g_num_file_profiles >= kMaxFileProfiles || find_profile(a[0]) || !flat_name_ok(a[2]) || !flat_name_ok(a[3])) { fprintf(stderr, "FATAL: profiles file line %d: bad or duplicate profile\n", lineno); fclose(f); return 1; }
+      int slot_ok = 0;
+      for (int i = g_num_compiled_slots; i < kNumSlots; i++) if (strcmp(g_slots[i].name, a[1]) == 0) slot_ok = 1;
+      if (!slot_ok) { fprintf(stderr, "FATAL: profiles file line %d: profile %s names unknown file slot %s (declare it first)\n", lineno, a[0], a[1]); fclose(f); return 1; }
+      HeteroProfile* p = &g_file_profiles[g_num_file_profiles++];
+      memset(p, 0, sizeof(*p));
+      p->name = strdup(a[0]);
+      p->slot = strdup(a[1]);
+      p->model = staged_path(a[2]);
+      p->argv[0] = "--config";
+      p->argv[1] = staged_path(a[3]);
+      p->argv[2] = NULL;
+    } else {
+      fprintf(stderr, "FATAL: profiles file line %d: expected 'slot <name> <port> <binary> [ready_ms]', 'profile <name> <slot> <model> <config>', 'reserve_mb <mb>' or 'cost <profile or worker> <mb>'\n", lineno);
+      fclose(f);
+      return 1;
+    }
+  }
+  fclose(f);
+  for (int i = 0; i < g_num_costs; i++)
+    if (!find_profile(g_cost_key[i]) && !find_slot_name(g_cost_key[i])) {
+      fprintf(stderr, "FATAL: profiles file: cost for unknown profile or worker %s\n", g_cost_key[i]);
+      return 1;
+    }
+  return 0;
+}
 
 // Set once at startup / per-accept so a forked worker child can close its
 // inherited copies before exec -- otherwise the exec'd process holds the
@@ -126,6 +394,21 @@ static int model_path_is_approved(const char* path) {
   return 1;
 }
 
+// Exact match against one entry of the slot's comma-separated list.
+static int backend_is_allowed(const WorkerSlot* s, const char* backend) {
+  if (s->backends == NULL || backend[0] == '\0') return 0;
+  size_t len = strlen(backend);
+  const char* p = s->backends;
+  while (*p) {
+    const char* comma = strchr(p, ',');
+    size_t entry_len = comma ? (size_t)(comma - p) : strlen(p);
+    if (entry_len == len && strncmp(p, backend, len) == 0) return 1;
+    if (!comma) break;
+    p = comma + 1;
+  }
+  return 0;
+}
+
 static int connect_probe(int port, int timeout_ms) {
   int fd = socket(AF_INET, SOCK_STREAM, 0);
   if (fd < 0) return 0;
@@ -141,7 +424,7 @@ static int connect_probe(int port, int timeout_ms) {
 }
 
 static void wait_for_ready(WorkerSlot* s, char* out, size_t out_len) {
-  const int kTotalMs = 15000, kStepMs = 200;
+  const int kTotalMs = s->ready_timeout_ms, kStepMs = 200;
   int waited = 0;
   while (waited < kTotalMs) {
     // A worker that fails fast (bad model path, etc.) shows up as EXITED
@@ -164,6 +447,38 @@ static void wait_for_ready(WorkerSlot* s, char* out, size_t out_len) {
            s->pid, s->fixed_port, kTotalMs);
 }
 
+// The cost key of a running slot: its profile (hetero slots) or its name.
+static const char* running_key(const WorkerSlot* s) {
+  return s->is_hetero ? s->backend : s->name;
+}
+
+// Over running workers: the part of each one's cost it isn't using yet.
+static long committed_mb(void) {
+  reap_all();
+  long total = 0;
+  for (int i = 0; i < kNumSlots; i++) {
+    WorkerSlot* s = &g_slots[i];
+    if (s->state != RUNNING) continue;
+    int cost = cost_of(running_key(s));
+    if (cost <= 0) continue;
+    long unused = cost - tree_rss_mb(s->pid);
+    if (unused > 0) total += unused;
+  }
+  return total;
+}
+
+static void capacity_report(char* out, size_t out_len) {
+  reap_all();
+  snprintf(out, out_len, "OK reserve_mb=%d available_mb=%ld committed_mb=%ld\n", g_reserve_mb, mem_available_mb(), committed_mb());
+  for (int i = 0; i < kNumSlots; i++) {
+    WorkerSlot* s = &g_slots[i];
+    if (s->state != RUNNING) continue;
+    char line[160];
+    snprintf(line, sizeof(line), "%s %s cost_mb=%d rss_mb=%ld\n", s->name, running_key(s), cost_of(running_key(s)), tree_rss_mb(s->pid));
+    strncat(out, line, out_len - strlen(out) - 1);
+  }
+}
+
 static void start_worker(const char* worker, const char* model, const char* backend,
                           const char* mmproj, char* out, size_t out_len) {
   WorkerSlot* s = find_slot(worker);
@@ -179,9 +494,32 @@ static void start_worker(const char* worker, const char* model, const char* back
     snprintf(out, out_len, "ERROR: model path not approved: %s\n", model);
     return;
   }
-  if (s->needs_backend && strcmp(backend, "cpu") != 0 && strcmp(backend, "gpu") != 0) {
-    snprintf(out, out_len, "ERROR: worker %s requires backend cpu or gpu\n", worker);
+  const HeteroProfile* file_profile = find_profile(backend);
+  int file_slot = s->backends != NULL && s->backends[0] == '\0';
+  if (file_slot) {
+    if (!file_profile || !file_profile->slot || strcmp(file_profile->slot, s->name) != 0) {
+      snprintf(out, out_len, "ERROR: worker %s requires one of its profiles (cerebrate-profiles.conf)\n", worker);
+      return;
+    }
+  } else if (s->needs_backend && !backend_is_allowed(s, backend)) {
+    snprintf(out, out_len, "ERROR: worker %s requires backend one of %s\n", worker, s->backends);
     return;
+  }
+  const HeteroProfile* profile = NULL;
+  if (s->is_hetero) {
+    profile = find_profile(backend);
+    if (!profile || strcmp(model, profile->model) != 0) {
+      snprintf(out, out_len, "ERROR: worker %s profile %s requires model %s\n", worker, backend,
+               profile ? profile->model : "(unknown profile)");
+      return;
+    }
+    for (int a = 0; profile->argv[a]; a++) {
+      struct stat pst;
+      if (strncmp(profile->argv[a], STAGING_DIR "/", strlen(STAGING_DIR "/")) == 0 && stat(profile->argv[a], &pst) != 0) {
+        snprintf(out, out_len, "ERROR: profile %s file not found: %s\n", backend, profile->argv[a]);
+        return;
+      }
+    }
   }
   if (s->needs_mmproj) {
     if (mmproj == NULL || mmproj[0] == '\0') {
@@ -217,6 +555,23 @@ static void start_worker(const char* worker, const char* model, const char* back
                worker, s->model);
     }
     return;
+  }
+
+  // Capacity: one rule for every worker (see the header comment).
+  if (g_reserve_mb > 0) {
+    const char* key = profile ? profile->name : s->name;
+    int cost = cost_of(key);
+    if (cost < 0) {
+      snprintf(out, out_len, "ERROR: capacity: no recorded cost for %s (cerebrate-profiles.conf); not starting it\n", key);
+      return;
+    }
+    long avail = mem_available_mb();
+    long committed = committed_mb();
+    if (avail >= 0 && avail - committed - cost < g_reserve_mb) {
+      snprintf(out, out_len, "ERROR: capacity: %s needs %d MB; %ld MB free, %ld MB committed to running workers, reserve %d MB\n",
+               key, cost, avail, committed, g_reserve_mb);
+      return;
+    }
   }
 
   // Pre-flight, not just post-fork readiness: our own bookkeeping says
@@ -262,10 +617,20 @@ static void start_worker(const char* worker, const char* model, const char* back
       dup2(log_fd, 2);
       close(log_fd);
     }
-    setenv("LD_LIBRARY_PATH", STAGING_DIR, 1);
+    setenv("LD_LIBRARY_PATH", s->ld_library_path ? s->ld_library_path : STAGING_DIR, 1);
     char port_str[16];
     snprintf(port_str, sizeof(port_str), "%d", s->fixed_port);
-    if (s->needs_backend) {
+    if (profile) {
+      setenv("CEREBRATE_HETERO_PROFILE", profile->name, 1);
+      setenv("CEREBRATE_HETERO_MODEL", profile->model, 1);
+      const char* args[16];
+      int n = 0;
+      args[n++] = s->binary_path;
+      args[n++] = port_str;
+      for (int a = 0; profile->argv[a] && n < 15; a++) args[n++] = profile->argv[a];
+      args[n] = NULL;
+      execv(s->binary_path, (char* const*)args);
+    } else if (s->needs_backend) {
       execl(s->binary_path, s->binary_path, model, backend, port_str, (char*)NULL);
     } else if (s->needs_mmproj) {
       execl(s->binary_path, s->binary_path, model, mmproj, port_str, (char*)NULL);
@@ -358,6 +723,8 @@ static void handle_command(const char* cmd, const char* worker, const char* mode
     WorkerSlot* s = find_slot(worker);
     if (!s) { snprintf(out, out_len, "ERROR: unknown worker %s\n", worker); return; }
     status_line(s, out, out_len);
+  } else if (strcmp(cmd, "CAPACITY") == 0) {
+    capacity_report(out, out_len);
   } else if (strcmp(cmd, "LIST") == 0) {
     out[0] = '\0';
     for (int i = 0; i < kNumSlots; i++) {
@@ -406,7 +773,7 @@ static void read_request(int client, char* cmd, char* worker, char* model, char*
         while (*val == ' ') val++;
         if (strcmp(key, "worker") == 0) { strncpy(worker, val, 31); worker[31] = '\0'; }
         else if (strcmp(key, "model") == 0) { strncpy(model, val, 255); model[255] = '\0'; }
-        else if (strcmp(key, "backend") == 0) { strncpy(backend, val, 7); backend[7] = '\0'; }
+        else if (strcmp(key, "backend") == 0) { strncpy(backend, val, 31); backend[31] = '\0'; }
         else if (strcmp(key, "mmproj") == 0) { strncpy(mmproj, val, 255); mmproj[255] = '\0'; }
       }
     }
@@ -418,6 +785,8 @@ int main(int argc, char** argv) {
   // Reap-friendly: never let a stopped/killed worker linger as a zombie
   // between explicit reap_all() calls either.
   signal(SIGPIPE, SIG_IGN);
+  count_compiled_slots();
+  if (load_profiles_file()) return 1;
 
   int srv = socket(AF_INET, SOCK_STREAM, 0);
   g_listen_fd = srv;
@@ -432,7 +801,13 @@ int main(int argc, char** argv) {
     return 1;
   }
   listen(srv, 4);
-  fprintf(stderr, "READY cerebrate-supervisor port=%d workers=infer,generate,gguf\n", CONTROL_PORT);
+  char worker_names[512] = "";
+  for (int i = 0; i < kNumSlots; i++) {
+    if (i > 0) strncat(worker_names, ",", sizeof(worker_names) - strlen(worker_names) - 1);
+    strncat(worker_names, g_slots[i].name, sizeof(worker_names) - strlen(worker_names) - 1);
+  }
+  fprintf(stderr, "READY cerebrate-supervisor port=%d workers=%s file_profiles=%d reserve_mb=%d costs=%d\n", CONTROL_PORT, worker_names,
+          g_num_file_profiles, g_reserve_mb, g_num_costs);
 
   while (1) {
     int client = accept(srv, NULL, NULL);
@@ -444,10 +819,10 @@ int main(int argc, char** argv) {
     struct timeval recv_timeout = {10, 0};
     setsockopt(client, SOL_SOCKET, SO_RCVTIMEO, &recv_timeout, sizeof(recv_timeout));
 
-    char cmd[16], worker[32], model[256], backend[8], mmproj[256];
+    char cmd[16], worker[32], model[256], backend[32], mmproj[256];
     read_request(client, cmd, worker, model, backend, mmproj);
 
-    char response[1024];
+    char response[8192];  // LIST: one status line per slot
     if (cmd[0] == '\0') {
       snprintf(response, sizeof(response), "ERROR: empty request\n");
     } else {

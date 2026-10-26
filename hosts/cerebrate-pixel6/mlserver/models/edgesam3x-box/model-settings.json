@@ -1,0 +1,14 @@
+{
+  "name": "edgesam3x-box",
+  "implementation": "cerebrate_graph_runtime.CerebrateGraphRuntime",
+  "parameters": {
+    "version": "v0.1.0",
+    "extra": {
+      "cerebrate_graph_worker": "hetero2",
+      "cerebrate_graph_port": 8773,
+      "cerebrate_graph_model_path": "/data/local/tmp/edgesam3x-enc-tpu-fp32.tflite",
+      "cerebrate_graph_backend": "edgesam3x-fast",
+      "cerebrate_graph_photo": "sam"
+    }
+  }
+}

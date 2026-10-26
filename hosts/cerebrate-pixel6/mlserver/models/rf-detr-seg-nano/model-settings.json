@@ -1,0 +1,15 @@
+{
+  "name": "rf-detr-seg-nano",
+  "implementation": "cerebrate_graph_runtime.CerebrateGraphRuntime",
+  "parameters": {
+    "version": "v0.1.0",
+    "extra": {
+      "cerebrate_graph_worker": "gpu-rfdetr",
+      "cerebrate_graph_port": 8780,
+      "cerebrate_graph_model_path": "/data/local/tmp/rfdetrseg_graphA_fp16.tflite",
+      "cerebrate_graph_backend": "rf-detr-seg-nano-fast",
+      "cerebrate_graph_request_timeout_s": 120,
+      "cerebrate_graph_photo": "rfdetr"
+    }
+  }
+}

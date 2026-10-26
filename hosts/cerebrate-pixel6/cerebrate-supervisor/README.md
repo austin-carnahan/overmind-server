@@ -281,3 +281,894 @@ two-value `backend` enum. Reuses every existing mechanism unchanged: flat-
 file validation, idempotent START/STOP, config-conflict detection (now
 comparing `mmproj` too when the slot needs it), crash detection, and the
 pre-flight orphan-port check.
+
+## Segmentation and Labeling Lane Step 1: `graph1`–`graph3` slots (2026-10-23)
+
+**Deployed 2026-10-23** (see the deploy record at the end of this section). Three
+identical slots for [`cerebrate-graph`](../cerebrate-graph/README.md), the
+general-purpose ONNX Runtime worker, on fixed ports **8769, 8770, 8771**. One
+model per process stays the rule (catalog v4 Section 8), so a pipeline that
+needs a detector, a SAM encoder, and a SAM decoder resident at once uses three
+slots. No wire-protocol change.
+
+Two internal generalizations came with it:
+
+- **Per-slot backend lists.** The hardcoded `cpu|gpu` check became an
+  allowed list on each slot: `generate` keeps `cpu,gpu`; the graph slots
+  accept `cpu,nnapi,nnapi16,xnnpack,webgpu`.
+- **Per-slot readiness timeout.** `START` waits up to 120 s for a graph slot
+  (large ONNX models and NNAPI compilation load slowly) and 15 s for the
+  existing slots, unchanged. The supervisor is single-threaded, so other
+  commands queue behind a slow graph `START`.
+
+The `LIST` response buffer grew to 2 KB for six status lines.
+
+Tested on the Mac with a scratch copy pointing `STAGING_DIR` at a local
+directory and running the macOS build of `cerebrate-graph`: bad backend
+(rejected, listing the allowed set), path outside staging (rejected), two
+graph slots started concurrently with different backends, idempotent
+`START`, configuration conflict, `generate` still rejecting graph backends,
+`LIST`, crash detection (`kill -9` → `EXITED exit_code=-9`), `STOP`.
+
+### Deploy record (2026-10-23)
+
+Drain-and-swap per [Deploy](#deploy), driven from `overmind-01` over its
+wireless ADB pairing and the supervisor's LAN port:
+
+1. Recorded `LIST` (all three workers `RUNNING`, configs as in the catalog).
+2. Pushed the new binary as `cerebrate-supervisor.new` (sha256 `908f5620…48fd9`)
+   and copied the running one to **`cerebrate-supervisor.prev`** (`b1fa7d1e…15c4`)
+   as the rollback.
+3. `STOP` `gguf`, `generate`, `infer` through the old supervisor; killed it;
+   moved the new binary into place; relaunched with the `nohup setsid`
+   command above. It came up as `workers=infer,generate,gguf,graph1,graph2,graph3`.
+4. `START` each worker with its recorded config — all `OK` on fresh PIDs.
+
+Verified afterward through MLServer: `cerebrate-infer` classifies,
+`cerebrate-generate` generates, `cerebrate-gguf` reports ready (not
+exercised with a full Granite-Docling request). Total worker downtime was
+seconds. **Rollback:** drain the same way, `mv cerebrate-supervisor.prev
+cerebrate-supervisor`, relaunch, and `START` the three workers (the graph
+slots disappear with it).
+
+## Segmentation and Labeling Lane Step 2B: `hetero1` slot (prepared 2026-10-24, deploy scheduled)
+
+**Built and tested side by side with production; not yet deployed.** One
+slot for [`cerebrate-hetero`](../cerebrate-hetero/README.md) (TPU + GPU
+pipeline worker) on fixed port **8772**. No wire-protocol change: the
+slot's `backend` names one of a fixed set of **profiles** compiled into the
+supervisor, and each profile carries its declared model and its complete
+command line. A client still picks only among fixed configurations, never
+a path or an argument:
+
+| Profile (`backend`) | `model` must be | Worker command (after the port) |
+| --- | --- | --- |
+| `yoloe-v8s-fast` | `yoloe-v8s-pf-backbone-tpu-fp32.tflite` | `tpu+gpu libtensorflowlite_jni.so <backbone> yoloe-v8s-pf-head-gpu.tflite fp16acc32 yoloe-v8s-pf-gpu-nhwc.tflite fp16acc32` |
+| `yoloe-v8s-default` | `yoloe-v8s-pf-gpu-nhwc.tflite` | `gpu yoloe-v8s-pf-gpu-nhwc.tflite fp32` |
+
+All paths are flat files in `/data/local/tmp` (the approval rule is
+unchanged; the files were copied out of the spike's `hetero/`
+subdirectory). `START` refuses an unknown profile, a model other than the
+profile's, or a missing profile file, before forking. The worker gets
+`LD_LIBRARY_PATH=/data/local/tmp/litert-2.3.0:/data/local/tmp` (LiteRT 2.3
+first) and `CEREBRATE_HETERO_PROFILE`/`CEREBRATE_HETERO_MODEL`, which its
+DESCRIBE reports as `backend`/`model` — exactly what the MLServer graph
+adapter checks. Other changes: `backend` widened from 8 to 32 characters
+(profile names); `CONTROL_PORT` overridable at build time
+(`-DCONTROL_PORT=8777`) for a side-by-side test instance; slot initializers
+spell out the two new optional fields.
+
+### Tests (2026-10-24, side by side with production)
+
+A test build on control port 8777 ran next to the production supervisor
+(8767), touching only `hetero1` (nothing else listens on 8772); the
+production supervisor, its workers (same PIDs throughout) and MLServer were
+untouched.
+
+- [`hetero_supervisor_chain.py`](../cerebrate-hetero/tests/hetero_supervisor_chain.py):
+  unknown profile, profile/model mismatch, subdirectory path, and a graph
+  slot given a hetero profile — all refused. Each profile: `START` (fast
+  5.3 s incl. TPU compile, default 1.5 s), `STATUS`, DESCRIBE reports the
+  declared model and profile, the eight photos' outputs **bit-identical** to
+  the hand-launched validated runs (all five outputs, max difference 0),
+  idempotent `START`, the other profile refused while running, `STOP`.
+- Through a test MLServer instance (its own ports, adapter copy pointed at
+  8777) with on-demand residency — see the
+  [MLServer README](../mlserver/README.md#segmentation-and-labeling-lane-step-2b--on-demand-residency-yoloe-v8s-pf-prepared-2026-10-24-deploy-scheduled):
+  cold start on the first request, idle stop, kill recovery, unload.
+- TPU/GPU/big cores 31–32 °C during the runs.
+
+### Scheduled deploy runbook
+
+Superseded by the combined YOLOE + EdgeSAM deployment below (same window,
+newer worker and supervisor builds); its rollback A returns to this
+YOLOE-only state.
+
+## Test builds
+
+`CONTROL_PORT` and (since 2026-10-25) `STAGING_DIR` are `#ifndef`-guarded:
+`-DCONTROL_PORT=8777 '-DSTAGING_DIR="/data/local/tmp/edgesam/worker"'` gives a
+side-by-side supervisor whose fixed profiles, worker binary, configs and logs
+all live in a test directory (symlinks to the staged model files satisfy the
+flat-path rule). The default build is unchanged: byte-identical to the
+deployed `bad5bed3`.
+
+## Combined deployment: YOLOE + EdgeSAM (deployed 2026-10-25, YOLOE served)
+
+**Deployed 2026-10-25 03:43–03:45 UTC** (record at the end of this section).
+**Decision 2026-10-24: the window releases YOLOE; EdgeSAM stays staged** — its worker profiles,
+supervisor slot and files ship (inert), but its MLServer model waits in
+`mlserver/held-models/` until the image-transport work removes MLServer's
+per-request memory cost (see "MLServer memory per image request" below). One worker binary
+(`cerebrate-hetero` build `fad6e56c`), **one process per model**:
+
+| Slot | Port | Profiles (fixed `--config` file in /data/local/tmp) | MLServer model |
+| --- | --- | --- | --- |
+| `hetero1` | 8772 | `yoloe-v8s-fast` (TPU + GPU, GPU mixed fallback), `yoloe-v8s-default` (GPU fp32) | `yoloe-v8s-pf` (fast, on demand) |
+| `hetero2` | 8773 | `edgesam3x-fast` (TPU trunk + GPU neck + GPU box decoder, exact GPU encoder fallback), `edgesam3x-default` (GPU fp32) | `edgesam3x-box` (fast, on demand) |
+
+Each slot accepts only its own model's profiles. Every profile is a config
+file ([`cerebrate-hetero/configs/`](../cerebrate-hetero/configs/)) with the
+persistent NNAPI compilation cache (`/data/local/tmp/nnapi-cache`, already
+populated by the tests, so the first production start is warm) and the
+validated GPU fallback. The YOLOE request/response API and outputs are
+unchanged. Workers bind only after every model is compiled, and MLServer's
+adapter confirms model and profile by DESCRIBE before serving.
+
+**Staged on the device** (hashes verified): `cerebrate-hetero` (`fad6e56c`,
+the combined build) and `cerebrate-hetero.yoloe-only` (`bfcb8e8b`, the
+previous build, kept for rollback A); the four `.conf` files; EdgeSAM's
+four `.tflite` files and five decoder constants (hashes in
+`models/catalog.yaml`); the YOLOE files from the earlier staging. The new
+supervisor binary is this directory's `cerebrate-supervisor` (`bad5bed3`).
+
+### Tests (2026-10-24, test supervisor on 8777, test MLServer on 18080–18082)
+
+| Test | Result |
+| --- | --- |
+| [`edgesam_supervisor_chain.py`](../cerebrate-hetero/tests/edgesam_supervisor_chain.py) | 14/14: each slot refuses the other model's profiles; `edgesam3x-fast` START 46.4 s cold (empty cache, directory created), **2.5 s** from the cache, outputs bit-identical across the restart; masks vs the original: fast worst IoU 0.9441 / mean 0.99830 (the validated chain), default exact (1 px); worker-side image + 1 box 193–197 ms fast, 313 ms default; a cached box 52–57 ms |
+| [`hetero_supervisor_chain.py`](../cerebrate-hetero/tests/hetero_supervisor_chain.py) (YOLOE, config profiles) | both profiles bit-identical to the validated outputs (8/8); START 6.1 s cold, ~2.2 s cached |
+| [`mlserver_combined_test.py`](../cerebrate-hetero/tests/mlserver_combined_test.py) | both on-demand models READY with no workers; first requests start them from the cache; YOLOE and EdgeSAM outputs bit-identical to the direct runs, EdgeSAM cache hit identical; idle stop after the window, restart on the next request; EdgeSAM worker `kill -9` → one failed request, model stays READY, next request restarts it; unload → all slots STOPPED, refcounts 0; pinned canary unaffected |
+| contention, supervisor-launched deployment configs + production MobileNet ([`hetero_contention3.py`](../cerebrate-hetero/tests/hetero_contention3.py)) | all outputs correct, no fallbacks, no MobileNet resets; EdgeSAM worker p50 195 → 248 ms, YOLOE p50 78 → 86 ms (p99 225), MobileNet p99 5.4 → 32 ms |
+| rollback A rehearsal: supervisor from `aa1d8cd` (test build) + `cerebrate-hetero.yoloe-only` | 16/16, YOLOE bit-identical in both profiles, `hetero2` unknown; combined build restored and verified |
+
+Found: **MLServer's gRPC endpoint caps requests at 4 MB** by default — YOLOE's
+image (4.9 MB) and EdgeSAM's (12.6 MB) are over it; REST is unaffected
+(see step 4 below). Production processes, models and the guest checkout
+were unchanged throughout.
+
+### MobileNet under TPU contention (accepted tradeoff)
+
+With both heterogeneous workers busy, production MobileNet stays correct on
+every response, its median is unchanged (2.5 ms round trip), and its p99
+rises from ~5 ms to ~32–37 ms: its requests queue behind EdgeSAM's 128 ms
+TPU job, since the driver runs one TPU job at a time. A lock between our
+workers changes nothing (measured), so scheduling stays as it is.
+Accepted 2026-10-24: MobileNet has no latency target, and the tail only
+appears while EdgeSAM is encoding. Revisit if a caller needs a MobileNet
+latency bound (options then: a TPU-time budget per EdgeSAM request, or
+splitting EdgeSAM's TPU stage).
+
+### Runbook (combined)
+
+Expected MLServer downtime about a minute; a restart is required (the adapter
+module changed).
+
+1. Record `LIST` from the production supervisor (expected: `infer`,
+   `generate`, `gguf`, `graph3` RUNNING).
+2. In the guest: `sudo systemctl stop cerebrate-mlserver`; confirm `LIST`
+   shows everything STOPPED; `STOP` anything left.
+3. Swap the supervisor: push this directory's binary as
+   `cerebrate-supervisor.new` (`bad5bed3`); copy the running one
+   (`908f5620…48fd9`) over `cerebrate-supervisor.prev`; kill the old
+   supervisor; move the new one into place; relaunch with the `nohup
+   setsid` command. Its READY line must list `…,graph3,hetero1,hetero2`.
+4. **gRPC message limit (approved 2026-10-24):** add
+   `Environment=MLSERVER_GRPC_MAX_MESSAGE_LENGTH=33554432` (32 MiB) to
+   `/etc/systemd/system/cerebrate-mlserver.service`, then `sudo systemctl
+   daemon-reload`. Verified with full-size payloads on a test instance:
+   YOLOE 4.9 MB in / 4.6 MB out and EdgeSAM 12.6 MB in / 7.3 MB out
+   (28 boxes) pass, bit-identical. Clients must raise their own receive
+   limit (gRPC's client default, 4 MiB, refuses YOLOE's response).
+5. In the guest: `git pull --ff-only` (the adapter and `yoloe-v8s-pf`;
+   `edgesam3x-box` arrives under `held-models/`, which MLServer doesn't load).
+6. `sudo systemctl start cerebrate-mlserver`.
+7. Verify (the window's gate):
+   - repository index all READY including `yoloe-v8s-pf`, and no
+     `edgesam3x-box`;
+   - `LIST` shows the four workers RUNNING and `hetero1`, `hetero2` STOPPED;
+   - full-size gRPC through production with a client receive limit of
+     32 MiB: `mlserver_grpc_limits.py`'s YOLOE case, or the first YOLOE
+     lines of `mlserver_combined_test.py infer 127.0.0.1:8081 <gateway>
+     8767 /home/droid/cg-test/hetero /home/droid/cg-test/edgesam` (stop it
+     before its EdgeSAM lines, or run the YOLOE function alone) → outputs
+     identical to the validated run, `hetero1` RUNNING with `load_us`
+     ~2.2 s (from the cache);
+   - MobileNet classifies 795; the catalog validates (task defaults and
+     fallbacks resolve to served profiles); a temperature reading;
+   - ten minutes later `hetero1` is STOPPED again.
+
+**Rollback A — to the YOLOE-only build** (rehearsed): stop MLServer,
+confirm every slot STOPPED; kill the supervisor; install the supervisor
+binary from commit `aa1d8cd` (`git show
+aa1d8cd:hosts/cerebrate-pixel6/cerebrate-supervisor/cerebrate-supervisor`,
+`0921ae22…068a`) and relaunch; `cp cerebrate-hetero.yoloe-only
+cerebrate-hetero`; in the guest check out `aa1d8cd`; start MLServer.
+
+**Rollback B — to the pre-deployment state:** stop MLServer, confirm every
+slot STOPPED; kill the supervisor; `mv cerebrate-supervisor.prev
+cerebrate-supervisor`; relaunch; in the guest check out `248c6e3`; start
+MLServer. Staged files and the compilation cache are inert without the
+slots. In either rollback the gRPC limit line can stay (it only raises a
+cap) or be removed with another `daemon-reload`.
+
+**Go/no-go at the window:** if full-size gRPC requests fail or model
+readiness is inconsistent, roll back rather than switch clients to REST.
+
+### MLServer memory per image request (decided: EdgeSAM held)
+
+MLServer 1.7 converts every tensor to a Python list, even raw gRPC bytes
+(`mlserver/raw.py` `inject_raw` unpacks into lists; responses go through
+`NumpyCodec`'s `.tolist()`), so its memory scales with element count, not
+bytes. Measured on a test MLServer (gRPC, raw bytes; peak resident memory
+over a 124–129 MB idle baseline, transient):
+
+| Request | Peak increase |
+| --- | --- |
+| YOLOE, full-size image | +125–133 MB |
+| EdgeSAM, image + 1 box | +196 MB |
+| EdgeSAM, image + 24 boxes | +279 MB (~3.6 MB per extra box) |
+| EdgeSAM, image + 120 boxes | the guest's OOM killer killed the test instance (production MLServer unaffected: same PID, no restart) |
+
+The guest has ~530–650 MB available beside production MLServer: one
+request of either model fits, but overlapping large requests (two EdgeSAM,
+or EdgeSAM with many boxes beside YOLOE) could get production MLServer
+OOM-killed (systemd restarts it; every MLServer model would be down for the
+restart). The fix belongs to the transport work: an image sent as a
+compressed BYTES tensor (MLServer keeps BYTES as bytes) and compact mask
+outputs. **Decided 2026-10-24: YOLOE ships in the window (one request's
++125–133 MB fits; no consumer sends concurrent YOLOE requests yet);
+EdgeSAM's MLServer model waits for the transport fix** — no production
+consumer uses it yet, so serving it now would add risk without benefit.
+
+### Deploy record (2026-10-25)
+
+Run from the Mac over overmind-01's ADB pairing and the guest, per the
+runbook:
+
+1. Pre-flight: staged files re-verified by hash; running supervisor
+   `908f5620`, deploy binary `bad5bed3`; guest clean at `248c6e3`,
+   fast-forwardable to `a3b4fc3`. `LIST`: `infer`, `generate`, `gguf`,
+   `graph3` RUNNING (configs as in the catalog / model settings).
+2. 03:43:30 `systemctl stop cerebrate-mlserver`. **MLServer's shutdown
+   left all four workers running** (its unloads didn't STOP them), so they
+   were stopped through the supervisor, as the runbook allows.
+3. Supervisor swapped: `908f5620` saved as `cerebrate-supervisor.prev` (rollback
+   B), `bad5bed3` in place, READY with `…,graph3,hetero1,hetero2`.
+4. Unit: `Environment=MLSERVER_GRPC_MAX_MESSAGE_LENGTH=33554432` added
+   (previous unit saved as `/home/droid/cerebrate-mlserver.service.pre-hetero-2026-10-24`),
+   `daemon-reload`.
+5. Guest `git pull --ff-only` → `a3b4fc3`.
+6. 03:44:39 MLServer active: six models READY including `yoloe-v8s-pf`, no
+   `edgesam3x-box`; the pinned models restarted their workers through the
+   new supervisor on fresh PIDs. **MLServer downtime ~70 s.**
+7. Gate — **PASS**: 8/8 full-size YOLOE requests through production gRPC
+   (32 MiB client limit; 4.9 MB in, 4.6 MB out) bit-identical to the
+   validated outputs, backend 1 (TPU + GPU), worker 78–81 ms, round trip
+   ~0.6 s; `hetero1` started on demand from the compilation cache
+   (`load_us` 2.16 s); MobileNet 20/20 classified 795; catalog valid;
+   TPU 24 °C, GPU 25 °C, big cores 29 °C. Idle stop: `hetero1` STOPPED at
+   03:55:37, ten minutes after the last gate request, with every model
+   still READY.
+
+Rollback A (YOLOE-only build) and B (pre-deployment, `.prev` + guest
+`248c6e3` + the saved unit) remain available.
+
+## Image transport release: photo in, final results out, EdgeSAM served (deployed 2026-10-25)
+
+One restart for both transport steps and EdgeSAM's release. Phone side:
+the uint8-capable worker (`cerebrate-hetero` `7554324e`) and the four config
+files with `input_uint8` (repo `cerebrate-hetero/configs/`); the supervisor
+is unchanged (`bad5bed3` = the default build of the current source). Guest
+side: `opencv-python-headless==5.0.0.93` in the MLServer venv, and the
+checkout with the photo hooks, postprocessing, labels and `edgesam3x-box`
+back in `models/`. The new configs must not reach the running worker build
+(`fad6e56c` rejects the unknown keys), so they're staged under `.transport`
+names and moved into place only with the worker stopped.
+
+**Runbook**
+
+1. Pre-flight: staged `.transport` files verified by hash; `LIST` recorded;
+   guest checkout clean.
+2. `sudo systemctl stop cerebrate-mlserver`; STOP any worker still running
+   through the supervisor (MLServer's shutdown doesn't).
+3. Phone: keep `cerebrate-hetero` and the four `.conf` as `*.combined`
+   (rollback), move the `.transport` files into place, verify hashes.
+4. Guest: unpack the OpenCV wheel into the venv's `site-packages` (the venv
+   has no pip; a wheel is a zip) and check `import cv2` with the venv's
+   Python.
+5. Guest: `git pull --ff-only`.
+6. `sudo systemctl start cerebrate-mlserver`: seven models READY, including
+   `yoloe-v8s-pf` and `edgesam3x-box`.
+7. Gate (roll back on any failure): `mlserver_result_test.py` against
+   production gRPC (8081) — YOLOE result mode equal to the validated
+   postprocessing 8/8 and raw mode bit-identical 8/8; EdgeSAM result mode
+   8/8 and cached 8/8; MLServer peak memory flat per request; MobileNet 795;
+   catalog valid; temperatures; both slots idle-stop after ten minutes.
+
+**Rollback** (to the YOLOE-only service of 2026-10-25): stop MLServer and
+STOP the workers; on the phone move the `*.combined` files back; in the guest
+check out `196f8d0`; start MLServer. OpenCV can stay (unused) or be removed
+(its `cv2/`, `opencv_python_headless*` entries in `site-packages`). Rollbacks A
+and B above remain available behind that.
+
+### Deploy record (2026-10-25, 05:49–05:51 UTC)
+
+1. Pre-flight: `.transport` files verified by hash; guest clean at `196f8d0`;
+   `LIST`: `infer`, `generate`, `gguf`, `graph3` RUNNING, hetero slots
+   STOPPED.
+2. 05:49:24 MLServer stopped; the four workers STOPPED through the
+   supervisor.
+3. Phone: `cerebrate-hetero` (`fad6e56c`) and the four configs kept as
+   `*.combined`; `7554324e` and the uint8 configs moved into place, hashes
+   verified.
+4. Guest: OpenCV wheel (`10818d91…`) unpacked into the venv's
+   `site-packages` (`cv2/`, `opencv_python_headless.libs/`, its dist-info;
+   nothing pre-existing touched); `import cv2` → 5.0.0.
+5. Guest `git pull` → `03aade6`.
+6. 05:50:25 MLServer active, seven models READY including `edgesam3x-box`.
+   **MLServer downtime ~61 s.**
+7. Gate — **PASS** (`mlserver_result_test.py` on production gRPC): YOLOE
+   result mode = the validated postprocessing 8/8, raw mode bit-identical
+   8/8, responses ~25 KB, round trip 280 ms; EdgeSAM result mode 8/8, cached
+   8/8, photo + 1 box 438 ms, cached box 121 ms, 96 boxes in a 144 KB
+   response; both workers started on demand from the compilation cache
+   (2.2 s); MobileNet 20/20; catalog valid; TPU 35 °C, GPU 36 °C. MLServer's
+   peak rose to +107 MB during the test's **raw-mode** EdgeSAM requests
+   (raw tensors still go through MLServer's list encoding) and stayed there
+   through the 24- and 96-box result requests: raw mode is a debug path,
+   not for many boxes. Idle stop: `hetero1` and `hetero2` both STOPPED at
+   06:01:53, ten minutes after the gate's last requests, every model still
+   READY.
+
+
+## Registry serving: profiles file, admission, eight GPU slots (prepared 2026-10-25, deploy scheduled)
+
+The [model registry](../../../models/README.md) needs a slot per served model
+without recompiling the supervisor for each one. The supervisor therefore
+reads an optional, deployment-owned **profiles file**,
+`STAGING_DIR/cerebrate-profiles.conf`
+([this directory's copy](cerebrate-profiles.conf)), once at startup:
+
+```text
+slot    <name> <port> <binary>                                  [ready_timeout_ms]
+profile <name> <slot> <declared model file> <worker config>     [min_free_mb]
+```
+
+- Every name is a flat file in the staging directory, the same
+  least-privilege rule as the compiled-in paths.
+- A file slot runs `cerebrate-hetero` profiles exactly like `hetero1` and
+  `hetero2` do. It may not reuse a compiled-in name or port.
+- A client still picks only a profile by name; the commands and files stay
+  the deployment's.
+- Without the file nothing changes.
+- A malformed file is FATAL at startup, so the supervisor doesn't start.
+  `scripts/validate-model-catalog` parses this copy and checks it against
+  the registry; run it before every deployment of the file.
+- The READY line gains `file_profiles=N`, and LIST answers with up to 8 KB.
+
+> **Superseded on 2026-10-25** by one capacity rule for every worker, with
+> the profiles file generated from the registry. See
+> [Capacity: one rule for every worker](#capacity-one-rule-for-every-worker-one-serving-policy-2026-10-25)
+> below. The per-profile floors described next no longer exist.
+
+**Admission.** `min_free_mb` makes START refuse while `MemAvailable` is below
+it:
+
+```text
+ERROR: profile <p> needs <n> MB free, the device has <m> MB; stop another worker first
+```
+
+MLServer surfaces this as the request's error, and the model stays READY. Each
+floor is the profile's measured free-memory drop plus 1 GB. That keeps a start
+from taking the phone below about 1 GB free; below that, the low-memory killer
+starts reaching for the Debian VM. Verified: OWLv2 was refused while
+EfficientSAM3 held memory, then served once EfficientSAM3 was unloaded.
+
+**Slots.** One model per process. The eight slots use ports 8774–8782 and skip
+8777, the side-by-side test supervisor's control port. The `models/variants.yaml`
+`serving` blocks name these slots and profiles. Two validated configurations
+are deliberately left out (`serving_blocked` in the registry, decision
+2026-10-25): EfficientSAM3's FP32 default, which is too large for the phone,
+and SAM 2.1's reduced-precision variant, which is unresolved at 0.963 worst
+mask IoU. Their worker configs stay in the repo for reproduction.
+
+| Slot | Port | Profiles (floor MB) | MLServer endpoint (on demand) |
+| --- | --- | --- | --- |
+| `gpu-depth` | 8774 | `depth-anything-v2-small-fast` (1300), `-default` (1300) | `depth-anything-v2-small` → fast |
+| `gpu-migan` | 8775 | `mi-gan-512-fast` (1200), `-default` (1300) | `mi-gan-512` → fast |
+| `gpu-dinov2` | 8776 | `dinov2-s14-default` (1200) | `dinov2-s14` |
+| `gpu-yoloe11s` | 8778 | `yoloe-11s-pf-default` (1500) | `yoloe-11s-pf` |
+| `gpu-sam2` | 8779 | `sam2.1-hiera-tiny-default` (2000) | `sam2.1-hiera-tiny` → default (FP32, exact) |
+| `gpu-rfdetr` | 8780 | `rf-detr-seg-nano-fast` (1200), `-default` (1300) | `rf-detr-seg-nano` → fast |
+| `gpu-esam3` | 8781 | `efficientsam3-rvm-fast` (3400) | `efficientsam3-rvm` → fast |
+| `gpu-owlv2` | 8782 | `owlv2-b16-default` (3000) | `owlv2-b16` |
+
+**Builds.**
+
+| Binary | sha256 | What it is |
+| --- | --- | --- |
+| [`cerebrate-supervisor`](cerebrate-supervisor), this directory | `05ad7e0d…6756` | The default build of the current source, reproducible with the Deploy section's command. |
+| Test build | `e71f5fe4…0229143` | `-DCONTROL_PORT=8777 '-DSTAGING_DIR="/data/local/tmp/cerebrate-stage"'`; every test ran against it. |
+| Deployed supervisor | `bad5bed3` | The build in production today. |
+| `cerebrate-hetero` | `e06a906e…1c1c` | The graph-mode worker: [`CMakeLists.fragment.txt`](../cerebrate-hetero/CMakeLists.fragment.txt) against the committed source. Its legacy pipeline is bit-identical to the deployed `7554324e` (60/60). |
+
+**Recovery: [`pixel-supervisor-watchdog`](pixel-supervisor-watchdog)** runs
+on overmind-01 from a systemd timer (units in the
+[overmind-01 README](../../overmind-01/README.md)). Each run:
+
+1. If the control port isn't listening, it stops orphaned on-demand workers.
+2. It restarts the supervisor with the detached command.
+3. After that restart, and only then, it asks MLServer to load every model
+   that isn't READY.
+
+**It only recovers what adb can reach.** After an Android reboot, `adb tcpip`
+mode is off. Until someone re-enables it by hand (USB or wireless
+debugging), neither this watchdog nor `pixel-vm-watchdog` can do anything.
+Recovery after a reboot is therefore not unattended, and not yet tested on a
+real reboot.
+
+It never touches a running supervisor, and starts the supervisor at most once
+per 2 minutes. That bound means a broken binary or profiles file can't turn
+into a restart loop: the watchdog logs the supervisor's last lines and waits.
+
+Tested side by side: `SUPERVISOR_DIR=/data/local/tmp/cerebrate-stage
+SUPERVISOR_PORT=8777`, test MLServer URL. After a `kill -9` of the supervisor,
+the run cleared the orphan, brought the supervisor back and reloaded the
+models, and the next request served. A worker killed on its own is restarted
+by the adapter on the next request, which it retries once.
+
+### Deployment runbook (window required; nothing below has run in production)
+
+Expect about a minute of MLServer downtime. It is the same shape as the
+image-transport release. The existing endpoints don't change: the same seven
+models, the same configs for `hetero1` and `hetero2`. The eight new endpoints
+are promoted afterwards, one at a time, without a restart (the operations
+runbook covers it:
+[`runbooks/cerebrate-pixel6-models.md`](../../../runbooks/cerebrate-pixel6-models.md#promote-a-staged-endpoint)).
+
+**Pre-flight.** None of this affects production and it can be done before the
+window.
+
+**Pre-flight status (2026-10-25): all done.** Release candidate
+`cerebrate-registry-rc1`, pushed with authorization.
+
+- On the phone, verified by sha256:
+  - `cerebrate-hetero.registry` (`e06a906e`);
+  - `cerebrate-supervisor.registry` (`05ad7e0d`);
+  - `cerebrate-profiles.conf`, with 11 profiles;
+  - the 11 configs.
+- The eight models' device files pass `check-artifacts --device` (28/28).
+- The store passes `check-artifacts --store` (46/46).
+- The Pillow wheel on the guest is `8bf295fe`.
+
+**Rollback set preserved:**
+
+- On the phone, `/data/local/tmp/rollback-transport-2026-10-25/`:
+  - the running `cerebrate-supervisor` (`bad5bed3`) and `cerebrate-hetero`
+    (`7554324e`);
+  - the four YOLOE/EdgeSAM configs;
+  - `SHA256SUMS`.
+- In the guest, `~/rollback-transport-2026-10-25/`:
+  - `mlserver17-venv.tar.gz`, the whole venv: Pillow 12.3.0, OpenCV
+    5.0.0.93, MLServer 1.7.1;
+  - the package list;
+  - `cerebrate-mlserver.service`;
+  - the checkout commit (`8015575`).
+- Both are also copied to the Mac under
+  `~/Backups/cerebrate/rollback-transport-2026-10-25/`.
+- The converted models are backed up and a restore was tested
+  ([models README](../../../models/README.md#artifact-store-mntmodels-on-overmind-01)).
+
+**Gate principle (decision 2026-10-25):** the existing production models
+must behave exactly as before the cutover: MobileNet, YOLOE and EdgeSAM,
+bit for bit where the gate says so. Any failure aborts the window and rolls
+back. No promotion happens in the cutover window unless that gate passed.
+
+1. The branch is pushed, which needs authorization, so the guest can fast-forward.
+2. Phone, model files: `scripts/stage-model depth-anything-v2-small mi-gan-512
+   dinov2-s14 yoloe-11s-pf sam2.1-hiera-tiny rf-detr-seg-nano efficientsam3-rvm
+   owlv2-b16`, run from a checkout on overmind-01. These were already staged on
+   2026-10-25; confirm with `scripts/cerebrate-models check-artifacts --device`.
+3. Phone, binaries and configs:
+   - Push `cerebrate-hetero.registry` (`e06a906e`) and
+     `cerebrate-supervisor.registry` (`05ad7e0d`), then `chmod +x` them.
+   - Push the 11 new `*.conf` that the profiles file names, from
+     `../cerebrate-hetero/configs/`. None replaces a deployed config.
+     `efficientsam3-rvm-default.conf` and `sam2.1-hiera-tiny-fast.conf` stay
+     in the repo only (serving_blocked).
+   - Push `cerebrate-profiles.conf`. The running supervisor never reads it.
+   - Verify every hash on the device.
+4. Guest: the Pillow 13.0.0 wheel (sha256 `8bf295fe…6c0d`, in
+   `~/cg-test/stage/`) is present. Its pin and the reason are in
+   [`mlserver/requirements.txt`](../mlserver/requirements.txt). Only the new
+   models' photo paths depend on it; YOLOE and EdgeSAM resize with OpenCV.
+5. Record `LIST`. The guest checkout must be clean (`8015575` today).
+   `scripts/validate-model-catalog` must pass.
+
+**Window.**
+
+1. If `pixel-supervisor-watchdog.timer` is installed, stop it. Otherwise it
+   relaunches the old supervisor mid-swap.
+2. In the guest, run `sudo systemctl stop cerebrate-mlserver`. STOP every
+   worker still running, then check that `LIST` shows them all STOPPED.
+3. On the phone:
+   1. `cp cerebrate-supervisor cerebrate-supervisor.transport`
+   2. `cp cerebrate-hetero cerebrate-hetero.transport`
+   3. Kill the supervisor whose `/proc/<pid>/exe` is
+      `/data/local/tmp/cerebrate-supervisor`. The test supervisor in
+      `cerebrate-stage/` has the same name.
+   4. Move the two `.registry` files into place.
+   5. Relaunch with the Deploy section's `nohup setsid` command.
+
+   Its log's READY line must end `file_profiles=11`, and `LIST` must show the
+   eight `gpu-*` slots STOPPED.
+4. In the guest, swap Pillow:
+   1. Move the venv's `PIL/`, `pillow-12.3.0.dist-info/` and `pillow.libs/`
+      out of `site-packages` to `~/pillow-12.3.0-backup/`.
+   2. Unpack the 13.0.0 wheel into `site-packages`. The venv has no pip, and
+      a wheel is a zip.
+   3. `import PIL; PIL.__version__` with the venv's Python must print 13.0.0.
+5. In the guest, run `git pull --ff-only`. The adapter gains the new hooks and
+   the one retry, and `held-models/` gains the eight new endpoints, which
+   MLServer doesn't load.
+6. Run `sudo systemctl start cerebrate-mlserver`. The same seven models must
+   be READY, and none of the new ones.
+7. Gate. Roll back on any failure.
+   - `mlserver_result_test.py` against production gRPC:
+     - YOLOE: result mode equal to the validated postprocessing 8/8, and raw
+       mode bit-identical 8/8.
+     - EdgeSAM: result mode 8/8, and cached 8/8.
+
+     This is the first time EdgeSAM's photo path runs through the new adapter.
+     Its hook code is unchanged.
+   - MobileNet returns 795.
+   - `LIST` shows the four pinned workers RUNNING and every `hetero*` and
+     `gpu-*` slot STOPPED.
+   - Temperatures.
+   - Idle stop: checked once, at this cutover, because the adapter and the
+     supervisor both changed. `hetero1` and `hetero2` stopped ten minutes after
+     the gate. It is not part of later gates (see the runbook's
+     [checkpoint checks](../../../runbooks/cerebrate-pixel6-models.md#checkpoint-only-checks)).
+8. Install the watchdog on overmind-01:
+   1. `install -m 755 pixel-supervisor-watchdog /usr/local/bin/`
+   2. Add the two units from the overmind-01 README.
+   3. `sudo systemctl daemon-reload && sudo systemctl enable --now
+      pixel-supervisor-watchdog.timer`.
+
+   `journalctl -u pixel-supervisor-watchdog` must show quiet runs, with no
+   start.
+
+**Rollback** to the image-transport release:
+
+1. Stop the watchdog timer and MLServer, then STOP the workers.
+2. On the phone:
+   1. Kill the supervisor.
+   2. `mv cerebrate-supervisor.transport cerebrate-supervisor`
+   3. `mv cerebrate-hetero.transport cerebrate-hetero`
+   4. Relaunch the supervisor.
+3. In the guest:
+   1. Check out `8015575`.
+   2. Move Pillow 13's three entries out of `site-packages` and the 12.3.0
+      backup back in. If the venv is in doubt, restore it whole instead:
+      `rm -rf ~/mlserver17-venv && tar -C ~ -xzf
+      ~/rollback-transport-2026-10-25/mlserver17-venv.tar.gz`. It must go back
+      to the same path, because the scripts embed it.
+   3. Start MLServer.
+
+If the `.transport` copies from step 3 of the window are missing, the same
+binaries and configs are in `/data/local/tmp/rollback-transport-2026-10-25/`.
+Check them against its `SHA256SUMS`.
+
+The new configs, the profiles file and the model files are inert without the
+new supervisor; `bad5bed3` doesn't read the profiles file. The earlier rollbacks
+above remain available behind this one.
+
+**Go/no-go at the window:** proceed only with at least 3 GB free on the phone
+and both TPU and GPU below 45 °C, and only if nothing else (TPU compiles,
+curate jobs) is scheduled on the phone.
+
+### Deploy record: registry-serving cutover (2026-10-25, 19:29–19:31 UTC)
+
+Authorized by the user ("roll this out").
+
+1. **Pre-flight** as recorded above (`cerebrate-registry-rc1`). The baseline
+   gate ran on the old production just before the window and passed:
+   - YOLOE result 8/8, raw 8/8;
+   - EdgeSAM result 8/8, cached 8/8;
+   - MobileNet 795.
+2. **19:29:14.** MLServer stopped. `infer`, `generate`, `gguf`, `graph3`,
+   `hetero1` and `hetero2` were STOPPED through the supervisor, and `LIST`
+   showed all STOPPED.
+3. **Phone.** The `.transport` copies were made (`bad5bed3`, `7554324e`), the
+   supervisor (pid 11557, exe verified) was killed, and the `.registry`
+   builds were moved into place (`05ad7e0d`, `e06a906e`) and relaunched.
+   READY: `…,gpu-esam3,gpu-owlv2 file_profiles=11`, with 16 slots STOPPED.
+4. **Guest, Pillow.** Pillow 12.3.0 moved to `~/pillow-12.3.0-backup/`, and
+   the 13.0.0 wheel was unpacked (144 entries). PIL 13.0.0 and cv2 5.0.0
+   import.
+5. **Guest, checkout.** `git pull --ff-only` → `f815068`.
+6. **19:30:18.** MLServer active, with the same seven models READY.
+   **MLServer downtime ~64 s.**
+7. **Gate: PASS.**
+   - YOLOE: result mode 8/8 equal to the validated postprocessing; raw 8/8
+     bit-identical; round trip 295 ms, worker 92 ms (baseline 273 / 91).
+   - EdgeSAM: result 8/8, cached 8/8. Photo + 1 box 427 ms; cached 115 ms;
+     96 boxes in a 144 KB response.
+   - MobileNet 795.
+   - MLServer's peak after the gate is 246 MB, the same as the previous
+     process (247 MB).
+   - `LIST`: the pinned workers RUNNING and every `gpu-*` slot STOPPED.
+   - 2.5 GB free; TPU and GPU at 31 °C; the catalog validates.
+   - Idle stop (checked at this checkpoint only): `hetero1` and `hetero2`
+     STOPPED at 19:41:48.
+8. **Watchdog.** The files were staged on overmind-01 and a dry run (no
+   sudo) exited quietly against the new supervisor. The install needs the
+   user's sudo.
+
+Rollback is not needed. The `.transport` files, the rollback set and the
+Pillow backup stay in place until the promotions are done.
+
+### Promotion record (2026-10-25, after the cutover)
+
+One endpoint at a time, each loaded with no MLServer restart and passed
+through the promotion gate in production
+(`mlserver_staged_test.py --only <m>`, `SUPERVISOR_PORT=8767`).
+
+| Endpoint | Gate | Result | YOLOE median alone → beside it | Worker peak | Free min |
+| --- | --- | --- | --- | --- | --- |
+| `depth-anything-v2-small` | 5/5 | raw 8/8 bit-identical | 306 → 426 ms | 463 MB | 2.9 GB |
+| `mi-gan-512` | 5/5 | PSNR ≥ 44.6 dB | 291 → 316 ms | 278 MB | 2.7 GB |
+| `dinov2-s14` | 5/5 | raw 8/8 bit-identical | 307 → 348 ms | 392 MB | 2.5 GB |
+| `yoloe-11s-pf` | 5/5 | raw 8/8 bit-identical | 268 → 283 ms | 608 MB | 2.1 GB |
+| `rf-detr-seg-nano` | 5/5 | graphs A and B 8/8, 26 detections | 296 → 347 ms | 387 MB | 1.8 GB |
+| `sam2.1-hiera-tiny` (FP32) | 5/5 | masks exact (IoU 1.0000, 0 px) | 322 → 560 ms | 1,213 MB | 2.1 GB |
+
+- Each gate also checked unload then reload.
+- MobileNet returned 795 throughout.
+- MLServer was never restarted (MainPID 13755, NRestarts 0).
+- TPU and GPU stayed at or below 36 °C.
+- The "free min" column includes earlier gates' idle workers that were still
+  resident.
+
+**EfficientSAM3 and OWLv2 are held, not promoted.** Their admission floors
+gate only their own start. Production YOLOE and EdgeSAM (`hetero1`,
+`hetero2`) have no floor:
+
+| | Measured |
+| --- | --- |
+| YOLOE worker | 717 MB RSS, 751 MB peak |
+| YOLOE + EdgeSAM | ≈ 1.36 GB |
+| EfficientSAM3 | drop 2,365 MB |
+| OWLv2 | drop 1,924 MB |
+
+With either resident, a YOLOE request takes the phone to about 1 GB free or
+below. Adding EdgeSAM brings it to 0.3–0.7 GB, inside the low-memory killer's
+reach toward the Debian VM. This needs a co-residency policy before
+promotion; the user is to decide.
+
+
+## Capacity: one rule for every worker, one serving policy (2026-10-25)
+
+Decided with the user after the promotions: there are no per-model admission
+floors and no per-model idle windows. Instead the system has one rule and one
+policy, and every Pixel model (graph, hetero, MobileNet, SmolLM2, Granite)
+follows them through one shared lifecycle.
+
+**The rule (supervisor).** A worker starts only if:
+
+```text
+MemAvailable − committed − cost ≥ reserve_mb
+```
+
+- `cost` is the configuration's measured `load_mb`: the free-memory drop from
+  its start through its validation requests.
+- `committed` is, over running workers, the part of each one's cost it isn't
+  using yet: cost minus the RSS of the worker and its children. That covers
+  Granite, which allocates in a child process per request.
+- It applies to every START. A configuration without a recorded cost is
+  refused (fail closed).
+- Refusals read `ERROR: capacity: <key> needs N MB; M MB free, C MB committed
+  to running workers, reserve R MB`.
+- `CAPACITY` reports the reserve, free and committed memory, and each running
+  worker's cost and RSS.
+
+**The profiles file is generated.** `scripts/cerebrate-models generate` writes
+it from the registry: the `reserve_mb` line, the slots and profiles, and a
+`cost` line for every servable configuration, including the compiled-in ones.
+The validator fails when it is out of date. The old `min_free_mb` column is
+gone, and a file using it would be refused at startup.
+
+**The policy (registry).**
+
+```yaml
+serving_policy: {reserve_mb: 1000, idle_stop_s: 600, capacity_wait_s: 30}
+```
+
+It lives in `models/catalog.yaml` and is generated into the profiles file
+(`reserve_mb`) and into the adapter's `serving_policy.json`.
+
+**The lifecycle (MLServer).**
+[`cerebrate_lifecycle.py`](../mlserver/models/cerebrate-graph/cerebrate_lifecycle.py)
+does this for every adapter:
+- starts a worker on its first request;
+- stops it after the idle window;
+- retries once on a lost worker;
+- on a capacity refusal, stops the least recently used **idle** worker in the
+  process and asks again. A worker serving a request is never stopped.
+- if every other worker is busy, waits up to 30 s, then fails with the
+  supervisor's reason.
+
+**Measured costs.**
+
+| Configuration | load_mb | Configuration | load_mb |
+| --- | --- | --- | --- |
+| MobileNet (`infer`) | 23 | Depth fast / default | 221 / 300 |
+| SmolLM2 (`generate`) | 299 | MI-GAN fast / default | 125 / 234 |
+| Granite-Docling (`gguf`) | 481 | DINOv2 | 150 |
+| YOLOE-v8s fast / default | 510 / 425 | YOLOE-11s | 414 |
+| EdgeSAM fast / default | 544 / 311 | SAM 2.1 FP32 | 919 |
+| RF-DETR fast / default | 180 / 279 | EfficientSAM3 fast | 2,365 |
+| OWLv2 | 1,924 | | |
+
+The first seven were measured with
+[`measure_costs.py`](../cerebrate-hetero/tests/measure_costs.py); the rest come
+from the staging measurements.
+
+**Builds.**
+
+| Binary | sha256 | What it is |
+| --- | --- | --- |
+| [`cerebrate-supervisor`](cerebrate-supervisor), this directory | `c2ca2ac8…` | The default build. |
+| Test build | `7283e534…` | `-DCONTROL_PORT=8777 -DPORT_OFFSET=100 -DSTAGING_DIR="/data/local/tmp/cerebrate-stage"`. Every compiled-in port is shifted by 100, because production uses the real ones; the test profiles file is generated with `--port-offset 100`. |
+
+**Tested on the test stack** (the shared lifecycle, a generated test profiles
+file with the reserve, and a test MLServer of all 13 endpoints):
+
+| Test | Result |
+| --- | --- |
+| Lifecycle unit tests (fake supervisor) | 7/7 |
+| Registry tests | 38/38 |
+| [`capacity_scenarios.py`](../cerebrate-hetero/tests/capacity_scenarios.py) `wait` | 6/6 |
+| `capacity_scenarios.py` `fail` (5 s wait) | 6/6 |
+| YOLOE and EdgeSAM result-mode gate | 8/8 and 8/8 |
+| MobileNet probe | 795 |
+| The eight GPU endpoints' gates | 33/33 |
+| Idle stop (60 s test window) | every worker stopped, all 13 models READY |
+| Supervisor crash recovery with the watchdog | passed |
+
+The `wait` scenarios:
+- YOLOE fits beside a resident EfficientSAM3, so nothing is stopped.
+- An idle EfficientSAM3 is stopped to make room for OWLv2.
+- A busy EfficientSAM3 is never stopped: OWLv2 waited 22 s for it.
+- Free memory never fell below 1,115 MB.
+
+In `fail` mode, OWLv2 was refused after the wait with the reason, and
+EfficientSAM3 was unharmed.
+
+The eight endpoints' gates include EfficientSAM3 and OWLv2, each beside
+production YOLOE and MobileNet.
+
+In the crash-recovery test, the watchdog killed the orphaned MobileNet worker
+and restarted the supervisor, and the next request restarted MobileNet. Two
+watchdog fixes came out of it:
+- **TIME_WAIT bug.** Android's `netstat -l` also lists TIME_WAIT connections,
+  so a dead supervisor looked alive for a minute after any client connection.
+  The check now requires a LISTEN socket.
+- **Orphans of every worker binary.** These are now cleared, not only
+  `cerebrate-hetero`.
+
+### Deployment runbook (window 2: capacity and shared lifecycle)
+
+This window replaces the supervisor binary and the profiles file **together**:
+the old binary refuses the new `reserve_mb`/`cost` lines, and the new binary
+refuses the old `min_free_mb` column. It also replaces the adapters, so
+MLServer restarts. Expect about a minute of MLServer downtime.
+
+1. **Pre-flight.**
+   - Push the release.
+   - On the phone, stage `cerebrate-supervisor.capacity` (`c2ca2ac8`) and
+     `cerebrate-profiles.conf.capacity`, the generated file. Verify their
+     hashes.
+   - Check that the phone has ≥ 3 GB free and is below 45 °C.
+2. **Pause the watchdog** without sudo: write the current time to
+   `/run/pixel-supervisor-watchdog/last-start`, which gives a 2-minute
+   cooldown. Repeat it if the window runs longer.
+3. **Stop MLServer** with `sudo systemctl stop cerebrate-mlserver`, then STOP
+   every running worker.
+4. **Swap on the phone.**
+   1. Keep the current binary and profiles file as `*.registry1`.
+   2. Kill the supervisor (verify its exe first).
+   3. Move the `.capacity` files into place.
+   4. Relaunch the supervisor.
+
+   The READY line must read `file_profiles=11 reserve_mb=1000 costs=18`.
+5. **Update the guest** with `git pull --ff-only`. This brings the shared
+   lifecycle, the removed `graph-canary` and `example-echo`, and the policy
+   file.
+6. **Start MLServer.** 11 models are READY and **no worker runs**: every
+   worker is on demand now.
+7. **Gate.** Roll back on any failure.
+   - `mlserver_result_test.py`: YOLOE 8/8 + 8/8 and EdgeSAM 8/8 + 8/8, the
+     same as before.
+   - `mobilenet_probe.py`: 795.
+   - The six promoted endpoints: `mlserver_staged_test.py --only …`.
+   - One SmolLM2 request, and one Granite request (about 100 s).
+   - `CAPACITY` answers.
+
+**Rollback.**
+1. Stop MLServer, then STOP the workers.
+2. On the phone, move `*.registry1` back and relaunch the supervisor.
+3. In the guest, check out the previous commit and start MLServer.
+
+Model files, configs and Pillow are unchanged by this window.
+
+### Deploy record: window 2 (2026-10-26, 00:02–00:03 UTC)
+
+Authorized by the user's go-ahead for the plan.
+
+1. **Pre-flight.**
+   - The test stack was torn down.
+   - `cerebrate-supervisor.capacity` (`c2ca2ac8`) and
+     `cerebrate-profiles.conf.capacity` (`308910ce`) were staged, hashes
+     verified.
+   - 4.15 GB free; TPU 25 °C.
+2. The watchdog was paused through its cooldown file.
+3. **00:02:20.** MLServer stopped. `infer`, `generate`, `gguf` and `graph3`
+   were STOPPED.
+4. **Phone.**
+   - `*.registry1` copies kept (`05ad7e0d`, `31bd257a`).
+   - Supervisor 10126 killed, the new files moved into place, the supervisor
+     relaunched.
+   - READY: `file_profiles=11 reserve_mb=1000 costs=18`.
+5. **Guest.** `git pull` → `21ec795`.
+6. **00:03:09.** MLServer active with 11 models READY and **no worker
+   running**: every worker is on demand now. **Downtime 49 s.**
+7. **Gate: PASS.**
+
+   | Check | Result |
+   | --- | --- |
+   | YOLOE | result 8/8, raw 8/8 bit-identical, 272 ms |
+   | EdgeSAM | 8/8, cached 8/8 |
+   | MobileNet (endpoint probe) | 795; the first request 1.8 s is the on-demand start |
+   | The six promoted endpoints | 25/25: fidelity, unload/reload, contention |
+   | SmolLM2 | coherent, 5.9 s |
+   | Granite | the expected DocTags (`<line_chart>`), 105 s |
+
+   `CAPACITY` afterwards: 1,731 MB free and 478 MB committed (the idle
+   Granite worker's reserved budget). TPU 52 °C and GPU 50 °C after the gate.
+
+The leftover `example-echo/` directory in the guest checkout holds only
+untracked files; MLServer ignores a folder without `model-settings.json`.
+
+### Promotion record: EfficientSAM3 and OWLv2 (2026-10-26, after window 2)
+
+The co-residency question that held them is answered by the capacity rule.
+Each was promoted with its gate in production.
+
+| Endpoint | Gate | Result | YOLOE median alone → beside it | Free min |
+| --- | --- | --- | --- | --- |
+| `efficientsam3-rvm` (fast) | 5/5 | 20/20 detections | 305 → 542 ms | 1,268 MB |
+| `owlv2-b16` | 5/5 | 75/75 detections | 321 → 551 ms | 1,270 MB |
+
+- Every gate also checked unload then reload.
+- MobileNet returned 795 on every probe.
+- EfficientSAM3's start stopped five idle workers to make room, in
+  least-recently-used order: YOLOE-11s, RF-DETR, SAM 2.1, MobileNet, YOLOE.
+- OWLv2's start stopped the idle EfficientSAM3.
+- No busy worker was stopped.
+- MLServer never restarted (MainPID 16188, NRestarts 0).
+- The phone peaked at 55 °C after the OWLv2 gate.
+
+All eight registry endpoints are now in production, and all eight tasks are
+available.

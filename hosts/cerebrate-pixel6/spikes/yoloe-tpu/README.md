@@ -1,0 +1,141 @@
+# yoloe-tpu
+
+YOLOE prompt-free segmentation (Ultralytics 8.4.184 `yoloe-v8s-seg-pf`,
+`yoloe-11s-seg-pf`; 4,585 built-in classes) toward the Pixel 6 Edge TPU —
+Step 2B of the
+[Segmentation and Labeling Lane](../../../../design-notes/Cerebrate%20Pixel%206%20%E2%80%94%20Segmentation%20and%20Labeling%20Lane.md).
+No usable published int8/TPU conversion exists (Qualcomm AI Hub's
+YOLOE-Segmentation card ships no files, for licensing reasons). Results:
+[experiments/pixel6/results.md](../../../../experiments/pixel6/results.md).
+
+## Model preparation ([`yoloe_prep.py`](yoloe_prep.py))
+
+Graph surgery on the fp32 ONNX exports ([`export_yoloe.py`](export_yoloe.py)),
+each step exact (reduced outputs = unmodified ONNX, max difference 0):
+
+- **Reduced outputs.** `output0` `[1, 4+4585+32, 8400]` (~155 MB fp32, over
+  `cerebrate-graph`'s 64 MB tensor limit) is a Concat of boxes, sigmoid class
+  scores and mask coefficients; the three tensors are taken directly and the
+  best score and class per anchor appended: `boxes [1,4,8400]`,
+  `score [1,8400]`, `cls [1,8400]` (int64), `coef [1,32,8400]`, protos
+  `[1,32,160,160]`.
+- **Split → Slice.** ORT 1.30's NNAPI provider fails to build these Splits
+  (equal channel halves): `AddNnapiSplit count [0] does not evenly divide
+  dimension`.
+- **DFL box decoding as a 2-D softmax.** The Edge TPU's converter rejected the
+  box head's 4-D softmax (`RET_CHECK axis == -1 || axis == input_rank - 1`),
+  even moved to the last axis; as `[33600,16]` softmax → matmul with the DFL
+  weights it is accepted.
+
+Inputs are the eight lane photos letterboxed to 640×640 (Ultralytics
+`LetterBox(auto=False)`). Ultralytics' PyTorch predict otherwise letterboxes
+to a minimal rectangle, so its predictions are only comparable to the
+fixed-shape models on the same square input
+([`yoloe_same_input_check.py`](yoloe_same_input_check.py): identical then).
+The task-level evaluator (`detections()`) applies Ultralytics' own NMS and
+mask functions with the YOLOE predictor's settings — conf 0.25, IoU 0.7,
+**class-agnostic NMS** — and reproduces the `.pt` predictions on 8/8 photos
+for both models.
+
+## GPU path ([`yoloe_convert_gpu.py`](yoloe_convert_gpu.py))
+
+Float LiteRT graphs via `litert-torch` from the fused Ultralytics model in
+export mode, with the head's `_inference` returning boxes, sigmoid scores and
+mask coefficients separately (no 155 MB concat) plus best score and class
+(as float: GPU float I/O). Fully delegated on the GPU; scored by
+[`yoloe_task_accuracy.py`](yoloe_task_accuracy.py) (detections matched by
+class and box IoU, plus a label-agnostic count; mask IoU).
+
+## TPU partition and int8
+
+- [`yoloe_partition.py`](yoloe_partition.py) — splits each prepared model at
+  the head: backbone + neck (images → feature maps 80²/40²/20²) for the Edge
+  TPU, head (with the 4,585-class projection) for the CPU/GPU; the two halves
+  chained equal the whole (difference 0).
+- [`yoloe_calib_select.py`](yoloe_calib_select.py) — 300 indoor COCO val2017
+  photos (room-object categories, at least one large indoor anchor),
+  excluding every COCO image the test photos come from.
+- [`yoloe_quantize.py`](yoloe_quantize.py) — ONNX Runtime static int8 (QDQ,
+  uint8 activations, int8 per-channel weights; MinMax, percentile or entropy
+  calibration). The histogram calibrators hold every activation in memory:
+  percentile ran with 32 photos (100 was killed for memory on the Mac).
+- [`yoloe_chain_desktop.py`](yoloe_chain_desktop.py) — backbone (fp32/int8) →
+  fp32 head on the desktop, in the device output layout, for the task check.
+
+- [`yoloe_int8_tflite.py`](yoloe_int8_tflite.py) — fully-integer TFLite
+  backbone via litert-torch PT2E (SiLU spelled out as `x * sigmoid(x)`, or
+  it stays float); int8 input and outputs. [`yoloe_pt2e_debug.py`](yoloe_pt2e_debug.py)
+  separates PT2E quantization error from conversion error.
+- **TensorFlow's classic full-integer quantizer** (the route Ultralytics'
+  Edge TPU export uses): `onnx2tf -i <backbone.onnx> -oiqt -qt per-channel
+  -cind images calib_nhwc.npy "[[[[0,0,0]]]]" "[[[[1,1,1]]]]"` with 150
+  letterboxed indoor photos (onnx2tf also wants a 20×128×128×3 sample file
+  in the working directory; its download of one failed, so we wrote our
+  own). Its `full_integer_quant` output is NHWC, int8 throughout, with no
+  requantizations. [`yoloe_tf_int8_check.py`](yoloe_tf_int8_check.py)
+  inspects it and runs the desktop chain; [`yoloe_tpu_chain.py`](yoloe_tpu_chain.py)
+  takes device outputs (TPU or CPU) through the fp32 head.
+- [`tflite-nnapi-bench/main.cc`](tflite-nnapi-bench/main.cc) — classic TFLite
+  C API (2.16.1, same library as `cerebrate-infer`) on the CPU or through the
+  NNAPI delegate pinned to `google-edgetpu` with NNAPI's CPU fallback
+  disallowed; raw tensor files in and out; load (incl. TPU compile), first
+  and median latency. Built like `cerebrate-infer`
+  (`aarch64-linux-android24-clang++ -std=c++17 ... -ltensorflowlite_jni`).
+
+## fp16-relaxed backbone on the Edge TPU (the working configuration)
+
+- [`yoloe_fp16_tpu_prep.py`](yoloe_fp16_tpu_prep.py) — the **G1 max-pool
+  correction** with a *proved* input bound: every MaxPool's input must trace
+  to a SiLU (`Mul(t, Sigmoid(t))`, global minimum −0.278464542761074) or to a
+  MaxPool over one, else the rewrite refuses; then `MaxPool(x + 0.28) − 0.28`
+  (the TPU pads SAME max-pooling with zeros —
+  [tpu-precision-probes](../tpu-precision-probes/README.md)). Extracts three
+  growing fragments (F1: model.7–9, 36 ops; F2: model.0–9, 114 ops; F3: the
+  whole backbone + neck, 188 ops), converts each with onnx2tf to float32
+  TFLite (NHWC), and writes device inputs and references from the
+  *unmodified* fp32 ONNX.
+- [`fp16tpu_run.sh`](fp16tpu_run.sh) — guarded device run (on overmind-01):
+  isolated bench process under a hard timeout, free memory sampled every
+  second with a kill below 1.5 GB, one attempt, compile/memory/placement
+  report. The bench's `tpu16` mode sets the NNAPI delegate's `allow_fp16`.
+- [`fp16tpu_accuracy.py`](fp16tpu_accuracy.py) — fragment outputs vs the
+  unmodified reference (border vs interior, for the max-pool check);
+  [`fp16tpu_chain.py`](fp16tpu_chain.py) — TPU feature maps → the original
+  fp32 head for the task check.
+- The head for the GPU: the prepared head ONNX through onnx2tf with
+  `-rarf32` (argmax as reduce-max + float indices, so the GPU runs all 123
+  ops; with onnx2tf's default int64 `ARG_MAX` two ops fall to the CPU and the
+  154 MB score tensor is read back, 327 ms). At fp16 the float-index argmax
+  overflows (NaN): 4,585 classes exceed what fp16 represents exactly.
+
+## TPU + GPU pipeline (fastest validated configuration)
+
+- [`yoloe_head_gpu.py`](yoloe_head_gpu.py) — the head alone for the GPU via
+  litert-torch, taking the TPU backbone's NHWC feature maps: class selection
+  on the logits with a **native argmax (int32 indices — exact at any GPU
+  precision)** and the sigmoid applied to the winning logit only. All 117
+  ops on the GPU at fp32 and at fp16 + fp32 accumulation; no CPU fallback,
+  no full-score readback. (onnx2tf's int64 `ARG_MAX` is rejected by the
+  GPU; its float-index replacement overflows at fp16.)
+- [`pipeline/`](pipeline/) — `yoloe_pipeline`, both stages synchronized in
+  one process: [`tpu_stage.cc`](pipeline/tpu_stage.cc) runs the backbone on
+  the Edge TPU through the TFLite 2.16.1 C API + NNAPI delegate (fp16
+  relaxation), loaded privately with `dlopen(RTLD_LOCAL)` because LiteRT 2.3
+  exports the same `TfLite*` names (the TFLite library has no dynamic
+  relocations against them, so its internal calls stay bound to itself);
+  [`pipeline.cc`](pipeline/pipeline.cc) runs the head on the GPU through
+  LiteRT 2.3 and times the TPU stage (image in, backbone, features out), the
+  GPU stage (features in, head, synchronized output reads) and the total.
+  Build: [`CMakeLists.fragment.txt`](pipeline/CMakeLists.fragment.txt).
+
+## Device runs ([`yoloe_run.sh`](yoloe_run.sh))
+
+Hand-launched `cerebrate-graph` worker per (model, backend) on a spare port,
+the eight photos through `graph-client` from the guest, NNAPI partitioning
+and Edge TPU driver lines from logcat.
+
+**Caution:** Edge TPU compilation of these large graphs exhausted the phone's
+memory once (2026-10-24): the low-memory killer took the Terminal app and the
+Debian VM with it (MLServer down ~7 minutes; recovered with
+`adb shell am start -n com.android.virtualization.terminal/.new2.ui.MainActivity`).
+Don't run further TPU compiles of these graphs without a plan for that.

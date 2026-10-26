@@ -1,50 +1,45 @@
 #!/usr/bin/env python3
-"""Validates models/catalog.yaml against models/schema.json.
+"""Validates models/catalog.yaml and models/variants.yaml together.
+
+Schema (models/schema.json, models/variants.schema.json), then the
+cross-references a schema can't express (models/registry.py):
+  - unique model ids (incl. previous ids), variant ids and device file names
+  - variant stages name existing artifacts with recorded files (sha256)
+  - aliases and task selections resolve to selectable, non-rejected variants
+  - a task advertised as available selects production variants with serving
+  - staged/production variants resolve their whole serving path: supervisor
+    slot and profile (compiled in, or cerebrate-profiles.conf), the worker
+    config (every device file it names is one of the variant's artifacts and
+    vice versa) and, for the endpoint's variant, the MLServer model-settings
+  - every validation/benchmark/investigation record exists (file + heading)
 
 Requires: pyyaml, jsonschema (not stdlib -- install into a venv, e.g.:
   python3 -m venv /tmp/catalog-venv && /tmp/catalog-venv/bin/pip install pyyaml jsonschema
   /tmp/catalog-venv/bin/python3 scripts/validate-model-catalog
 
-Exit 0: catalog is valid.
-Exit 1: catalog is invalid or a file is missing/malformed.
+Exit 0: valid. Exit 1: invalid, or a file is missing/malformed.
 """
-import json
 import sys
 from pathlib import Path
 
-import yaml
-from jsonschema import Draft7Validator
-
-REPO_ROOT = Path(__file__).resolve().parent.parent
-SCHEMA_PATH = REPO_ROOT / "models" / "schema.json"
-CATALOG_PATH = REPO_ROOT / "models" / "catalog.yaml"
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "models"))
+import registry  # noqa: E402
 
 
 def main() -> int:
     try:
-        with open(SCHEMA_PATH) as f:
-            schema = json.load(f)
-    except (OSError, json.JSONDecodeError) as exc:
-        print(f"error: could not read {SCHEMA_PATH}: {exc}", file=sys.stderr)
+        reg = registry.Registry.load()
+    except (OSError, ValueError) as exc:
+        print(f"error: could not read the registry: {exc}", file=sys.stderr)
         return 1
-
-    try:
-        with open(CATALOG_PATH) as f:
-            catalog = yaml.safe_load(f)
-    except (OSError, yaml.YAMLError) as exc:
-        print(f"error: could not read {CATALOG_PATH}: {exc}", file=sys.stderr)
-        return 1
-
-    validator = Draft7Validator(schema)
-    errors = sorted(validator.iter_errors(catalog), key=lambda e: list(e.path))
+    errors = reg.validate()
     if errors:
-        for err in errors:
-            path = ".".join(str(p) for p in err.path) or "(root)"
-            print(f"error: {path}: {err.message}", file=sys.stderr)
+        for e in errors:
+            print(f"error: {e}", file=sys.stderr)
         return 1
-
-    model_count = len(catalog.get("models", {}))
-    print(f"OK: {CATALOG_PATH.relative_to(REPO_ROOT)} is valid ({model_count} model(s))")
+    n_var = len(reg.variants.get("variants", {}))
+    print(f"OK: models/catalog.yaml + models/variants.yaml are valid "
+          f"({len(reg.models)} model(s), {n_var} variant(s), {len(reg.tasks)} task(s))")
     return 0
 
 

@@ -1,0 +1,1197 @@
+# Pixel 6 run ledger
+
+Newest sections last. Environment and method: [README.md](README.md). "E2E" =
+synchronized end-to-end latency (median); "run call" = asynchronous dispatch
+time only, not latency. Accuracy is against the unmodified original model
+unless stated.
+
+## 2026-10-23 — ONNX Runtime 1.30.0 through `cerebrate-graph`
+
+Code: [cerebrate-graph](../../hosts/cerebrate-pixel6/cerebrate-graph/README.md).
+
+| Model | Backend | Result | Time | Verdict |
+| --- | --- | --- | --- | --- |
+| MobileNet v1 quant (ONNX, from the cataloged `.tflite`) | CPU | bit-exact vs reference, class 795 | 9.7 ms inference | correct |
+| MobileNet v1 quant | NNAPI → Edge TPU | bit-exact; 146/149 nodes on `google-edgetpu` | 3.4 ms inference, 4.4 ms round trip | **correct, accelerated** |
+| RF-DETR Seg Nano fp32 (123 MB) | CPU | cosine 1.000000 vs Mac ORT reference | **483 ms** | correct |
+| RF-DETR Seg Nano fp32 | XNNPACK | cosine 1.000000 | 1,334 ms | correct, slower |
+| RF-DETR Seg Nano fp32 | NNAPI | TPU driver accepts 0 of 19 op types in fp32; session refuses to load | — | TPU takes no fp32 |
+| RF-DETR Seg Nano fp32 | NNAPI + `USE_FP16` | driver accepts the ops; vendor Darwinn compiler crashes (tombstone in `libdarwinn_hal.so`) | — | compiler defect |
+| RF-DETR Seg Nano fp32 | WebGPU | `[Device] is lost` ~11 s into the first run | — | see WebGPU below |
+
+## 2026-10-23 — ONNX Runtime WebGPU EP (Dawn on Vulkan)
+
+Code: [webgpu-op-bisect](../../hosts/cerebrate-pixel6/spikes/webgpu-op-bisect/README.md).
+Every real model failed on the Pixel (SAM 2.1 decoder fp32/fp16, DINOv2-small
+fp16, SAM 2.1 encoder fp16, RF-DETR) and passed on an M1 Mac's Metal (SAM
+decoder 41 ms, DINOv2 fp16 22 ms, SAM encoder fp16 498 ms, RF-DETR 131 ms).
+
+| Single-op graphs (fp32, model-sized tensors) | Result |
+| --- | --- |
+| Mul, broadcast Add, Softmax, LayerNormalization, Erf, ReduceMean, Transpose | correct |
+| MatMul (3 shapes), Conv (3×3; 14×14 patch embed) | `VK_ERROR_DEVICE_LOST` |
+
+**Kernel defect:** ORT WebGPU's MatMul/Conv kernels crash this Mali GPU.
+Frozen pending a driver or ORT change.
+
+## 2026-10-23 — Classic TFLite 2.16.1 GPU delegate (OpenCL)
+
+Code: [tflite-gpu-delegate](../../hosts/cerebrate-pixel6/spikes/tflite-gpu-delegate/README.md).
+
+| Model | Path | Result | Time (invoke) | Verdict |
+| --- | --- | --- | --- | --- |
+| MobileNet v1 float | CPU | reference | 28.3 ms | — |
+| MobileNet v1 float | GPU fp32 | cosine 1.000000, same top class; 29/31 nodes | 11.6 ms | correct |
+| MobileNet v1 float | GPU fp16 | cosine 0.998554, same top class | 7.8 ms | correct |
+| DINOv2-small (`litert-torch`) | GPU | rejected at init: `CONCATENATION` needs 4-D; `BROADCAST_TO`, `GATHER_ND` unsupported | — | CNN-only delegate |
+
+## 2026-10-23/24 — LiteRT 2.3.0 `CompiledModel` GPU (OpenCL, ML Drift)
+
+Code: [litert-gpu-transformers](../../hosts/cerebrate-pixel6/spikes/litert-gpu-transformers/README.md).
+
+| Model | Config | Result | Verdict |
+| --- | --- | --- | --- |
+| MobileNet v1 **quant** (uint8 I/O) | GPU, any buffer type | output buffer **never written** (sentinel intact) — the old "all-zero" result | uint8-I/O defect (this model) |
+| MobileNet v1 float | GPU + CPU (2 `SQUEEZE` on CPU) | cosine 0.999961, same top class; 8.3 ms run call vs 31.6 ms | correct |
+| DINOv2-small (`litert-torch`, unprepared) | GPU, any precision | cosine 0.026 | kernel defect, traced to LayerScale's `[N,C]×[C]` broadcast multiply |
+
+**DINOv2-small, prepared** (embedding step frozen for 224×224, LayerScale
+folded into `o_proj`/`fc2`; 621/621 ops on GPU), eight photos:
+
+| Config | E2E | Worst token cosine | Max abs | Rel L2 | Similarity ranking | Verdict |
+| --- | --- | --- | --- | --- | --- | --- |
+| CPU (XNNPACK) | 344 ms | 1.000000 | 4.8e-4 | 6.3e-6 | 8/8 | reference |
+| **GPU fp32** | **68.6 ms** (~5×) | 1.000000 | 7.1e-4 | 5.9e-6 | 8/8 | **correct** |
+| GPU fp16 | 37.8 ms (~9×) | 0.961 | 2.58 | 3.1% | 7/8 | degraded |
+
+Sustained (GPU fp32): 5 min at 68.5–69.4 ms medians per 10 s window; live
+temperatures over 3 min: `G3D` 34 → 74–76 °C plateau, skin 31 → 40 °C,
+thermal status 0, no GPU-frequency throttling.
+
+## 2026-10-24 — SAM 2.1 Hiera-Tiny
+
+Code: [sam21-gpu](../../hosts/cerebrate-pixel6/spikes/sam21-gpu/README.md).
+Eight samples: four photos × two box prompts; masks judged against the
+unmodified PyTorch model (whose outputs match browser-perception's ONNX export
+exactly).
+
+**Decoder (box prompt), our conversion of the transformers graph** — GPU-only
+compilation fails (42/397 ops: 5-D reshapes/slices, `SELECT_V2`):
+
+| Config | E2E | Worst mask IoU | Mean IoU | Pixels flipped (24 masks) | Same best mask | Verdict |
+| --- | --- | --- | --- | --- | --- | --- |
+| CPU | 148 ms | 1.00000 | 1.00000 | 0 | 8/8 | reference |
+| **GPU + CPU, fp32** (3 GPU partitions) | **82 ms** | 1.00000 | 1.00000 | 0 | 8/8 | **correct** |
+| GPU + CPU, fp16 | 66 ms | 0.578 | 0.895 | 5,718 | 8/8 | precision failure |
+
+**Decoder (box prompt), GPU-clean re-authoring** adapted from
+`litert-community/SAM2.1-Hiera-Tiny-Mask-Decoder` (revision `049c2500`; rank-4
+attention, plain LayerNorm, 3-token box prompt, fp32 weights) — stages 1–2
+exact (mask IoU 1.0, cosine 1.0); 328/328 ops on GPU:
+
+| Config | E2E | Worst mask IoU | Mean IoU | Pixels flipped | Same best mask | Verdict |
+| --- | --- | --- | --- | --- | --- | --- |
+| CPU | 203 ms | 1.00000 | 1.00000 | 0 | 8/8 | correct |
+| GPU fp32 | 87 ms | 0.000 | 0.011 | 117,162 | 5/8 | **kernel defect** — wrong at every precision |
+| GPU fp16 + fp32 accumulation | 52 ms | 0.000 | 0.011 | 117,200 | 2/8 | kernel defect |
+| GPU fp16 | 55 ms | 0.000 | 0.007 | 114,300 | 1/8 | kernel defect |
+
+**Root cause (bisection, [`bisect_box_decoder.py`](../../hosts/cerebrate-pixel6/spikes/sam21-gpu/bisect_box_decoder.py)):
+large baked constants.** With the `[1,256,64,64]` dense prompt, `[4096,256]`
+positional table and output tokens baked into the graph, the GPU output is
+already wrong after the first transformer block (keys cosine 0.70); fed as
+inputs instead, the same graph is exact (cosine 1.00000, rel L2 4e-7). Same
+class of defect `litert-community`'s RF-DETR card reports for this GPU
+accelerator, now reproduced on the G1. (Our prepared DINOv2 bakes a 98K-element
+constant without trouble, and the published fp16 decoder bakes these same
+constants cast to fp16 without trouble — size and dtype may matter; not
+established.)
+
+**Decoder (box prompt), constants as inputs** (328/328 on GPU; the benchmark
+rewrites 24 MB of embeddings and constants every iteration, ~20 ms of the
+total — in use only the 3 KB prompt changes per box):
+
+| Config | E2E | Worst mask IoU | Mean IoU | Pixels flipped | Same best mask | Verdict |
+| --- | --- | --- | --- | --- | --- | --- |
+| CPU | 203 ms | 1.00000 | 1.00000 | 0 | 8/8 | reference |
+| **GPU fp32** | **80 ms** | **1.00000** | 1.00000 | **0** | 8/8 | **correct** |
+| GPU fp16 + fp32 accumulation | 57 ms | 0.978 | 0.9946 | 314 | 8/8 | slight degradation |
+| GPU fp16 | 60 ms | 0.559 | 0.895 | 5,756 | 8/8 | precision failure |
+
+**Published v2 decoder, unmodified** (`litert-community`, rev `049c2500`;
+425/425 on GPU), with its native 2-token point prompt (one positive click +
+padding), eight samples (four photos × two clicks), against the original
+model decoding the same clicks ([`prep_published_point.py`](../../hosts/cerebrate-pixel6/spikes/sam21-gpu/prep_published_point.py)):
+
+| Config | E2E | Worst mask IoU | Mean IoU | Pixels flipped | Same best mask | Verdict |
+| --- | --- | --- | --- | --- | --- | --- |
+| CPU | 206 ms | 0.975 | 0.9988 | 18 | 8/8 | fp16-weight error |
+| GPU fp32 compute | 69 ms | 0.975 | 0.9988 | 18 | 8/8 | fp16-weight error; no constants defect |
+| GPU default (fp16) | 48 ms | 0.557 | 0.963 | 1,739 | 7/8 | precision failure |
+
+Its card reports binary IoU 0.999 vs CPU at fp16 on a Pixel 8a; on this
+Pixel 6, against the original model, pure fp16 fails. Across every SAM 2.1
+formulation tried — two decoders, two encoders, ours and published — **pure
+FP16 fails on the G1, FP16 with FP32 accumulation lands at worst mask IoU
+≈ 0.98, and FP32 is exact.**
+
+**Image encoder** (four photos; task metric = masks decoded by the original
+fp32 decoder from the device embeddings, eight box prompts):
+
+| Encoder | Config | E2E | emb2 rel L2 | Worst mask IoU | Mean IoU | Pixels flipped | Verdict |
+| --- | --- | --- | --- | --- | --- | --- | --- |
+| Ours, unprepared conversion | CPU | 10.2 s | — | — | — | — | reference speed |
+| **Ours, prepared** (≤4-D windowing, q/k/v split, baked pos-embed, folded no-memory bias; 797/797 on GPU) | **GPU fp32** | **1.38 s** (~7.4×) | 2.8e-6 | **1.0000** | 1.0000 | **0** | **correct** |
+| Ours, prepared | GPU fp16 + fp32 acc. | 0.77 s | 0.5% | 0.981 | 0.9956 | 316 | slight degradation |
+| Ours, prepared | GPU fp16 | 0.64 s | 3.4% | 0.833 | 0.951 | 3,151 | precision failure |
+| Published `litert-community` v2 fp16 (rev `d701df10`; 867/867 on GPU) | CPU | 9.4 s | 0.1% | 0.991 | 0.9986 | 67 | fp16-weight error |
+| Published v2 fp16 | GPU fp32 compute | 1.31 s | 0.1% | 0.991 | 0.9986 | 67 | fp16-weight error |
+| Published v2 fp16 | GPU fp16 + fp32 acc. | 0.74 s | 0.5% | 0.981 | 0.9940 | 395 | slight degradation |
+| Published v2 fp16 | GPU default (fp16) | 0.62 s | 3.5% | 0.852 | 0.954 | 2,918 | precision failure |
+
+The published card reports, on a Pixel 8a, that mask quality holds at fp16
+(one center click). On this Pixel 6, judged against the original model across
+eight box prompts, pure fp16 does not hold for either encoder.
+
+**Decision (2026-10-24):** SAM 2.1 ships as two variants — **`default`**: FP32
+(prepared encoder + constants-as-inputs box decoder; exact), and **`fast`**:
+the same graphs at FP16 with FP32 accumulation (encoder 0.77 s, decoder 57 ms;
+worst mask IoU ≈ 0.98). Pure FP16 is not offered.
+
+## 2026-10-24 — Published DINOv2-S/14 (`litert-community/DINOv2-ViT-S14-LiteRT`, rev `f3be8d98`)
+
+Code: [published-litert-eval](../../hosts/cerebrate-pixel6/spikes/published-litert-eval/README.md).
+448×448, patch tokens `[1024, 384]`, eight photos, against the original timm
+model (`vit_small_patch14_dinov2.lvd142m` at 448). Desktop LiteRT CPU: erf file
+rel L2 0.08%, tanh file 0.46% (GELU approximation). All on GPU (864/864 tanh,
+768/768 erf).
+
+| File | Config | E2E | Worst token cosine | Max abs | Rel L2 | Similarity ranking | Verdict |
+| --- | --- | --- | --- | --- | --- | --- | --- |
+| erf | CPU | 1.99 s | 0.99999 | 0.043 | 0.08% | 8/8 | fp16-weight error |
+| **erf** | **GPU fp32 compute** | **253 ms** (~7.8×) | 0.99999 | 0.043 | 0.08% | 8/8 | **correct (fp16 weights)** |
+| erf | GPU fp16 + fp32 acc. | 144 ms | 0.578 | 11.3 | 11.1% | 8/8 | precision failure |
+| erf | GPU fp16 (default) | 119 ms | 0.557 | 9.3 | 12.0% | 7/8 | precision failure |
+| tanh | CPU | 1.98 s | 0.99992 | 0.19 | 0.46% | 8/8 | GELU-approx error |
+| tanh | GPU fp32 compute | 253 ms | 0.99992 | 0.19 | 0.46% | 8/8 | correct (approx GELU) |
+| tanh | GPU fp16 + fp32 acc. | 140 ms | 0.581 | 11.3 | 11.1% | 8/8 | precision failure |
+| tanh | GPU fp16 (default) | 120 ms | 0.548 | 9.5 | 12.2% | 7/8 | precision failure |
+
+Unlike SAM, FP32 accumulation doesn't rescue FP16 here. The card's "device
+fp16 vs desktop fp32: corr 0.996" (Pixel 8a) does not hold on this Pixel 6.
+For comparison, our prepared DINOv2-small at 224 (FP32 weights) is exact at
+68.6 ms with FP16 at 3.1% error.
+
+## 2026-10-24 — Published RF-DETR-Seg-Nano (`litert-community/RF-DETR-Seg-Nano-LiteRT`, rev `8fee237c`)
+
+Code: [published-litert-eval](../../hosts/cerebrate-pixel6/spikes/published-litert-eval/README.md).
+Graph A (1293/1293 on GPU) → host step on its device outputs → graph B
+(884/884 on GPU); eight photos, 25 detections from Roboflow's original
+`rfdetr` 1.9.3 model. E2E = graph A + graph B (host step: a few ms).
+
+| Config | Graph A | Graph B | Total | Matched | Same class | Worst box IoU | Worst mask IoU | Mean mask IoU | Verdict |
+| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |
+| Desktop LiteRT CPU | — | — | — | 25/25 (+1 extra) | 25 | 0.956 | 0.983 | 0.996 | fp16-weight error |
+| CPU | 1.22 s | 274 ms | ~1.5 s | 25/25 (+1) | 25 | 0.956 | 0.983 | 0.998 | fp16-weight error |
+| **GPU fp32 compute** | 239 ms | 114 ms | **~354 ms** | 25/25 (+1) | 25 | 0.956 | 0.983 | 0.998 | **correct (fp16 weights)** |
+| **GPU fp16 + fp32 acc.** | 136 ms | 69 ms | **~205 ms** | 25/25 (+1) | 25 | 0.984 | 0.988 | 0.998 | **correct (fp16 weights)** |
+| GPU fp16 (default) | 128 ms | 68 ms | ~196 ms | 24/25 | 24 | 0.544 | 0.548 | 0.988 | precision failure |
+
+For reference, ONNX Runtime ran the original fp32 RF-DETR on this phone's CPU
+in 483 ms (2026-10-23). Here FP16+FP32 accumulation is as good as FP32
+compute; pure FP16 loses one detection and badly displaces another.
+
+## 2026-10-24 — Published Depth Anything V2 Small (`litert-community/depth-anything-v2-small`, rev `178427e4`)
+
+Code: [published-litert-eval](../../hosts/cerebrate-pixel6/spikes/published-litert-eval/README.md).
+FP32 weights; fixed 518×686 input; eight photos against the original
+Transformers checkpoint (rev `5426e4f0`). Desktop LiteRT CPU: FP32 file exact
+(rel L2 8e-7); int8-weight file 2.5%. 494/494 ops on GPU. Depth metrics after
+least-squares scale+shift alignment; order agreement on 200k random pixel
+pairs per image.
+
+| File | Config | E2E | Raw rel L2 | AbsRel | δ<1.25 (worst) | Order agreement (worst) | Verdict |
+| --- | --- | --- | --- | --- | --- | --- | --- |
+| FP32 | CPU | 5.25 s | 1e-6 | 0.000 | 1.0000 | 1.00000 | reference |
+| **FP32** | **GPU fp32** | **661 ms** (~7.9×) | 1e-6 | 0.000 | 1.0000 | 1.00000 | **correct** |
+| **FP32** | **GPU fp16 + fp32 acc.** | **340 ms** | 0.66% | 0.005 | 0.9955 | 0.99978 | **near-identical** |
+| FP32 | GPU fp16 | 291 ms | 2.0% | 0.022 | 0.984 | 0.9948 | moderate degradation |
+| int8 weights | CPU | 3.03 s | 3.4% | 0.019 | 0.985 | 0.9988 | int8-weight error |
+| int8 weights | GPU fp32 | 664 ms | 2.8% | 0.021 | 0.986 | 0.9993 | no GPU speed gain |
+
+The card's warning that reduced GPU precision gives "substantially incorrect"
+depth came from native WebGPU testing; on this Pixel's LiteRT GPU, pure FP16
+degrades moderately and the mixed mode is near-identical.
+
+## 2026-10-24 — Published MI-GAN 512 Places2 (`litert-community/MI-GAN-512-Places2-LiteRT`, rev `179a35d8`)
+
+Code: [published-litert-eval](../../hosts/cerebrate-pixel6/spikes/published-litert-eval/README.md).
+FP16 weights; 509/509 ops on GPU. Reference: the FP32 generator extracted from
+co-author Andranik Sargsyan's `migan.onnx` (rev `406830d0`). Eight photos with
+object-removal masks (top RF-DETR reference instance, dilated; 1.7–62% of the
+image). Judged inside the removed region of the composite only; desktop LiteRT
+CPU: 58–71 dB.
+
+| Config | E2E | Worst PSNR | Mean PSNR | Worst SSIM | Worst rel L2 | Verdict |
+| --- | --- | --- | --- | --- | --- | --- |
+| CPU | 1.43 s | 58.4 dB | 64.4 dB | 0.9993 | 0.6% | fp16-weight error |
+| **GPU fp32 compute** | **147 ms** (~9.8×) | 58.4 dB | 64.4 dB | 0.9993 | 0.6% | **correct (fp16 weights)** |
+| GPU fp16 + fp32 acc. | 92 ms | 48.5 dB | 54.8 dB | 0.9983 | 1.9% | near-identical |
+| GPU fp16 (default) | 79 ms | 41.2 dB | 49.5 dB | 0.9938 | 4.3% | visually near-identical |
+
+The first model where pure FP16 holds up (PSNR ≥ 41 dB in the infilled region).
+CPU worked here despite the card's note that XNNPACK declines this graph.
+
+## 2026-10-24 — OWLv2 B/16 ensemble (our conversion, rev `cfd3195b`)
+
+Code: [owlv2-gpu](../../hosts/cerebrate-pixel6/spikes/owlv2-gpu/README.md).
+No published LiteRT conversion existed. Image tower and text tower as separate
+graphs, vocabulary as data; host step computes logits and adds the box bias.
+Stage 1 (prepared tower + host step vs original forward): logits ≤ 1.3e-5,
+boxes ≤ 1.2e-7, objectness exact. Stage 2 (converted vs eager): cosine
+1.000000 on every output. Eight photos, 24 text queries (household objects).
+
+**Image tower** (354 MB fp32, `[1,3,960,960]`, 3,600 patches):
+
+| Config | E2E | Logit max diff | Detections (ref 75) | Matched | Box IoU min | Score max diff | Top patch / query | Objectness top-100 | Verdict |
+| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |
+| CPU (XNNPACK) | 35.9 s | — | — | — | — | — | — | — | reference latency |
+| GPU fp32, box bias on device | 4.51 s | 0.016 | 81 | 0 | — | — | 192/192 | 1.000 | **wrong boxes** (G1 defect) |
+| **GPU fp32, box bias on host** | **4.53 s** (~7.9×) | 0.016 | 75 | 75 | 1.0000 | 0.0002 | 192/192 | 1.000 | **correct** |
+| GPU fp16 + fp32 acc. | 2.38 s | 60.1 | 602 | 73 | 0.55 | 0.17 | 0/192 | 0.946 | fails |
+| GPU fp16 | 2.01 s | 59.9 | 608 | 67 | 0.56 | 0.21 | 0/192 | 0.860 | fails |
+
+The box defect: with `sigmoid(box_head(feats) + box_bias)` in the graph, the
+GPU output has the box head's patch-0 value at every patch — x and y take only
+the 60 grid values the baked `[1,3600,4]` bias supplies, w and h are constant.
+Emitting the box logits and adding the bias on the host fixes it exactly.
+G3D rose 27 → 63–66 °C over each 8-image GPU run (~36 s busy), back to
+25–36 °C within minutes.
+
+**Text tower** (254 MB fp32, token ids `[32,16]` int32 → `[32,512]`); three
+batches of 32 phrases, against the original `get_text_features`:
+
+| Config | E2E per 32 phrases | Placement | Worst row cosine | Nearest vocabulary entry same | Verdict |
+| --- | --- | --- | --- | --- | --- |
+| CPU (XNNPACK) | 1.08 s | 691/702 XNNPACK | 1.000000 | 96/96 | correct |
+| **GPU + CPU** | **229 ms** | 662/702 GPU (int token ops on CPU) | 1.000000 | 96/96 | **correct** |
+| GPU only | — | — | — | — | compile fails (int ops must fall back) |
+
+**Task checks on the GPU fp32 image-tower outputs:**
+
+- *Large vocabulary* — all 4,585 YOLOE prompt-free class names as queries:
+  every one of the 355 patches the original scores ≥ 0.2 gets the same best
+  label (355/355); best-logit max diff 0.015. Host step (3,600 × 512 ·
+  512 × N, plus argmax) in the Pixel's Debian guest (numpy): 8 ms for 24
+  queries, 110 ms for 1,203, 882 ms for 4,585.
+- *Image exemplars* — three crops (laptop, dog, mirror) run through the image
+  tower on the GPU; query = class embedding of the crop's highest-objectness
+  box (transformers' rule), against `image_guided_detection` on all eight
+  photos at score ≥ 0.9: 6/6, 34/34 and 39/39 detections matched, box IoU
+  ≥ 0.9999, score diff ≤ 1e-4.
+
+OWLv2 joins DINOv2 as FP32-only on the G1: both reduced-precision modes fail
+(logit errors ~60, ~8× the detections, wrong top patch for every query).
+
+## 2026-10-24 — Variant decisions (GPU models)
+
+Same naming as SAM 2.1: **`default`** is FP32 compute (exact against the
+original), **`fast`** a reduced-precision mode that passed the task checks.
+
+| Model | `default` | `fast` |
+| --- | --- | --- |
+| SAM 2.1 Hiera-Tiny | FP32, 1.38 s encoder | FP16 + FP32 acc., 0.77 s (worst mask IoU ≈ 0.98) |
+| RF-DETR-Seg-Nano (published) | FP32, ~354 ms | FP16 + FP32 acc., ~205 ms (all detections matched, mask IoU ≥ 0.983) |
+| Depth Anything V2 Small (published) | FP32, 661 ms | FP16 + FP32 acc., 340 ms (depth order 99.98%) |
+| MI-GAN 512 (published) | FP32 compute, 147 ms | FP16, 79 ms (≥ 41 dB in the infilled region) |
+| DINOv2-S/14 | FP32 only | — (both reduced modes fail) |
+| OWLv2 B/16 (ours) | FP32 only, 4.53 s image tower | — (both reduced modes fail) |
+| YOLOE-v8s prompt-free (ours; added 2026-10-24) | FP32, 186 ms (exact: 132/132 detections, mask IoU 1.0000) | FP16 + FP32 acc., 108 ms (132/132 kept, plus one borderline extra; mask IoU ≥ 0.969, mean 0.996) |
+| EdgeSAM-3x image encoder (ours; added 2026-10-24, experimental; encoder only, not yet a segmentation service) | `gpu-fp32`: GPU FP32, 267 ms (exact) — also `alternate` `gpu-mixed`: FP16 + FP32 acc., 169 ms (worst mask IoU 0.920) | `tpu-fp16r-gpu-neck-fp32`: TPU fp16-relaxed trunk 130 ms + GPU FP32 neck 16 ms (worst mask IoU 0.944, mean 0.9983). Preparation metadata: `gelu: tanh-approximation` (approximate functional rewrite), bicubic restoration (exact), chain-form elementwise ops (TPU compiler op-order workaround) |
+| EfficientSAM3 RV-M (ours; added 2026-10-24, experimental) | FP32: vision 715 ms per image + grounding 3.28 s per prompt (exact) | FP16 + FP32 acc. grounding, 1.72 s per prompt (all detections kept, final-mask IoU ≥ 0.9986); vision stays FP32. Pure FP16 rejected (changes detections). **`fast` since 2026-10-25: vision split — trunk FP32 → neck FP16 + FP32 acc., 518 ms connected (20/20, final-mask IoU ≥ 0.9987) — with grounding FP16 + FP32 acc.**; the previous `fast` is now `alternate`. Reduced precision over the whole vision graph drops a detection; TPU ruled out |
+
+## 2026-10-24 — EfficientSAM3 RV-M (our conversion, checkpoint rev `85b05896`)
+
+Code: [efficientsam3-gpu](../../hosts/cerebrate-pixel6/spikes/efficientsam3-gpu/README.md).
+Bounded spike: RV-M converted, EV-M inspected only, text prompts only. Three
+graphs: vision, text, grounding (fusion encoder + decoder + heads). Stage 1
+(wrappers vs the original `Sam3Processor` path): exact (0 difference);
+prepared grounding vs original: logits ≤ 1.9e-4, mask logits ≤ 7.4e-3.
+Stage 2 (converted vs eager): cosine 1.000000 for every output of every graph.
+
+**Desktop CPU baseline** (Mac, eight photos, 24 prompts): masks follow object
+boundaries closely; the correct phrase usually scores highest but competing
+phrases also clear 0.5 (details in the lane plan's spike section). Per stage:
+image backbone 1,070 ms (once per image), text encoder 114 ms (cacheable per
+phrase), fusion encoder 774 ms, decoder 185 ms, heads 1,076 ms (≈ 2.0 s per
+prompt, not cacheable — early fusion).
+
+**Operator inspection:** RV-M backbone 340 ops, convolutions only (no
+matmuls, nothing above 4-D; 42 unfused batch-norm multiplies). EV-M backbone
+297 ops with 14 matmuls and 7 divisions (linear attention). Text encoder: int32
+input and 32 ops above 4-D. Grounding: 2,642 ops; boolean padding-mask ops,
+5-D box-bias tensors, ops on constants.
+
+**Device, per graph** (G3D 25 → 42–51 °C across runs):
+
+| Graph | Config | Placement | E2E | Accuracy | Verdict |
+| --- | --- | --- | --- | --- | --- |
+| Vision | CPU | 340/340 XNNPACK | 10.47 s | rel L2 2e-6 | reference |
+| **Vision** | **GPU fp32** | **340/340** | **715 ms** (~14.6×) | rel L2 1.7–1.9e-6 (3 photos) | **exact, no preparation** |
+| **Text** | **CPU** | 268/270 XNNPACK | **17 ms / phrase** | worst token cosine 1.000000 (25 phrases) | **exact** |
+| Text | GPU only | 68/270 GPU-able | — | — | compile fails (5-D attention reshapes, int ops) |
+| Text | GPU + CPU | 68 GPU / 202 CPU | 20 ms | cosine 1.000000 | no gain |
+| Grounding, unprepared | CPU | 2,554/2,642 XNNPACK | 14.65 s | — | reference latency |
+| Grounding, unprepared | GPU only | 1,056/2,642 GPU-able | — | — | compile fails (`BROADCAST_TO`, 5-D, ops on constants) |
+| Grounding, unprepared | GPU + CPU | 1,056 GPU / 1,586 CPU | 4.0 s | — | mostly CPU |
+| Grounding, first prepared build (queries/presence still constants, 6-layer scoring) | GPU | all ops on GPU | 3.27 s | logits pinned at −12, masks cosine ~0.5 | **wrong** (bisected) |
+| **Grounding, prepared** | **GPU fp32** | **2,490/2,490** | **3.28 s / prompt** | 11 samples, 20 kept detections: same kept set, **mask IoU 1.0000, 0 flipped pixels**, kept score/box diff ~1e-7 | **exact** |
+| **Grounding, prepared** | **GPU fp16 + fp32 acc.** | 2,490/2,490 | **1.72 s / prompt** | 11 samples: same kept set (incl. scores 0.504, 0.51), kept score diff ≤ 1.9e-3, box ≤ 9.3e-4, mask IoU ≥ 0.9987 | **near-identical** |
+| Grounding, prepared | GPU fp16 | 2,490/2,490 | 1.73 s | 3 samples: one kept detection replaced (mask IoU 0.24), others ≥ 0.9907 | fails |
+
+Grounding inputs on the device were the desktop FPN features (the device
+vision graph matches them to rel L2 2e-6); the full on-device chain was not
+run end to end.
+
+**Grounding per stage on the GPU** (nested variants: encoder only, + decoder
+and scoring, + heads): fusion encoder 2,627 ms fp32 / 1,321 ms mixed (80%;
+self-attention over 5,184 image tokens), decoder + scoring 264 / 153 ms,
+segmentation heads 386 / 244 ms. On the desktop CPU the heads were the
+largest piece; on the Pixel GPU the convolution-heavy heads are cheap and the
+encoder dominates.
+
+**Bisect record (G1 defects found):** (1) layer 0's self-attention over the
+200×256 learned query embeddings (a weight used as an activation, folded by
+the converter into a constant attention-value operand) computed wrongly —
+cosine 0.86 — fixed by feeding the queries and presence token as inputs;
+(2) the scores came out wrong with every input exact — first attributed to
+the reshape into `[6,1,200,1]`; the minimal reproduction (below) pinned it to
+a batch-broadcast `BATCH_MATMUL` `[6,1,200,256]`×`[256,1]` — fixed by scoring
+only the last decoder layer (the only one the outputs use), at batch 1.
+Ops on constants (`SIGN`, `MEAN`, `FLOOR_DIV`) were rejected rather than
+miscomputed. One transient run failure (OpenCL `-14`, a kernel execution
+error) on an intermediate build did not recur on the final graph.
+
+**Per image + per prompt, Pixel GPU:** 715 ms vision once per image, text
+17 ms per phrase on CPU (cacheable), then 3.28 s (fp32) or 1.72 s (mixed) per
+prompt.
+
+## 2026-10-24 — EfficientSAM3 RV-M: phone-native chain, variants, reproductions, caching
+
+Code: [efficientsam3-gpu](../../hosts/cerebrate-pixel6/spikes/efficientsam3-gpu/README.md),
+[g1-gpu-repros](../../hosts/cerebrate-pixel6/spikes/g1-gpu-repros/README.md).
+
+**Phone-native chain** ([`esam3_e2e_accuracy.py`](../../hosts/cerebrate-pixel6/spikes/efficientsam3-gpu/esam3_e2e_accuracy.py)):
+every stage on the phone, each fed the phone's own outputs — vision on the GPU
+(FP32, 340/340) → text on the CPU → grounding on the GPU (2,490/2,490); host
+steps only image preprocessing, tokenization and the padding mask. The same
+11 samples (20 detections, including scores 0.504 and 0.510) against the
+original model on the desktop CPU, at two levels: raw (kept set, scores,
+boxes, 288×288 masks) and final (the processor's own post-processing —
+bilinear upsample to the photo, sigmoid > 0.5 — applied to the device
+outputs). The host post-processing reproduces the processor's saved masks
+exactly (10/10 checkable samples), so the final level compares against the
+original pipeline itself.
+
+| Variant | Detections retained | Kept score diff | Kept box diff | Final masks (photo resolution) | Verdict |
+| --- | --- | --- | --- | --- | --- |
+| **default** (grounding FP32) | **20/20** | ≤ 2.4e-6 | ≤ 2.4e-7 | IoU 1.0000; 1 pixel of 6,376,448 differs (a value at the 0.5 threshold) | **exact** |
+| **fast** (grounding FP16 + FP32 acc.) | **20/20** | ≤ 1.6e-3 | ≤ 9.3e-4 | IoU ≥ 0.9986; 643 of 6,376,448 pixels differ | **near-identical** |
+
+**Variants registered** (decision 2026-10-24): `default` = FP32, `fast` =
+grounding at FP16 with FP32 accumulation (vision FP32 in both), pure FP16
+rejected. Both pass the phone-native chain — the condition set for
+production promotion. Not yet in `models/catalog.yaml`: its schema requires
+a serving worker (binary and port), and no worker serves the LiteRT GPU
+models yet.
+
+**Minimal reproductions** of the two silent G1 miscomputations (relative L2
+against the PyTorch reference; full table in the repro README):
+
+| Case | CPU | GPU |
+| --- | --- | --- |
+| `BATCH_MATMUL` `[6,1,200,256]` × `[256,1]` (one op) | 3.1e-7 | **1.2** |
+| same values at batch 1 | 2.9e-7 | 2.9e-7 |
+| attention block, values from a constant `[201,1,256]` (15 ops) | 5.0e-7 | **0.87** |
+| same block, that tensor as an input | 3.3e-7 | 3.6e-7 |
+| `BATCH_MATMUL` with a constant `[8,201,32]` operand, alone / after softmax | ≤ 1.4e-7 | ≤ 2.1e-7 |
+
+The first defect was originally attributed to the reshape into
+`[6,1,200,1]`; the reproduction corrects that to the batch-broadcast matmul
+(the converter re-fuses a 2-D rewrite into it).
+
+**Caching the first fusion layer** ([`esam3_cache_check.py`](../../hosts/cerebrate-pixel6/spikes/efficientsam3-gpu/esam3_cache_check.py)):
+the dependency was checked before any restructuring. The fusion encoder adds
+no text to the image features before its layers (`add_pooled_text_to_img_feat`
+is off for the image model), and each pre-norm layer runs norm → self-attention
+over image tokens only → residual → cross-attention to the prompt → FFN. So
+layer 0's self-attention is prompt-independent — confirmed on the original
+model: its post-self-attention state is bit-identical across "laptop", "bed"
+and "person" on the same photo, while the layer's output after
+cross-attention differs by up to 1.8. That block alone on the GPU: 364 ms
+FP32 / 190 ms mixed (rel L2 1.3e-7 / 3.1e-4), matching its FLOP share (11.8%
+of the fusion encoder: 30.2 GFLOP of 255). Caching it per image would save
+about 11% per prompt (3.28 → ~2.9 s default, 1.72 → ~1.53 s fast) for a
+one-time per-image cost of the same and 5.3 MB of state. Everything after it
+is prompt-dependent (from layer 0's cross-attention on, every image token
+carries the text). Not implemented.
+
+## 2026-10-24 — YOLOE prompt-free (v8s, 11s): step 1 and first TPU attempts
+
+Code: [yoloe-tpu](../../hosts/cerebrate-pixel6/spikes/yoloe-tpu/README.md).
+Ultralytics 8.4.184 fp32 ONNX exports, prepared (reduced outputs, Split →
+Slice, DFL as a 2-D softmax — all exact: 0 difference from the unmodified
+ONNX). Same-input check: on 640×640 letterboxed photos the ONNX export and
+the original `.pt` give identical predictions. Task evaluator (Ultralytics'
+NMS and masks, class-agnostic as YOLOE's predictor sets) reproduces the `.pt`
+predictions on 8/8 photos for both models.
+
+| Model | Config | Result |
+| --- | --- | --- |
+| v8s | CPU (ORT) | **727 ms**; outputs cosine 1.000000 vs desktop (best-class index differs on 85/8,400 low-score anchors — near-ties) |
+| 11s | CPU (ORT) | **667 ms** |
+| v8s | `nnapi` (fp32) | Edge TPU driver: **0 / 292 ops supported** — as expected, no strict fp32 |
+| v8s | `nnapi16` (fp32 relaxed to fp16), unprepared head | driver: 291 / 292 supported; DFL softmax rejected (`axis == -1 \|\| axis == input_rank - 1`) |
+| v8s | `nnapi16`, prepared | driver: **288 / 288 supported**; Edge TPU compiler **crashed** (SIGSEGV in `libdarwinn_hal.so`) |
+| 11s | `nnapi16`, prepared | driver: **425 / 425 supported** (C2PSA attention included); compiler crashed the same way |
+| v8s | `nnapi16`, class head removed | compile timed out (`Deadline exceeded`) |
+| 11s | `nnapi16`, class head removed | **memory exhaustion: the low-memory killer killed the Terminal app and the Debian VM** |
+
+With fp16 relaxation the Edge TPU *accepts* every op of both models
+(earlier "the TPU takes no fp32 work" holds for strict fp32 only), but its
+compiler can't build them: it crashes with the 4,585-class head and runs out
+of time and then memory without it.
+
+**Incident (04:26:54):** during the last compile the phone's low-memory
+killer ran a mass kill (167 processes in three minutes) that included
+`com.android.virtualization.terminal` and its `VmService` — the Debian VM,
+MLServer and the reverse tunnels went down; the Android-side workers kept
+running. Restored at 04:32 with the documented relaunch
+(`adb shell am start -n com.android.virtualization.terminal/.new2.ui.MainActivity`):
+VM booted, tunnels and `cerebrate-mlserver` auto-started, all five models
+READY, `inference.home.arpa` 200. Outage ≈ 7 minutes. TPU compile
+experiments stopped pending a decision on how to protect the VM.
+
+## 2026-10-24 — YOLOE prompt-free on the GPU; int8 backbone partition (desktop)
+
+Code: [yoloe-tpu](../../hosts/cerebrate-pixel6/spikes/yoloe-tpu/README.md).
+Task check against Ultralytics' predictions from the original `.pt` on the
+eight letterboxed photos (v8s 132 detections, 11s 112): matched one-to-one by
+class (of 4,585) and box IoU ≥ 0.5; "any label" counts reference detections
+found at IoU ≥ 0.5 regardless of label.
+
+**GPU (float LiteRT, our `litert-torch` conversion; stage 2 cosine 1.000000):**
+
+| Model | Config | Placement | E2E | Matched | Box IoU min | Mask IoU min / mean | Verdict |
+| --- | --- | --- | --- | --- | --- | --- | --- |
+| v8s | CPU (ORT) | — | 727 ms | (raw outputs = desktop) | | | reference latency |
+| v8s | CPU (LiteRT XNNPACK) | 296/300 | 1,676 ms | 132/132 | 1.0000 | 1.0000 / 1.0000 | correct, slow |
+| **v8s** | **GPU fp32** | **300/300** | **186 ms** (~3.9× ORT CPU) | **132/132** | 1.0000 | 1.0000 / 1.0000 | **exact** |
+| v8s | GPU fp16 + fp32 acc. | 300/300 | 108 ms | 132/132 (+1 extra borderline) | 0.965 | 0.969 / 0.996 | near-identical |
+| v8s | GPU fp16 | 300/300 | 98 ms | 127/132 | 0.942 | 0.940 / 0.992 | degraded |
+| 11s | CPU (ORT) | — | 667 ms | | | | reference latency |
+| **11s** | **GPU fp32** | **399/399** | **179 ms** (~3.7×) | **112/112** | 1.0000 | 1.0000 / 1.0000 | **exact** |
+| 11s | GPU fp16 + fp32 acc. | 399/399 | 107 ms | 111/112 | 0.940 | 0.916 / 0.996 | one detection lost |
+| 11s | GPU fp16 | 399/399 | 90 ms | 109/112 | 0.812 | 0.785 / 0.992 | degraded |
+
+No preparation was needed for the GPU (unlike the transformers), and the
+best-class `ARG_MAX` over 4,585 classes runs on the GPU too. G3D 25 → 43 °C.
+
+**int8 backbone + neck (TPU partition), desktop ORT emulation, fp32 head:**
+the partition chained back is exact; quantized (QDQ, uint8 activations,
+int8 per-channel weights) with indoor COCO calibration:
+
+| Backbone | Matched | Any label | Score max diff | Mask IoU mean |
+| --- | --- | --- | --- | --- |
+| v8s fp32 | 132/132 | 132 | 0.0000 | 1.0000 |
+| v8s int8, MinMax (300 photos) | 80/132 | 104 | 0.31 | 0.932 |
+| v8s int8, percentile 99.999 (32 photos) | 101/132 | 119 | 0.23 | 0.956 |
+| 11s fp32 | 112/112 | 112 | 0.0000 | 1.0000 |
+| 11s int8, MinMax | 71/112 | 102 | 0.29 | 0.947 |
+| 11s int8, percentile | 85/112 | 104 | 0.32 | 0.961 |
+
+int8 costs roughly a fifth to a quarter of exact-label detections even with
+better calibration; many of the losses are label flips between near-synonyms
+among 4,585 classes rather than missed objects. TPU compile of the int8
+backbone (9 MB) not yet run — waiting for the VM watchdog on overmind-01.
+
+## 2026-10-24 — YOLOE backbone on the Edge TPU (int8)
+
+Code: [yoloe-tpu](../../hosts/cerebrate-pixel6/spikes/yoloe-tpu/README.md).
+All runs with the VM watchdog active and a memory guard (minimum free memory
+3.57–3.65 GB: the small int8 backbone compiles without memory pressure).
+
+**ORT + NNAPI on the QDQ int8 backbone:** ORT's NNAPI provider can't take
+quantized `Sigmoid` (180 node units — every SiLU), `Slice` (64) or `MaxPool`
+(8): 55 partitions, 503/695 nodes; the TPU then rejects float tensors at the
+partition boundaries (`input.type != TENSOR_FLOAT32`) and the load fails.
+Not viable without rewriting SiLU.
+
+**TFLite + NNAPI (TPU path 2), fully-integer TFLite from litert-torch PT2E**
+(YOLOE-v8s backbone + neck; 212 ops, all int8 — after spelling SiLU out as
+`x * sigmoid(x)`; as `nn.SiLU` it stayed float):
+
+| Config | Placement | Load (incl. compile) | Median |
+| --- | --- | --- | --- |
+| TFLite CPU (int8 kernels) | — | 4 ms | 132 ms |
+| **TFLite + NNAPI → Edge TPU** | 76/212 nodes delegated in 7 partitions; driver 200/236 NNAPI ops supported, compiled (status 0) | 1.47 s | **90 ms** |
+
+The 36 rejected ops are the graph's 24 int8→int8 `QUANTIZE` requantizations
+(where branches with different scales meet, mostly at concatenations) and
+their neighbours: the TPU only takes `QUANTIZE` from float input
+(`RET_CHECK input.type != TENSOR_FLOAT32`, ×24).
+
+**Accuracy problems, two separate ones:**
+- *Quantization (PT2E):* feature cosine vs fp32 — PyTorch's own quantized
+  model 0.97 / 0.90 / 0.88 (80², 40², 20²), after conversion to TFLite 0.75 /
+  0.57 / 0.43. Too lossy to use (the ORT QDQ int8 kept 119/132 objects on the
+  desktop; this one was not usable through the head at all).
+- *TPU vs CPU int8:* the TPU's outputs differ from TFLite's CPU int8 kernels
+  in 33% of feature values, by up to 29 quantization steps — far beyond
+  rounding.
+
+YOLOE-11's C2PSA attention (batched matmul, softmax) is not quantized by this
+PT2E quantizer and stays float. Status: the Edge TPU *can* run a YOLOE int8
+backbone (compiled, 90 ms partly on TPU) but not yet *correctly* or fully;
+the GPU fp32 path (186 ms whole model, exact) remains the reference.
+
+## 2026-10-24 — YOLOE backbone on the Edge TPU: TensorFlow full-integer (bounded round)
+
+The one bounded round decided on 2026-10-24: rebuild the int8 backbone with
+TensorFlow's classic full-integer quantizer (onnx2tf 1.28.8, TensorFlow
+2.19.0; per-channel weights; 150 indoor calibration photos) and measure TPU
+placement, latency and task accuracy once; stop unless it runs fully on the
+TPU within a few detections of fp32.
+
+The resulting YOLOE-v8s backbone + neck is exactly what the TPU wants: 182
+ops, all int8 (NHWC, int8 I/O), **no requantizations**, no float ops.
+
+| Config | Placement | Load | Median | Matched (of 132) | Any label | Mask IoU mean |
+| --- | --- | --- | --- | --- | --- | --- |
+| fp32 backbone (reference) | — | — | — | 132 | 132 | 1.000 |
+| int8, desktop | — | — | — | 82 | 100 | 0.939 |
+| int8, phone CPU (TFLite) | — | 4 ms | 125 ms | 82 (identical to desktop) | 100 | 0.939 |
+| **int8, Edge TPU** | **182/182 ops, 1 partition**; driver 182/182; compiled (status 0) | 2.34 s | **8.7 ms** | **84** | **105** | 0.922 |
+
+(The backbone's int8 feature maps go through the fp32 head on the desktop
+for scoring.) Minimum free memory during the compile: 3.4 GB.
+
+- **The Edge TPU runs the whole YOLOE backbone in 8.7 ms** — ~14× the CPU's
+  int8 kernels, and for scale, ~21× faster than the GPU's 186 ms for the
+  *whole* fp32 model.
+- **The TPU's arithmetic is not the problem:** its int8 values differ from
+  TFLite's CPU kernels in 42% of positions (up to 62 steps), yet task
+  accuracy is equal or slightly better (84 vs 82 matched).
+- **int8 quantization is:** about a third of exact-label detections are lost
+  (feature cosine vs fp32 0.59–0.87). YOLOE's prompt-free head picks among
+  4,585 near-synonymous classes, so small feature shifts flip labels; most
+  objects are still found (105/132 at any label).
+
+Gate not met → YOLOE stays on the GPU (fp32, exact, 186 ms). YOLOE-11 not
+taken through this round. For future TPU candidates: the toolchain that works
+is fp32 ONNX → onnx2tf full-integer → TFLite + NNAPI pinned to
+`google-edgetpu` (whole graph on the TPU, single partition); what decides a
+model's fit is how well it tolerates int8 — fixed-vocabulary or
+coarse-output models are better candidates than a 4,585-class
+open-vocabulary head.
+
+## 2026-10-24 — Edge TPU precision probes (TPU investigation, step 1)
+
+Code: [tpu-precision-probes](../../hosts/cerebrate-pixel6/spikes/tpu-precision-probes/README.md)
+(capability matrix there). Tiny graphs, classic TFLite converter, TFLite +
+NNAPI pinned to `google-edgetpu`.
+
+| Probe | Mode | TPU placement | Median | Rel L2 vs fp32 |
+| --- | --- | --- | --- | --- |
+| conv block | CPU fp32 | — | 30.5 ms | 7e-7 |
+| conv block | TPU strict fp32 / fp16 weights | 0 ops supported | — | — |
+| conv block | **TPU fp16-relaxed** | 9/9 | **2.9 ms** | 3.7e-2 (max-pool padding defect; 3.8e-4 before the max-pool) |
+| conv block | CPU int8 | — | 8.8 ms | 2.0e-2 |
+| conv block | TPU int8 | 9/9 | **1.2 ms** | 4.2e-2 (same defect) |
+| attention block | CPU fp32 | — | 1.22 ms | 2e-7 |
+| attention block | **TPU fp16-relaxed** | 13/13 | **0.83 ms** | 1.0e-3 |
+| attention block | TPU int8 (per-channel dense weights) | rejected (`FULLY_CONNECTED`: per-channel int8 not accepted) | — | — |
+| attention block | TPU int8, per-tensor weights | 13/13 | 0.66 ms | 4.6e-2 (= CPU int8) |
+| either | TPU int16 activations | not delegated (int64 biases) | — | — |
+| 24 × conv+SiLU (160×160×64) | CPU fp32 | — | 762 ms | 2e-6 |
+| 24 × conv+SiLU | **TPU fp16-relaxed** | 72/72, compile 1.36 s | **20.7 ms** | **9.2e-4** |
+
+Single ops (sigmoid, SiLU, conv, strided conv, max-pool, resize, add +
+concat) on the TPU: int8 bit-identical to TFLite's CPU int8; fp16-relaxed
+1e-5–3e-4. The conv block's error enters at its 5×5 max-pool: **the TPU pads
+SAME max-pooling with zeros** (all large errors in the 2-pixel border where
+the true maximum is ≤ 0; TPU output exactly `max(true, 0)`). Exact
+workaround for inputs with a known lower bound: `maxpool(x + c) − c`.
+
+## 2026-10-24 — YOLOE-v8s int8 accuracy diagnosis (TPU investigation, step 2)
+
+Code: [`yoloe_int8_diagnose.py`](../../hosts/cerebrate-pixel6/spikes/yoloe-tpu/yoloe_int8_diagnose.py).
+The onnx2tf full-integer backbone (desktop TFLite CPU kernels; the TPU
+matched them at task level) → fp32 head, against Ultralytics' 132 reference
+detections.
+
+- **Input mapping is exact:** the letterboxed image (k/255) through the int8
+  input (scale 1/255, zero point −128) and back differs by 6e-8.
+- **Detections:** 83 matched, **17 label flips, 32 missed.**
+  - *Misses are borderline detections pushed under the threshold:* all 32
+    have an int8 score below 0.25 for the original label at the original
+    anchor (median 0.15); the original model's confidence on them was low to
+    begin with (median 0.30, 26/32 below 0.35; matched detections median
+    0.60).
+  - *Flips concentrate where the original model was undecided:* its top-1 vs
+    top-2 class margin is smaller for flipped detections (median 0.085)
+    than for matched ones (0.135). Many are near-synonyms (quilt → bedding,
+    toilet paper → paper towel, baby bottle → bottle); some are not
+    (sugar bowl → ashtray, sponge → diamond, handbag → hassock). The original
+    label ranks 2nd in 5 of 17 flips, 6th or worse in 6.
+- **Layer by layer (134 int8 tensors vs their float32 twins):** no single
+  catastrophic layer — error accumulates with depth: cosine ~0.95–0.99 at
+  160×160 and 80×80, 0.87–0.91 at 40×40, ~0.80–0.85 at 20×20 (the SPPF
+  output ~0.80) and in the neck (lowest ~0.77). The biggest per-op drops are
+  at the SiLU **multiplies** (x · sigmoid(x)), whose outputs are re-quantized
+  per tensor; the sigmoids themselves stay at 0.95–0.99.
+
+## 2026-10-24 — YOLOE-v8s backbone on the Edge TPU at fp16 relaxation (guarded sequence)
+
+Code: [yoloe-tpu](../../hosts/cerebrate-pixel6/spikes/yoloe-tpu/README.md).
+The guarded sequence agreed on 2026-10-24: growing fragments, each an
+isolated bench process with a hard timeout (240 s) and a 1.5 GB free-memory
+cutoff, the VM watchdog active, one attempt each, stop on any failure. With
+the G1 max-pool correction (input bound proved: SiLU or max-pool over SiLU;
+corrected vs unmodified backbone 1.5e-5 on the desktop). References: the
+unmodified fp32 ONNX.
+
+| Fragment | Ops | Placement | Compile | Free-memory drop | TPU median | CPU fp32 | Rel L2 vs fp32 (worst output) |
+| --- | --- | --- | --- | --- | --- | --- | --- |
+| F1 model.7–9 (40×40×256 → SPPF 20×20×512) | 36 | 36/36, 1 partition | 1.0 s | 17 MB | **2.45 ms** | 46.8 ms | 9.3e-4 (border ≈ interior: correction works) |
+| F2 model.0–9 (image → P3/P4/P5) | 114 | 114/114, 1 partition | 2.0 s | 141 MB | **11.3 ms** | 237 ms | 3.3e-3 |
+| **F3 backbone + neck (the TPU partition)** | **188** | **188/188, 1 partition** | **3.9 s** | **410 MB** (min 3.1 GB free) | **14.8 ms** (15.4 ms over 8 photos) | 368 ms | **4.6e-3** (cosine ≥ 0.99999) |
+
+No crash, timeout or guard trip at any step. (The earlier fp16 failures were
+the whole model *with* its 4,585-class head through ORT; the backbone alone
+through TFLite compiles comfortably.)
+
+**Detection pipeline, against Ultralytics' 132 reference detections:**
+
+| Pipeline | Matched | Any label | Box IoU min | Score max diff | Mask IoU min / mean | Latency |
+| --- | --- | --- | --- | --- | --- | --- |
+| GPU only, fp32 (`default`) | 132 | 132 | 1.0000 | 0.0000 | 1.000 / 1.000 | 186 ms |
+| GPU only, fp16 + fp32 acc. (`fast`) | 132 (+1 extra) | 132 | 0.965 | 0.0063 | 0.969 / 0.996 | 108 ms |
+| TPU int8 backbone → fp32 head | 84 | 105 | 0.523 | 0.49 | 0.426 / 0.922 | — |
+| **TPU fp16 backbone → fp32 head (desktop)** | **132** | **132** | **0.993** | **0.0034** | **0.990 / 0.9995** | — |
+| **TPU fp16 backbone → GPU fp32 head (on the phone)** | **132** | **132** | **0.993** | **0.0034** | **0.990 / 0.9995** | **≈145 ms** (TPU 15.4 + GPU head 129.4, transfers included) |
+
+The fp16-relaxed TPU backbone loses no detection and no label — more
+accurate than the GPU's `fast` variant — and int8's flips and misses are
+gone. The pipeline is ~1.3× faster than GPU-only fp32 because **the head
+(mostly the 4,585-class projection) dominates**: 125–129 ms on the GPU at
+fp32 (1.05 s on the CPU). A fp16 head (72–75 ms) needs a different argmax:
+onnx2tf's float-index argmax overflows at fp16 (NaN class indices) — 4,585
+classes exceed fp16's exact integer range — and even at fp32 it produced
+non-integer indices on ~5% of anchors where low scores tie (none reached a
+detection).
+
+## 2026-10-24 — YOLOE-v8s TPU + GPU pipeline: fastest validated full-vocabulary configuration
+
+Code: [yoloe-tpu](../../hosts/cerebrate-pixel6/spikes/yoloe-tpu/README.md)
+(`yoloe_head_gpu.py`, `pipeline/`). Goal (final hybrid spike): beat the
+108 ms GPU-only `fast` variant without losing any detection or label and
+without reducing the 4,585-class vocabulary.
+
+**Head fix.** The fp16 head's NaN class indices came from onnx2tf's
+float-index argmax. Rebuilt the head with litert-torch: native argmax with
+int32 indices on the logits (sigmoid on the winner only); stage 1 vs the
+validated fp32 head: identical class on every anchor scoring ≥ 0.25 (88
+low-score ties differ); stage 2 cosine 1.000000. Fully on the GPU (117/117)
+at both precisions — no CPU fallback, no full-score readback.
+
+**Integrated pipeline, one process, synchronized** (`yoloe_pipeline`: TPU
+stage = image → TPU input, backbone + neck at fp16 relaxation, features out;
+GPU stage = features → GPU buffers, head, locked output reads; 8 photos, 32
+timed iterations; one-time load: TPU compile 3.8 s, GPU compile 0.7 s;
+free memory −490 MB at peak, 3.0 GB left):
+
+| Configuration | TPU stage | GPU stage | **Total** | Matched (of 132) | Box IoU min | Score max diff | Mask IoU min / mean |
+| --- | --- | --- | --- | --- | --- | --- | --- |
+| GPU only fp32 (`default`) | — | 186 ms | 186 ms | 132 | 1.0000 | 0.0000 | 1.000 / 1.000 |
+| GPU only fp16 + fp32 acc. (`fast`) | — | 108 ms | 108 ms | 132 (+1 extra) | 0.965 | 0.0063 | 0.969 / 0.996 |
+| TPU fp16 backbone + GPU fp32 head | 16.5 ms | 109.0 ms | 124.9 ms | 132 | 0.993 | 0.0034 | 0.990 / 0.9995 |
+| **TPU fp16 backbone + GPU fp16+fp32-acc head** | **16.4 ms** | **62.8 ms** | **79.0 ms** | **132 (no extras)** | **0.965** | **0.0031** | **0.969 / 0.996** |
+
+The fastest configuration is **1.37× faster than GPU-only `fast` and 2.4×
+faster than `default`**, with every reference detection and label kept and
+one fewer spurious detection than GPU-only `fast`. The head — mostly the
+4,585-class projection — is still ~80% of the time. Step 3 (tiled top-1
+selection) was conditional on not beating 108 ms and was not run.
+
+## 2026-10-24 — cerebrate-hetero: serving worker, contention and sustained tests
+
+Code: [cerebrate-hetero](../../hosts/cerebrate-pixel6/cerebrate-hetero/README.md)
+(full tables there). The YOLOE-v8s TPU + GPU pipeline as a serving worker
+speaking `cerebrate-graph`'s protocol; hand-launched on spare ports, not yet
+deployed.
+
+| Check | Result |
+| --- | --- |
+| `fast` served outputs (8 photos) | identical to the validated pipeline: 132/132, no extras |
+| `default` (`gpu`, fp32) | exact: 132/132, box/mask IoU 1.0000; 202 ms |
+| startup fallback (TPU model unloadable) | serves from the GPU-only mixed model, 107 ms |
+| `fast` inference | 73.9 ms median (TPU 12.8, GPU 60.3) |
+| contention with production MobileNet | MobileNet always correct; its p99 4.9 → 14.1 ms concurrent, 8.1 ms serialized; hetero unaffected and identical to solo; 0 TPU recompiles |
+| sustained 3 min (1,024 requests) | p50 72.9–73.2 ms per window, p99 ≤ 76 ms; outputs identical throughout; TPU ≤ 55 °C, GPU ≤ 56 °C; RSS flat 713 MB |
+| guest round trip | ≈ 175 ms (4.9 MB fp32 image in, ~5 MB out over the AVF path) |
+
+Pre-existing transport finding: a single high-rate connection to
+`cerebrate-infer` (~400 requests/s) is reset about once per 30 s with or
+without this worker running.
+
+## 2026-10-24 — cerebrate-hetero deployment prepared (supervisor slot, on-demand MLServer model, catalog)
+
+Code: [supervisor `hetero1` slot](../../hosts/cerebrate-pixel6/cerebrate-supervisor/README.md#segmentation-and-labeling-lane-step-2b-hetero1-slot-prepared-2026-10-24-deploy-scheduled),
+[on-demand adapter and `yoloe-v8s-pf`](../../hosts/cerebrate-pixel6/mlserver/README.md#segmentation-and-labeling-lane-step-2b--on-demand-residency-yoloe-v8s-pf-prepared-2026-10-24-deploy-scheduled),
+`models/catalog.yaml` (`yoloe-v8s-pf`, validated). All tests ran beside
+production (test supervisor on control port 8777, test MLServer on
+18080–18082); production processes and models untouched. Deploy scheduled.
+
+| Check | Result |
+| --- | --- |
+| supervisor error paths (unknown profile, wrong model, subdirectory, hetero profile on a graph slot) | all refused before fork |
+| `yoloe-v8s-fast` via `START` | 5.3 s; DESCRIBE = declared model/profile; 8 photos bit-identical to the validated run |
+| `yoloe-v8s-default` via `START` | 1.5 s; 8 photos bit-identical to the validated fp32 run |
+| idempotent `START` / other profile while running / `STOP` | OK / refused / OK |
+| MLServer on demand: cold first request | 7.4–8.5 s, bit-identical; warm ~2.0 s (JSON REST) |
+| idle stop (60 s test window) | stopped at 65 s; next request restarts, bit-identical |
+| worker `kill -9` | one HTTP 500, model stays READY, next request restarts on a fresh PID |
+| unload | slots STOPPED, refcount 0 |
+| temperatures | TPU/GPU 31 °C, big cores 32 °C during; TPU 25 °C after |
+
+Bug found and fixed in testing: the on-demand model was marked unready after
+a lost worker, and MLServer then refused every request before the adapter
+could restart it. JSON REST costs ~2.0 s per request at these tensor sizes
+(vs 74 ms inference): the transport work is the next lever.
+
+## 2026-10-24 — EdgeSAM-3x image encoder on the Edge TPU (rev `e0564124`)
+
+Code: [edgesam-tpu](../../hosts/cerebrate-pixel6/spikes/edgesam-tpu/README.md).
+Eight photos, YOLOE-v8s's 132 detections as box prompts; device embeddings
+decoded by the original decoder, masks vs the original (bicubic) model.
+No published LiteRT/TPU conversion; the authors' ONNX is a bilinear variant
+(vs the original: worst mask IoU 0.805, mean 0.9926), so we export our own
+with an exact bicubic construction.
+
+| Encoder path | Latency (sync. e2e) | Worst mask IoU | Mean IoU | Flipped px | Verdict |
+| --- | --- | --- | --- | --- | --- |
+| CPU fp32 | 1.73 s | 0.9999 | 1.00000 | 14 | exact |
+| GPU fp32 (835/835 ops) | 267 ms | 1.0000 | 1.00000 | 1 | **exact** |
+| GPU fp16 + fp32 acc. | 169 ms | 0.9199 | 0.99834 | 6,454 | near |
+| TPU fp16-relaxed, tanh GELU; neck on CPU | 196 ms | 0.9441 | 0.99829 | 7,441 | near |
+| **TPU (410/410 ops) → GPU fp32 neck** | **130 + 16 ms** | 0.9441 | 0.99830 | 7,393 | near, fastest |
+
+TPU compile 43 s per load (2.2 GB free memory minimum; GPU compile 0.7 s);
+temperatures TPU ≤ 49 °C, big cores ≤ 57 °C. Found on the way: exact GELU
+has no NNAPI op (rewritten as tanh GELU — its own cost at fp32: worst IoU
+0.983, 6,116 px — or a near-exact erf polynomial whose 114-op fragment
+timed out compiling); the TPU rejects the neck's LayerNorm; and a **TPU
+compiler defect**: the same eight ops (1×1 conv + tanh GELU at
+128×128×192) compile in 0.66 s or time out at the ~60 s deadline depending
+only on op order.
+
+## 2026-10-24 — NNAPI compilation caching on the Edge TPU (EdgeSAM TPU stage)
+
+TFLite 2.16.1 NNAPI delegate `cache_dir` + `model_token` (bench extended:
+`NNAPI_CACHE_DIR`, `NNAPI_MODEL_TOKEN`, `RELOADS`), the 410-op EdgeSAM TPU
+stage, token `edgesam3x-T1-<sha256[:16] of the .tflite>-fp16r-tflite2.16.1`.
+**The G1 driver reuses compilations effectively:**
+
+| Scenario | Load | Compiler spawned | Outputs (8 photos) |
+| --- | --- | --- | --- |
+| 1. Empty cache, first load | 42.9 s | yes; writes a 31.9 MB blob + TFLite's 1.6 KB index | bit-identical to an uncached run |
+| 2. Interpreter + delegate destroyed and recreated, same process (×2) | 100 ms, 88 ms | no ("prepareModelFromCache: successfully prepared") | bit-identical |
+| 3. New process, persistent cache | 183 ms (memory drop 49 MB vs ~1.1 GB compiling) | no | bit-identical |
+| Same token, same op structure, different constants (T1 with the refitted GELU) | 43.2 s | yes — the driver rejected the cached blob (`prepareModelFromCache failure`) | the new model's own results, not the cached model's |
+
+So a stale token degrades to a recompile rather than serving the wrong
+compilation (TFLite's own cache key hashes only the token and the
+partition's node/tensor indices). Tokens still derive from the artifact
+hash, precision and runtime version, so a changed graph never even tries
+the old blob; superseded blobs (~32 MB each) need pruning. Not tested:
+survival across reboots and driver updates.
+
+## 2026-10-24 — EdgeSAM box decoder on the GPU; complete pipelines; quality vs SAM 2.1 (ground truth)
+
+Code: [edgesam-tpu](../../hosts/cerebrate-pixel6/spikes/edgesam-tpu/README.md).
+
+**Decoder** (our litert-torch conversion, 305/305 ops on the GPU; inputs:
+NHWC embedding, the box's two corner tokens from the host, and the dense
+embedding, image positional encoding and output tokens as inputs). Stage 1
+vs the original on 132 boxes: thresholded IoU 1.000000; stage 2: 2e-5.
+From the reference embeddings, 132 YOLOE boxes on the 8 photos:
+
+| Decoder | Per box (sync. e2e) | Worst mask IoU | Mean | Flipped px |
+| --- | --- | --- | --- | --- |
+| CPU (XNNPACK) | 196 ms | 1.0000 | 1.00000 | 0 |
+| GPU fp32 | 66.6 ms | 1.0000 | 1.00000 | 2 |
+| GPU fp16 + fp32 acc. | 53.2 ms | 0.9709 | 0.99946 | 1,363 |
+
+**Complete pipelines on the device** (each decoder fed the device encoder's
+embeddings), vs the original EdgeSAM: `default` GPU fp32 → GPU fp32: worst
+1.0000 (1 px); `fast` TPU + GPU neck → GPU fp32: worst 0.9441, mean 0.99830;
+→ GPU fp16acc32 decoder: worst 0.9441, mean 0.99821.
+
+**Quality against ground truth** — browser-perception's object-selection set
+(126 LVIS objects, 118 photos, 18 indoor kinds incl. people), each object's
+ground-truth box as the prompt. Original models in fp32 (the devices'
+default configurations reproduce them exactly), plus EdgeSAM `fast` run on
+the Pixel:
+
+| Model / mask | Mean IoU | Median IoU | Missed (< 50% covered) | Mean spill |
+| --- | --- | --- | --- | --- |
+| SAM 2.1 Hiera-Tiny, single box mask | **88.3%** | 93.9% | 0.0% | 6.3% |
+| SAM 2.1, best of 3 | 87.6% | 92.6% | 0.0% | 6.6% |
+| EdgeSAM-3x, single box mask (official) | 87.1% | 93.4% | 3.2% | 6.5% |
+| EdgeSAM-3x, best of 3 | 87.3% | 93.0% | 2.4% | 7.7% |
+| **EdgeSAM `fast` on the Pixel** (TPU + GPU neck, GPU fp32 decoder) | **87.1%** | 93.4% | 3.2% | 6.5% |
+
+Harness check: SAM 2.1 best-of-3 here 87.6% (fp32) vs browser-perception's
+86.9% (WebGPU fp16). By size, EdgeSAM 83.0% large / 88.7% medium / 88.5%
+small vs SAM 2.1 87.6 / 89.7 / 86.8. EdgeSAM's misses: three beds and a
+blanket (SAM 2.1 on them: 0.54–0.71, 0.41). The device `fast` run is within
+2 points of the original EdgeSAM on every object (mask fidelity worst 0.987,
+mean 0.9989). Latency for one box: SAM 2.1 ~1.46 s, EdgeSAM `default` 0.33 s,
+`fast` 0.21 s (encoder + decoder, measured separately).
+
+**Decision and qualifications (2026-10-24).** Box refinement's task-level
+default is EdgeSAM `tpu-fp16r-gpu-neck-fp32` with the GPU fp32 box decoder;
+quality alternative SAM 2.1 `gpu-fp32`; fallback EdgeSAM `gpu-fp32`. The
+latencies above use the fp32 decoder (146 + 66.6 ms per box, components
+measured separately). EdgeSAM's self-selected best-of-3 (its own scores) is
+not an automatic fallback: vs its single mask it helps > 5 points on 6
+objects and hurts on 8 (mirror 0.78 → 0.58, blanket 0.65 → 0.46, person
+0.95 → 0.83), large objects 83.1% vs 83.0%.
+
+## 2026-10-24 — cerebrate-hetero as the common serving worker (EdgeSAM + YOLOE)
+
+Code: [cerebrate-hetero](../../hosts/cerebrate-pixel6/cerebrate-hetero/README.md)
+(build `86e1c006`): config files, prompt model with per-image embedding
+cache, NNAPI compilation cache, health in DESCRIBE, optional TPU lock.
+
+| Check | Result |
+| --- | --- |
+| EdgeSAM fast, 132 boxes | identical to the validated chain (worst mask IoU 0.9441, mean 0.99830 vs the original) |
+| single-process latency (worker side) | image + 1 box 194 ms, + 10 boxes 692 ms; cached image + 1 box 54 ms, + 10 boxes 646 ms |
+| startup | cold 44.8 s (TPU compile 42.7 s), from the compilation cache 2.2 s (TPU 0.1 s) |
+| fallback (no TPU model) | exact GPU fp32 encoder, masks exact, 312 ms for image + 1 box |
+| YOLOE fast, positional mode | 8/8 bit-identical to the validated outputs |
+| contention with YOLOE + production MobileNet | all outputs correct; EdgeSAM p50 195 → 250 ms, YOLOE 78 → 84–115 ms, MobileNet p99 5 → 37 ms; TPU lock: no material effect |
+| sustained 3 min (image + 4 boxes) | p50 352–353 ms flat, outputs identical; TPU ≤ 47 °C, GPU ≤ 48 °C; RSS 593 MB |
+
+G1 GPU defect, again rule 3: the box decoder with the prompt encoder's tiny
+constants (2×128 Gaussian matrix, 2×256 corner embeddings) baked in gave mean
+mask IoU 0.35 on the GPU (exact on the CPU); fed as inputs it is exact.
+
+## 2026-10-24 — Combined YOLOE + EdgeSAM deployment: integration tests (staged, not live)
+
+Worker build `fad6e56c`, supervisor `bad5bed3` (slots `hetero1`, `hetero2`),
+config-file profiles with the persistent NNAPI compilation cache; tested
+beside production (test supervisor on 8777, test MLServer on 18080–18082).
+
+| Check | Result |
+| --- | --- |
+| EdgeSAM supervisor chain | 14/14; START 46.4 s cold, 2.5 s cached; fast masks = validated chain, default exact; image + 1 box 193–197 ms (fast), 313 ms (default); cached box 52–57 ms |
+| YOLOE supervisor chain (config profiles) | outputs bit-identical, both profiles; START 6.1 s cold, ~2.2 s cached |
+| MLServer, both models on demand (gRPC, raw bytes) | outputs bit-identical to direct runs; cache hit; idle stop + restart; crash recovery; unload clean |
+| Contention with production MobileNet | all correct; EdgeSAM p50 195 → 248 ms, YOLOE p50 78 → 86 ms, MobileNet p99 5.4 → 32 ms, 0 resets |
+| Rollback A (YOLOE-only build) | 16/16, YOLOE bit-identical |
+| MLServer gRPC | default 4 MB request cap refuses both image models; 64 MB setting works |
+
+**Deployment state of the variant registry** (`models/catalog.yaml`):
+
+| Model | Configuration | Role | Status | Serving | Latency (Pixel 6) |
+| --- | --- | --- | --- | --- | --- |
+| yoloe-v8s-pf | tpu-fp16r-gpu-head-fp16acc32 | fast (task default) | staged | hetero1 / yoloe-v8s-fast | 78 ms worker |
+| yoloe-v8s-pf | gpu-fp32 | default (task fallback) | staged | hetero1 / yoloe-v8s-default | 202 ms worker |
+| yoloe-v8s-pf | gpu-mixed | inside fast | staged | — | 107 ms |
+| edgesam3x | tpu-fp16r-gpu-neck-fp32 | fast (box-refinement default) | staged | hetero2 / edgesam3x-fast | 194 ms image + 1 box; 52–54 ms per cached box |
+| edgesam3x | gpu-fp32 | default (box-refinement fallback) | staged | hetero2 / edgesam3x-default | 313 ms image + 1 box |
+| edgesam3x | gpu-mixed | alternate | validated | — | 169 ms encoder |
+| sam2.1-hiera-tiny | gpu-fp32 | box-refinement quality | validated | — (no worker) | ~1.46 s one box |
+
+## 2026-10-25 — Deployed: YOLOE-v8s on cerebrate-hetero (EdgeSAM staged, MLServer model held)
+
+Production since 03:45 UTC (MLServer downtime ~70 s). Gate: 8/8 full-size
+YOLOE requests through production gRPC bit-identical to the validated
+outputs; worker 78–81 ms (TPU + GPU), ~0.6 s round trip through MLServer;
+cold start on demand 2.16 s from the compilation cache; MobileNet 20/20
+correct. Registry: YOLOE's three configurations are now `production`;
+EdgeSAM's stay `staged` until the image-transport work.
+
+## 2026-10-25 — Image transport step 1: photo in, uint8 to the worker (validated, not deployed)
+
+Photo (encoded JPEG/PNG, BYTES) → MLServer adapter (OpenCV decode +
+reference preprocessing) → uint8 → worker (float32 normalization). Outputs
+bit-identical to the validated fp32 path for both models (worker protocol and
+through MLServer, EdgeSAM from the cache too). Payload 123 KB instead of
+4.9 MB (YOLOE) / 12.6 MB (EdgeSAM); worker-level EdgeSAM image + 1 box
+~465 → 288 ms; through MLServer YOLOE ~600 → 412 ms and MLServer peak memory
+per request +125–133 → +14 MB (YOLOE), +196 → +13 MB (EdgeSAM, 1 box). The
+remaining cost is the raw responses (~3.5 MB of MLServer memory per EdgeSAM
+box; YOLOE's 4.6 MB) — step 2. A numpy port of OpenCV's bilinear resize
+failed bit-exactness (ARM NEON HAL rounding), so the guest gets
+`opencv-python-headless` (the references' version, +14 MB).
+
+## 2026-10-25 — Image transport step 2: final results (validated)
+
+numpy postprocessing on the guest, identical to PyTorch/Ultralytics on the
+same raw outputs: 132 YOLOE detections (boxes difference 0) and 132 EdgeSAM
+masks with 0 flipped pixels, also at 1600 × 1200, 1200 × 1600 and 961 × 552.
+Through MLServer: responses ~25 KB (YOLOE) and ~32 KB (EdgeSAM, 21 boxes)
+instead of 4.6 / 5.5 MB; YOLOE round trip 278 ms (412 after step 1, ~600
+originally); EdgeSAM photo + 1 box 412 ms, cached box 120 ms; MLServer peak
+memory flat at +28 MB from 1 to 96 EdgeSAM boxes (was +229 MB with swapping).
+
+## 2026-10-25 — Deployed: image transport (both steps) and EdgeSAM
+
+Production since 05:50 UTC (MLServer downtime ~61 s). Gate on production
+gRPC: YOLOE results = validated postprocessing 8/8, raw bit-identical 8/8,
+280 ms round trip, ~25 KB responses; EdgeSAM results 8/8, cached 8/8,
+photo + 1 box 438 ms, cached box 121 ms; both workers start on demand in
+2.2 s from the compilation cache; MobileNet 20/20. EdgeSAM's configurations
+are now `production` in the catalog: the `box-refinement` task default is
+served.
+
+
+## 2026-10-25 — MI-GAN generator on the Edge TPU (fp16-relaxed): stopped
+
+Code: [migan-tpu](../../hosts/cerebrate-pixel6/spikes/migan-tpu/README.md).
+The question was whether the TPU beats the GPU `fast` configuration (FP16,
+79 ms) at the same quality. Answer: no. The original fp32 generator (fixed
+input, simplified, all 425 ops builtin) was run as growing fragments, each
+matching the original to ≤ 2e-5 on the desktop.
+
+| Fragment | Config | Placement | Compile | E2E median | Rel L2 vs original |
+| --- | --- | --- | --- | --- | --- |
+| F1: encoder b512 (22 ops) | TPU fp16-relaxed | 22/22 TPU | 2.6 s | 34.1 ms | 7.6e-4 |
+| F1 | GPU FP16 | 22/22 GPU | — | 23.5 ms | 1.7e-3 |
+| F1 | GPU FP32 | 22/22 GPU | — | 39.7 ms | 1.2e-7 |
+| F2: whole encoder (168 ops) | TPU fp16-relaxed | all ops accepted | deadline exceeded | — | — |
+
+The F2 compile reached 3.09 GB RSS. Free memory fell to 840 MB, and the
+low-memory killer took four cached apps. The memory guard can't stop that
+compiler (a `system` process; it ran until the driver's ~60 s deadline). The
+VM and production MLServer were unaffected. MI-GAN stays GPU-only:
+`default` FP32 compute 147 ms, `fast` FP16 79 ms.
+
+## 2026-10-25 — EfficientSAM3 RV-M vision on the Edge TPU (fp16-relaxed): no-go; GPU split precision instead
+
+Code: [efficientsam3-tpu](../../hosts/cerebrate-pixel6/spikes/efficientsam3-tpu/README.md).
+Small fragments only; no full-encoder compile.
+
+**Vision on the GPU, by part** (synchronized E2E, median of 8; G3D ≤ 47 °C,
+skin 25 °C):
+
+| Part | FP32 | FP16 + FP32 acc. | FP16 |
+| --- | --- | --- | --- |
+| Trunk (RepViT-M1.1 + head + resize, ~36 GMACs) | 244 ms | 137 ms | 110 ms |
+| Neck (SAM 3 simple FPN up to 288×288, 106 GMACs) | 504 ms | 276 ms | 251 ms |
+| Whole vision graph | 723 ms | 409 ms | 349 ms |
+
+**Precision sensitivity** (phone-native chain, 11 samples, 20 detections):
+
+| Vision | Grounding | Kept | Worst final-mask IoU | Flipped px |
+| --- | --- | --- | --- | --- |
+| whole graph FP16 + FP32 acc. (FPN rel L2 5.5e-3) | FP32 | 19/20 (laptop 0.510 lost, score diff 1.1e-2) | — | — |
+| whole graph FP16 (FPN rel L2 1.1e-2) | FP32 | 19/20 (same) | — | — |
+| tanh GELU everywhere, FP32 (desktop) | FP32 | 20/20 | 0.9994 | 266 |
+| **trunk FP32 + neck FP16 + FP32 acc.** | FP32 | **20/20** | 0.9997 | 120 |
+| **trunk FP32 + neck FP16 + FP32 acc.** | FP16 + FP32 acc. | **20/20** | 0.9987 | 687 |
+
+**TPU fragments** (every op accepted by the driver; error = rel L2 vs PyTorch):
+
+| Fragment | TPU | Compile, memory | GPU FP32 / FP16 + FP32 acc. |
+| --- | --- | --- | --- |
+| Stem, 1008 → 252×252×64 (10 ops) | 18.9 ms, 7.0e-4 | 0.7 s, 3 MB | 23.1 / 15.1 ms (1.2e-3) |
+| Stem + 3 RepViT blocks at 1008 (60 ops) | **compile fails** (status 1) | — | 47.4 / 35.6 ms (7.2e-3) |
+| The same at 1024 (60 ops) | **93.0 ms**, 4.3e-3 | 12.8 s, **775 MB** | — |
+| SE module alone (MEAN over 252×252) | **compile fails** | — | — |
+| Depthwise / channel mixer alone at 252×252 | 17.9 / 20.5 ms | 0.6 / 2.7 s, 0 / 104 MB | — |
+| Neck conv_1x1 + conv_3x3 at 144×144 (2 ops) | 30.2 ms, 1.5e-4 | 1.2 s, 149 MB | 47.8 / 33.5 ms (1.4e-3) |
+
+Verdict: **no-go for TPU acceleration of the encoder.**
+
+- The trunk doesn't compile at 1008, because of the MEAN over 252×252 (256×256 compiles).
+- Where the trunk does compile, the TPU is 2× slower than the GPU.
+- Reduced precision in the trunk drops a detection.
+- The neck suits the TPU (accurate, 1.6× GPU FP32), but the GPU's mixed mode
+  matches its speed and passes validation.
+
+Result instead: GPU **trunk FP32 + neck FP16 + FP32 acc.**, ≈ 519 ms
+(summed) vs 723 ms. It passes the chain with both grounding variants and is a
+candidate configuration, not yet registered. First prompt with `fast`
+grounding: 2.46 → ≈ 2.26 s. Production untouched (MLServer: no restarts,
+7/7 ready).
+
+## 2026-10-25 — EfficientSAM3 RV-M: split-precision vision as a connected pipeline; registered `fast`
+
+Code: [efficientsam3-tpu](../../hosts/cerebrate-pixel6/spikes/efficientsam3-tpu/README.md),
+[`chain.cc`](../../hosts/cerebrate-pixel6/spikes/litert-gpu-transformers/chain.cc).
+GPU only; no TPU compile.
+
+| Vision (8 photos, median of 16, synchronized pixels → FPN on host) | Median | p90 |
+| --- | --- | --- |
+| Whole graph FP32 (same session) | 728 ms | 741 ms |
+| Trunk FP32 → neck FP16 + FP32 acc., host hand-off | 547 ms | 566 ms |
+| **Trunk FP32 → neck FP16 + FP32 acc., trunk output buffer shared** | **518 ms** | 529 ms |
+
+The two hand-offs give bit-identical outputs. On the 11-sample chain against
+the original:
+
+- with FP32 grounding: 20/20 detections, worst final-mask IoU 0.9997, 120 px;
+- with FP16 + FP32-acc. grounding: 20/20, 0.9987, 687 px.
+
+Registered in `models/catalog.yaml` as `efficientsam3-rvm`:
+
+| Configuration | Role | Status | First prompt |
+| --- | --- | --- | --- |
+| `gpu-fp32` | `default` | `validated` | 4.03 s |
+| `gpu-trunk-fp32-neck-fp16acc32-grounding-fp16acc32` | `fast` | `validated` | **2.26 s** |
+| `gpu-vision-fp32-grounding-fp16acc32` | `alternate` (the previous `fast`) | `validated` | 2.47 s |
+
+First-prompt latencies are sums of separately measured components. The
+model was not in the catalog before: the schema now allows a model with no
+serving worker. EfficientSAM3 TPU exploration is closed.
+
+**Decision (2026-10-25):** the split-precision configuration is approved as
+EfficientSAM3's final `fast`, and optimization is closed:
+
+- Two gains, measured connected: the mixed-precision neck (728 → 547 ms) and
+  the shared buffer hand-off (547 → 518 ms).
+- First-prompt times are estimates from stage timings; the 518 ms connected
+  vision is the directly validated figure.
+- Backlog only: the per-image cache of the first fusion layer's
+  self-attention (≈190 ms per additional prompt, `fast`).
+
+## 2026-10-25 — Registry serving: eight GPU models staged beside production
+
+Code: [cerebrate-hetero graph mode](../../hosts/cerebrate-pixel6/cerebrate-hetero/README.md),
+[model_hooks.py](../../hosts/cerebrate-pixel6/mlserver/models/cerebrate-graph/model_hooks.py),
+tests in [cerebrate-hetero/tests](../../hosts/cerebrate-pixel6/cerebrate-hetero/tests/).
+Registry: `models/catalog.yaml`, `models/variants.yaml`. All runs side by
+side: test workers on test ports, a test supervisor (port 8777, its own
+staging directory) and a test MLServer (18080-18082); production unchanged.
+
+**Legacy path unchanged:** the new worker build against the deployed one
+(`7554324e`), same configs and requests: 60/60 bit-identical (YOLOE fast and
+default, EdgeSAM fast and default; float and uint8 inputs; cached prompts).
+
+**Fidelity of the serving paths** (worker level; then through MLServer):
+
+| Model / configuration | Check | Result |
+| --- | --- | --- |
+| Depth Anything V2 Small fast / default | validated inputs, raw; photo path (PIL decode + bicubic in the guest) | 8/8 + 8/8 bit-identical (both precisions) |
+| MI-GAN 512 fast / default | validated inputs, raw; photo + mask through the author's pipeline (`migan.onnx`) | raw 8/8 bit-identical; removed-region PSNR vs the author's pipeline ≥ 44.6 dB (fp16) / ≥ 57.0 dB (fp32), outside the mask identical |
+| DINOv2-S/14 | raw; photo path | 8/8 + 8/8 bit-identical |
+| YOLOE-11s | raw; photo path (letterbox as YOLOE-v8s) | 8/8 + 8/8 bit-identical |
+| SAM 2.1 default | photo + 2 boxes, 4 photos, vs the original (3 masks each) | worst mask IoU 1.0000, 0 px |
+| SAM 2.1 fast (both halves at FP16 + FP32 acc., first measured together) | same | worst mask IoU 0.963, 492 px (each half alone ≈ 0.98) |
+| RF-DETR-Seg-Nano fast / default | graph A, B vs the validated device outputs; detections vs the original | A 8/8, B 8/8 (default: B 5/8 -- the host step in the guest's numpy); 25/25 (+1) matched, box IoU ≥ 0.984 / 0.956, mask IoU ≥ 0.988 / 0.983 -- as validated |
+| EfficientSAM3 fast | 11 samples, photo path (torchvision-exact resize, stdlib tokenizer) | 11/11 raw outputs bit-identical to the validated connected chain; 20/20 detections |
+| OWLv2 B/16 | 8 photos x 24 queries vs the original (validation's rule) | 75/75 matched, box IoU ≥ 0.9998, score diff ≤ 0.0002 |
+
+Exactness took four fixes, each found by these checks: Pillow 13.0.0 in the
+guest (12.3's bicubic differs by up to 11 levels when the aspect ratio
+changes); torchvision's uint8 antialiased resize ported bit-exactly
+(fixed-point int16 weights, horizontal pass first); torchvision's x * (1/255)
+normalization, with the worker's product kept out of a fused multiply-add
+(clang contracts x * r - m on arm64); OWLv2's `Owlv2ImageProcessorPil`
+(scipy zoom + Gaussian) ported to numpy (≤ 4.8e-7 of the validated inputs).
+
+**Through the whole path** (test supervisor + test MLServer, gRPC, on demand;
+`mlserver_staged_test.py`, 18/18 checks): all eight READY with no workers;
+first request (worker start + request) and warm round trip:
+
+| Endpoint (profile) | Cold first request | Warm round trip | Worker (inference) | Worker peak RSS | Free-memory drop |
+| --- | --- | --- | --- | --- | --- |
+| depth-anything-v2-small (fast) | 2.0 s | 595 ms | 334 ms | 474 MB | 221 MB |
+| mi-gan-512 (fast) | 1.4 s | 419 ms (photo + mask → PNG) | 84 ms | 288 MB | 125 MB |
+| dinov2-s14 (default) | 1.5 s | 485 ms | 265 ms | 403 MB | 150 MB |
+| yoloe-11s-pf (default) | 2.3 s | 561 ms | 178 ms | 619 MB | 414 MB |
+| sam2.1-hiera-tiny (default) | 4.7 s | 1.86 s (photo + 2 boxes) | 1,438 ms + 60 ms/box | 1,225 MB | 919 MB |
+| rf-detr-seg-nano (fast) | 3.2 s | 523 ms | 222 ms (A + B) | 399 MB | 180 MB |
+| efficientsam3-rvm (fast) | 8.3 s | 3.43 s (photo + 1 prompt); cached image, 2 prompts 4.48 s | 570 ms + 1,734 ms/prompt | 2,848 MB | 2,365 MB |
+| owlv2-b16 (default) | 9.5 s | 5.46 s (photo + 24 queries) | 4,569 ms + 211 ms/32 phrases | 2,533 MB | 1,924 MB |
+
+Default/alternate profiles (not endpoints): Depth FP32 674 ms (619 MB, drop
+300), MI-GAN FP32 157 ms (406 MB, 234), SAM 2.1 fast 815 + 38 ms/box (845
+MB, 568), RF-DETR FP32 374 ms (499 MB, 279). **EfficientSAM3's FP32 default
+can't be staged:** loading it took the phone from 3.3 GB to 850 MB free.
+
+Lifecycle: admission refused OWLv2 (floor 3,000 MB) while EfficientSAM3 held
+memory -- the model stayed READY and served once EfficientSAM3 was unloaded;
+unload stops the worker; OWLv2's worker stopped after its 60 s idle window
+(test setting). Recovery: a killed worker is restarted and the request
+retried transparently (bit-identical); after `kill -9` of the supervisor,
+`pixel-supervisor-watchdog` cleared the orphaned worker, restarted the
+supervisor and reloaded MLServer's not-ready models; the next request
+served normally.
+
+Contention (`graph_contention.py`, 20 s phases): Depth fast + YOLOE fast +
+production MobileNet concurrently -- every output correct; Depth worker p50
+342 → 393 ms, YOLOE 78 → 248 ms (its GPU head queues behind Depth's GPU
+job), MobileNet p99 5.7 → 12.8 ms (one known reconnect). Depth alone
+sustained 60 s: 338-346 ms per 10 s window; G3D 53 °C, skin 34 °C.
+Thermal across the individual runs: G3D ≤ 49 °C (OWLv2), others 29-42 °C.
+
+
+## 2026-10-25 — One capacity rule and a shared lifecycle for every Pixel model
+
+Design and code: cerebrate-supervisor README, "Capacity: one rule for every
+worker"; `cerebrate_lifecycle.py`. All runs were on the test stack, beside
+production:
+- a test supervisor on 8777 with ports offset by 100, and a generated test
+  profiles file with `reserve_mb 1000`;
+- a test MLServer of all 13 endpoints.
+
+**Capacity costs measured** (`measure_costs.py`: free-memory drop through
+representative requests, read via the supervisor's CAPACITY):
+
+| Configuration | load_mb | Peak RSS (with children) |
+| --- | --- | --- |
+| MobileNet (20 probes) | 23 | 47 MB |
+| SmolLM2 (1 prompt) | 299 | 491 MB |
+| YOLOE-v8s fast / default (8 photos) | 510 / 425 | 702 / 597 MB |
+| EdgeSAM fast / default (8 photos, 2 boxes) | 544 / 311 | 596 / 479 MB |
+| Granite-Docling (1 image, 105 s) | 481 | 798 MB (the per-request llama-mtmd-cli child included) |
+
+**Behaviour:**
+
+| Check | Result |
+| --- | --- |
+| Lifecycle unit tests | 7/7 |
+| Registry tests | 38/38 |
+| `capacity_scenarios.py` `wait` | 6/6 |
+| `capacity_scenarios.py` `fail` (5 s wait) | 6/6 |
+| YOLOE, EdgeSAM through the shared lifecycle | result 8/8 + raw 8/8 bit-identical; 8/8 + cached 8/8 |
+| MobileNet through its endpoint | 795 |
+| The eight GPU endpoints' gates | 33/33 |
+| Idle stop (60 s test window) | all workers stopped, 13 models READY |
+| Supervisor `kill -9` with the fixed watchdog | the orphaned MobileNet worker was cleared, the supervisor restarted, and the next request restarted MobileNet (795) |
+
+The `wait` scenarios in detail:
+- **Co-residency.** YOLOE fits beside a resident EfficientSAM3, so nothing is
+  stopped.
+- **Idle eviction.** An idle EfficientSAM3 is stopped for OWLv2, and OWLv2's
+  result is unchanged.
+- **Busy wait.** A busy EfficientSAM3 is not stopped: OWLv2 waited 22 s, then
+  served.
+- **Reserve.** The minimum free memory was 1,115 MB.
+
+In `fail` mode, OWLv2 was refused with the supervisor's reason after the wait,
+and EfficientSAM3 was unharmed.
+
+The eight gates ran EfficientSAM3 and OWLv2 beside YOLOE and MobileNet. The
+YOLOE median went from 299 to 626 ms beside OWLv2 and from 290 to 530 ms
+beside EfficientSAM3, with every result unchanged.
+
+The earlier estimate that EfficientSAM3 + YOLOE would leave about 1 GB or
+less was pessimistic: measured, YOLOE fits beside a resident EfficientSAM3
+within the reserve.

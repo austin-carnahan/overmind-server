@@ -97,6 +97,18 @@ full production path with genuinely correct, incrementally-arriving
 tokens. **All 9 of 9 Multi-Runtime Execution Plane success criteria are
 now met.**
 
+**Segmentation and Labeling Lane, Step 1 done (2026-10-23)**:
+[`cerebrate-graph`](cerebrate-graph/README.md), a general-purpose ONNX
+Runtime worker (any named tensors in, every output back), is built and
+verified on the device by manual launch: MobileNet reaches the TPU through
+ORT NNAPI bit-exact, RF-DETR Seg Nano runs correctly on CPU in ~483 ms, and
+the TPU rejects RF-DETR in fp32 (and the vendor compiler crashes on it in
+fp16). Supervisor slots `graph1`–`graph3` (ports 8769–8771) and a generic
+MLServer adapter are deployed; the `graph-canary` model (MobileNet ONNX on
+`graph3`) returns class 795 through `inference.home.arpa`, alongside the
+unchanged production models. See the
+[lane plan](../../design-notes/Cerebrate%20Pixel%206%20%E2%80%94%20Segmentation%20and%20Labeling%20Lane.md).
+
 A factory-reset Pixel 6, converted into a dedicated always-on inference node
 for the home network. Second member of the "cerebrate" fleet/class (small
 auxiliary compute nodes) — see the naming-convention section of the
@@ -120,6 +132,29 @@ Linux guest is running (Debian 13 "trixie", real systemd, `openssh-server`
 active on port `2222`) and reachable headlessly via `adb forward` — see the
 design notes for the full chain and the AOSP forwarder's ≥1024/loopback-only
 constraint that explains why.
+
+## Models and operations
+
+The models served (or validated) on this phone, and how each configuration
+runs, are in the [model registry](../../models/README.md). Use
+`scripts/cerebrate-models` to browse it. Day-to-day procedures are in the
+[Pixel 6 models runbook](../../runbooks/cerebrate-pixel6-models.md):
+
+- validating a variant;
+- staging and promoting an endpoint;
+- health checks;
+- recovery after a reboot;
+- troubleshooting.
+
+Production serves:
+
+| Endpoint | Status |
+| --- | --- |
+| `cerebrate-infer` (MobileNet), `cerebrate-generate`, `cerebrate-gguf`, `graph-canary` | pinned |
+| `yoloe-v8s-pf`, `edgesam3x-box` | on demand |
+
+Eight more GPU models are staged beside production, awaiting a deployment
+window ([supervisor README](cerebrate-supervisor/README.md#registry-serving-profiles-file-admission-eight-gpu-slots-prepared-2026-10-25-deploy-scheduled)).
 
 ## Access
 

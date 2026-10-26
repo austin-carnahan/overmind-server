@@ -124,6 +124,7 @@ Environment=MLSERVER_HTTP_PORT=8080
 Environment=MLSERVER_GRPC_PORT=8081
 Environment=MLSERVER_METRICS_PORT=8082
 Environment=MLSERVER_GZIP_ENABLED=false
+Environment=MLSERVER_GRPC_MAX_MESSAGE_LENGTH=33554432
 ExecStart=/home/droid/mlserver17-venv/bin/mlserver start /home/droid/code/overmind-server/hosts/cerebrate-pixel6/mlserver/models
 Restart=on-failure
 RestartSec=5
@@ -135,7 +136,10 @@ WantedBy=multi-user.target
 (`MLSERVER_HOST=127.0.0.1` was added in Stage 5 Phase 4 to keep MLServer
 off the LAN-facing interface; `MLSERVER_GZIP_ENABLED=false` was added
 for streaming, in the MLServer 1.7.1 upgrade above — gzip middleware
-doesn't work with streaming responses.)
+doesn't work with streaming responses. `MLSERVER_GRPC_MAX_MESSAGE_LENGTH`
+(32 MiB) was added in the combined cerebrate-hetero deployment, 2026-10-25:
+the default 4 MiB refuses full-size image requests; clients raise their own
+receive limit to match.)
 
 ## Verified (2026-09-16)
 
@@ -602,3 +606,380 @@ correct: fresh PID, correct refcount, no crash) or to `max_num_tokens`
 sizing (the first two hypotheses tried, both real gaps but not the
 actual cause). Fixed by configuring an explicit top-p/top-k/temperature
 sampler instead of trusting the C API's undocumented default.
+
+## Segmentation and Labeling Lane Step 1 — generic `cerebrate-graph` adapter (2026-10-23)
+
+**Deployed 2026-10-23** (deploy notes at the end of this section).
+[`models/cerebrate-graph/`](models/cerebrate-graph/)
+holds a generic tensor-passthrough runtime for
+[`cerebrate-graph`](../cerebrate-graph/README.md): each V2 request input
+becomes one named tensor for the worker, each worker output becomes one V2
+output, with the same names, shapes, and dtypes. Model-specific pre- and
+post-processing stays out of it, so one adapter serves any ONNX model the
+worker can load. Timing comes back in the response's `parameters`
+(`request_id`, `inference_us`, `handle_us`).
+
+- `cerebrate_graph_runtime.py` — the MLServer runtime. Lifecycle,
+  per-slot refcount file (`/tmp/cerebrate-graph-<slot>.refcount`), gateway
+  discovery, and readiness handling follow the `cerebrate-infer` adapter. On
+  `load()` it also sends a DESCRIBE and refuses readiness unless the worker on
+  that port serves the configured model with the configured backend.
+- `cerebrate_graph_protocol.py` — the wire protocol, pure numpy, shared with
+  the direct test client. MLServer puts the model folder on `sys.path` while
+  importing the runtime, so the sibling import works.
+- `model-settings.json` — the canary, `graph-canary`: the regenerated
+  MobileNet ONNX on slot `graph3`, CPU backend. Loads at MLServer startup
+  like the other models.
+
+Tested locally with the real supervisor logic (scratch build) and the macOS
+worker running RF-DETR Seg Nano: V2 outputs bit-exact against the reference,
+a bad input name returns HTTP 400 with the worker's message, a killed worker
+fails the next request and a repository `load` restarts it with a fresh PID,
+`unload` stops the worker and returns the refcount to 0.
+
+### Deploy notes (2026-10-23)
+
+- **No MLServer restart.** MLServer 1.7.1 picks up a model folder added after
+  startup through `POST /v2/repository/models/<name>/load` (verified on the Mac
+  first, with the already-loaded models staying ready). So the deploy was:
+  update the guest checkout, then load `graph-canary`. The adapter started
+  `graph3` through the supervisor and the canary returned class 795 — inside
+  the guest and through `inference.home.arpa` from `overmind-01`. On future
+  MLServer restarts it loads at startup like the other models.
+- **Guest checkout.** It was on `main` at `408cbfa`, 70 commits behind, with
+  the `cerebrate-gguf` adapter present as *untracked* files. Those files were
+  byte-identical to the committed versions, so they were moved to
+  `/home/droid/untracked-backup-2026-10-23/` and the checkout fast-forwarded
+  to the `feat/segmentation-lane-graph-worker` branch. The running adapters'
+  code was unchanged by the fast-forward (the `cerebrate-infer` and
+  `cerebrate-generate` adapters have no changes in that range). Switch the
+  guest back to `main` once the branch is merged.
+- MLServer logs a harmless warning that the model name `graph-canary` differs
+  from its folder name `cerebrate-graph`; the folder holds the shared adapter
+  code, and later models will get their own folders.
+
+## Segmentation and Labeling Lane Step 2B — on-demand residency, `yoloe-v8s-pf` (prepared 2026-10-24, deploy scheduled)
+
+**Tested off production; deploy scheduled** (runbook in the
+[supervisor README](../cerebrate-supervisor/README.md#scheduled-deploy-runbook)).
+
+- **On-demand residency in the graph adapter** (catalog v4 Section 9),
+  opt-in per model: `cerebrate_graph_residency: on_demand` (default
+  `pinned`, unchanged) and `cerebrate_graph_idle_stop_s` (default 600).
+  `load()` only validates the settings and reports ready; the first request
+  STARTs the worker (with the same DESCRIBE check), and a background task
+  STOPs it after the idle window. Starts and stops take the same per-slot
+  refcount as pinned loads. An on-demand model stays READY after a failure
+  — MLServer turns requests away from a not-ready model before `predict()`
+  runs, which would block the very request that restarts the worker (found
+  in testing: the first version marked it unready and never recovered). A
+  lost worker costs one failed request; the slot is released and the next
+  request starts it afresh.
+- **`models/yoloe-v8s-pf/`** — YOLOE-v8s prompt-free on slot `hetero1`
+  (port 8772), profile `yoloe-v8s-fast` (TPU + GPU, GPU-only fallback
+  inside the worker), on demand with a 10-minute idle stop. The runtime and
+  protocol files are symlinks to `models/cerebrate-graph/`. Pass-through
+  like every graph model: input `images` FP32 `[1,640,640,3]` (letterboxed
+  RGB, 0–1), outputs `boxes, score, cls, coef, protos`; NMS and masks stay
+  with the caller. To serve the exact `default` variant instead, set
+  `cerebrate_graph_backend: yoloe-v8s-default` and `cerebrate_graph_model_path:
+  /data/local/tmp/yoloe-v8s-pf-gpu-nhwc.tflite`.
+
+Tested 2026-10-24 with a second MLServer instance in the guest (ports
+18080–18082, the adapter copy pointed at a test supervisor on control port
+8777; script
+[`hetero_ondemand.py`](../cerebrate-hetero/tests/hetero_ondemand.py)) next to
+production, plus a pinned canary on `graph2` as a regression check of the
+refactored pinned path (started at load through START + DESCRIBE, stopped on
+unload):
+
+| Check | Result |
+| --- | --- |
+| after startup | `yoloe-v8s-pf` READY, `hetero1` STOPPED |
+| first request (cold) | 7.4–8.5 s (worker load 5.1 s incl. TPU compile), output bit-identical to the validated run |
+| warm requests | ~2.0 s each, bit-identical |
+| idle | `hetero1` STOPPED 65 s after the last request (60 s window); the next request restarts it, bit-identical |
+| worker `kill -9` | next request HTTP 500, model stays READY; the one after restarts it on a fresh PID, bit-identical |
+| repository unload | `hetero1` and `graph2` STOPPED, refcount back to 0 |
+
+**The JSON REST path dominates:** ~2.0 s per warm request against 74 ms of
+inference and ≈ 200 ms over the worker protocol directly — the 4.9 MB fp32
+image and ~5 MB of outputs as JSON number lists. Fine for occasional calls;
+real use wants a smaller payload (uint8 image, only the outputs
+post-processing needs) or a binary path, which is the planned transport
+work.
+
+## Combined deployment: `edgesam3x-box` beside `yoloe-v8s-pf` (prepared 2026-10-24, deploy scheduled)
+
+**Held (2026-10-24):** the model folder now lives in
+[`held-models/`](held-models/README.md) — MLServer 1.7 turns every tensor into
+a Python list, so an EdgeSAM request costs +196 MB (+3.6 MB per box) in this
+guest's MLServer; it is served after the image-transport work. YOLOE ships in
+the window. The rest of this section describes the tested configuration.
+
+**Staged and tested beside production; deploy in the scheduled window**
+(runbook: [supervisor README, "Combined deployment"](../cerebrate-supervisor/README.md#combined-deployment-yoloe--edgesam-deployed-2026-10-25-yoloe-served)).
+
+- **`models/edgesam3x-box/`** — EdgeSAM-3x box refinement on slot `hetero2`
+  (port 8773), profile `edgesam3x-fast`, on demand with a 10-minute idle
+  stop; same shared graph adapter (symlinks), no adapter change. Inputs:
+  `image` FP32 `[1,1024,1024,3]` (ResizeLongestSide 1024, SAM
+  normalization, padded, NHWC), `image_id` INT64 `[1]`, `boxes` FP32
+  `[N,1,4]` (xyxy in that 1024 frame); outputs `mask_logits [N,1,256,256]`
+  (upscale with the original `postprocess_masks`) and `iou [N,1,1]`. A
+  request without `image` decodes against the worker's cached embedding
+  for `image_id`; after an idle stop or eviction it fails with "send the
+  image again". Task-level selection lives in `models/catalog.yaml`
+  (`box-refinement`).
+- **gRPC message limit:** MLServer's gRPC endpoint refuses requests over
+  4 MB by default ("Received message larger than max"), which both image
+  models exceed; `MLSERVER_GRPC_MAX_MESSAGE_LENGTH=67108864` lifts it (the
+  test instance ran with it). REST is unaffected but costs JSON encoding
+  (~2 s per YOLOE request); gRPC with raw tensor bytes is the efficient
+  path. The deployment sets 32 MiB (`33554432`, runbook step 4); clients
+  raise their own receive limit to match. Measured peak memory per request
+  through MLServer: YOLOE +125–133 MB, EdgeSAM +196 MB +3.6 MB per box.
+
+Tested with a second MLServer instance hosting both models plus a pinned
+canary (gRPC, raw tensor bytes;
+[`mlserver_combined_test.py`](../cerebrate-hetero/tests/mlserver_combined_test.py)):
+READY without workers; first requests start both workers from the
+compilation cache; outputs bit-identical to the direct runs (EdgeSAM's
+cache hit too); idle stop and restart; EdgeSAM worker killed → one failed
+request, model stays READY, next request restarts it; unload → all STOPPED,
+refcounts 0. Through MLServer, an EdgeSAM request with 21 boxes takes ~3.1 s
+round trip against ~1.8 s in the worker (~13 MB in, ~6 MB out through
+MLServer's encode/decode) — part of the transport work after deployment.
+
+## Image transport, step 1: photo input (deployed 2026-10-25 with step 2)
+
+Models with `cerebrate_graph_photo` in their settings (`yoloe` for
+`yoloe-v8s-pf`, `sam` for the held `edgesam3x-box`) accept the **encoded
+photo** — a `photo` input, datatype BYTES, one element (the JPEG/PNG file) —
+and the adapter turns it into the worker's **uint8** input with the reference
+preprocessing ([`photo_preprocess.py`](models/cerebrate-graph/photo_preprocess.py);
+hooks in [`cerebrate_graph_photo.py`](models/cerebrate-graph/cerebrate_graph_photo.py)):
+OpenCV decode (the references read photos with `cv2.imread`), YOLOE's
+letterbox (`cv2.resize`, padding 114) or SAM's ResizeLongestSide (Pillow
+bilinear, zero padding plus the valid extent); the worker normalizes in
+float32 (`input_uint8` in its config). EdgeSAM boxes come in photo pixels and
+are rescaled as SAM's `apply_boxes` does; the hook remembers each
+`image_id`'s size so later box requests can skip the photo. Requests without
+a photo pass through unchanged (raw/debug path). Step 1 still returns the
+raw tensors, plus the geometry to map them back (`letterbox`,
+`original_size`; `input_size`, `original_size`); step 2 returns final
+results.
+
+- **New dependency: `opencv-python-headless==5.0.0.93`** (the references'
+  OpenCV; 82 MB on disk, +14 MB in the MLServer process). On ARM, OpenCV's
+  8-bit bilinear resize goes through a NEON HAL with its own rounding; numpy
+  re-implementations of OpenCV's generic code paths were off by 1–2 levels,
+  so a "small exact implementation" wasn't viable. The guest's OpenCV and
+  Pillow produce the decoded image and both models' uint8 inputs
+  bit-identically to the Mac references on 26 test images (JPEG and PNG,
+  upscale and downscale; `photo_preprocess_check.py`).
+- **Clients send everything raw over gRPC** (`raw_input_contents`; BYTES
+  elements prefixed with their 4-byte little-endian length): MLServer replies
+  with raw outputs only to raw requests.
+
+Measured on a test MLServer beside production (gRPC):
+
+| | Before (fp32 tensor) | Photo input |
+| --- | --- | --- |
+| YOLOE request in | 4.9 MB | 123 KB |
+| YOLOE MLServer peak memory | +125–133 MB | **+14 MB** |
+| YOLOE round trip | ~600 ms | **412 ms** (the 4.6 MB raw response is most of what's left) |
+| EdgeSAM MLServer peak, image + 1 box | +196 MB | **+13 MB** |
+| EdgeSAM MLServer peak, + 24 boxes | +279 MB | +95 MB (~3.5 MB per box of raw logits in the response) |
+| outputs vs the validated runs | — | bit-identical: YOLOE 8/8, EdgeSAM 8/8 photos with all boxes, and from the cache |
+
+The image-side memory is gone; the per-box response cost (MLServer
+list-converts the raw 256 × 256 logits) is step 2's, so EdgeSAM stays held
+until then.
+
+## Image transport, step 2: final results (deployed 2026-10-25 with step 1; EdgeSAM released)
+
+Photo requests now return **one BYTES output, `result`, holding a JSON
+document** in photo coordinates ([`photo_postprocess.py`](models/cerebrate-graph/photo_postprocess.py),
+numpy only, mirroring the reference postprocessing). Parameter `output: raw`
+returns step 1's raw tensors plus geometry instead.
+
+```json
+// yoloe-v8s-pf, input {photo}
+{"image": {"width": 640, "height": 480},
+ "detections": [{"box": [89.5, 242.2, 246.0, 399.2], "score": 0.960, "class_id": 2313,
+                 "label": "laptop", "mask": {"bbox": [90, 243, 246, 399], "rle": [0, 37, 119, ...]}}]}
+// edgesam3x-box, input {photo?, image_id, boxes [N,4] xyxy in photo pixels}
+{"image": {"width": 640, "height": 480}, "image_id": 0,
+ "masks": [{"box": [...], "score": 0.97, "mask": {"bbox": [...], "bits": "..."}}]}
+```
+
+- YOLOE: Ultralytics 8.4.184 with `retina_masks` — NMS (best class,
+  class-agnostic, conf 0.25, IoU 0.7, max 300), boxes scaled to the photo,
+  `process_mask_native` masks at photo resolution cropped to their boxes,
+  empty masks dropped; labels from
+  [`labels/yoloe-v8s-pf.json`](models/cerebrate-graph/labels/yoloe-v8s-pf.json)
+  (the model's 4,585 names). EdgeSAM: one mask per requested box, in order,
+  SAM's `postprocess_masks`, score = the model's IoU prediction. A photo
+  without boxes just encodes and caches (no masks).
+- Masks: `bbox` [x0, y0, x1, y1] end-exclusive, then `rle` (run lengths,
+  row-major inside the bbox, starting with a run of zeros) or `bits` (base64
+  of the bbox crop, `np.packbits` row-major) — whichever is smaller;
+  `photo_postprocess.decode_mask` inverts it. Median 1 KB per mask.
+- Exactness: identical to PyTorch/Ultralytics on the same raw outputs — 132
+  YOLOE detections (classes, scores, boxes difference 0) and 0 flipped mask
+  pixels; 132 EdgeSAM masks, 0 flipped pixels; also on 1600 × 1200,
+  1200 × 1600 and 961 × 552 photos (`photo_postprocess_check.py`,
+  `result_reference_check.py`). Exactly tied scores (the fp16 head makes
+  some) keep torchvision's stable order. Large-photo EdgeSAM masks are
+  computed only where positive low-res cells can reach (exact: bilinear
+  weights are non-negative).
+
+Measured on a test MLServer beside production (gRPC, raw inputs):
+
+| | Raw tensors (step 1) | Final results (step 2) |
+| --- | --- | --- |
+| YOLOE response | 4.6 MB | ~25 KB |
+| YOLOE round trip | 412 ms | **278 ms** (originally ~600) |
+| EdgeSAM response, 21 boxes | 5.5 MB | ~32 KB |
+| EdgeSAM photo + 1 box / cached + 1 box | 444 / 123 ms | 412 / 120 ms |
+| MLServer peak memory, EdgeSAM + 96 boxes | +229 MB (guest swapping) | **+28 MB** (flat from 1 to 96 boxes) |
+
+This removed the reason EdgeSAM was held: `edgesam3x-box` moved from
+`held-models/` back to `models/` with this release (deploy record in the
+supervisor README). Raw mode (`output: raw`) still returns raw tensors
+through MLServer's list encoding — keep it for debugging, not for many
+boxes.
+
+
+## Registry endpoints: eight GPU models staged in `held-models/` (prepared 2026-10-25)
+
+The registry's eight newly served models have MLServer settings in
+[`held-models/`](held-models/). MLServer loads only `models/`, so production
+doesn't see them. Each folder holds a `model-settings.json` and two symlinks
+to the shared adapter. Every model has a 120 s request timeout and its own
+supervisor slot. Residency and the idle window are system-wide since
+2026-10-25 (section below). Every one
+passed the side-by-side test
+([`mlserver_staged_test.py`](../cerebrate-hetero/tests/mlserver_staged_test.py), 18/18;
+[results](../../../experiments/pixel6/results.md#2026-10-25--registry-serving-eight-gpu-models-staged-beside-production)).
+None is served in production yet.
+
+**Adapter changes.** All are compatible with the deployed `yoloe-v8s-pf` and
+`edgesam3x-box`:
+
+- [`model_hooks.py`](models/cerebrate-graph/model_hooks.py) holds one hook per
+  model, registered in `cerebrate_graph_photo.HOOKS`.
+- A hook either maps one request to one worker call (`prepare` / `finish`), or
+  implements `async run(inputs, params, call)` when a host step sits between
+  two graphs. RF-DETR and OWLv2 use `run`.
+- `cerebrate_graph_supervisor_port` points a model at a test supervisor.
+- On-demand models retry a request once if their worker was lost. Inference is
+  stateless.
+- A refused start now carries the supervisor's reason, so a refusal for lack of
+  memory reaches the client as "could not start gpu-owlv2 on demand: supervisor
+  refused START: ERROR: profile owlv2-b16-default needs 3000 MB free…".
+- New guest-side helpers:
+  - [`photo_preprocess.py`](models/cerebrate-graph/photo_preprocess.py): a
+    bit-exact port of torchvision's uint8 antialiased resize, and of OWLv2's
+    processor.
+  - [`clip_bpe.py`](models/cerebrate-graph/clip_bpe.py): CLIP's tokenizer, using
+    the standard library only.
+  - Four small constants in [`assets/`](models/cerebrate-graph/assets/), each
+    recorded with its sha256 in the catalog (`target: guest`).
+- **Pillow 13.0.0 is required** in the venv
+  ([`requirements.txt`](requirements.txt)). 12.3's bicubic resize differs from
+  the references.
+
+**Contracts.**
+
+- Inputs are `photo` (BYTES, an encoded image) plus the model's prompts.
+- The output is one BYTES `result` holding a JSON document in photo
+  coordinates.
+- Masks use `photo_postprocess.encode_mask`: `bbox`, then `rle` or `bits`, as
+  above.
+- Parameter `output: raw` returns the worker's raw tensors plus
+  `original_size`. This is the diagnostic path; keep it for debugging.
+
+| Endpoint | Interface | Request | `result` |
+| --- | --- | --- | --- |
+| `depth-anything-v2-small` | `photo-depth-v1` | `photo` | `depth`: 686×518 16-bit PNG (base64) with `min` and `max`. Value = min + png/65535·(max−min). Relative inverse depth, larger = nearer. |
+| `mi-gan-512` | `photo-inpaint-v1` | `photo`, `mask` (an image of the same size, white = remove) | The inpainted photo as a PNG (base64), composited like the author's `migan.onnx` pipeline: pixels outside the mask are unchanged. |
+| `dinov2-s14` | `photo-embedding-v1` | `photo`. Parameter `patches=true` adds the tokens. | `embedding`: 384 little-endian float32 (base64), the mean of the 1,024 patch tokens, not normalized. `patch_tokens` [1024, 384] are optional. |
+| `yoloe-11s-pf` | `photo-detections-v1` | `photo` | As `yoloe-v8s-pf`: detections with 4,585-class labels and masks. |
+| `sam2.1-hiera-tiny` | `photo-box-masks-v1` | `photo?`, `image_id` (INT64 [1]), `boxes?` (FP32 [N,4] xyxy in photo pixels). Parameter `masks=all` returns all three candidates. | `masks`: per box, the best candidate by predicted IoU, with box, score and mask. The image is cached per `image_id`, so later boxes need no photo. |
+| `rf-detr-seg-nano` | `photo-detections-v1` | `photo`. Parameter `threshold` (default 0.5). | `detections`: box, score, COCO `class_id`, `label`, mask. |
+| `efficientsam3-rvm` | `photo-text-segmentation-v1` | `photo?`, `image_id`, `prompts` (BYTES, one phrase each, at most 16). Parameter `threshold` (0.5). | `prompts`: per phrase, `presence` plus `detections` (box, score, mask). Vision is cached per `image_id`, and each phrase is one worker call. |
+| `owlv2-b16` | `photo-text-detection-v1` | `photo`, `queries` (BYTES, at most 256). Parameter `threshold` (0.2). | `queries`: per phrase, `detections` (box, score) after per-query NMS at IoU 0.3. |
+
+Warm round trips on the test path:
+
+| Endpoint | Warm round trip |
+| --- | --- |
+| Depth | 595 ms |
+| MI-GAN | 419 ms |
+| DINOv2 | 485 ms |
+| YOLOE-11s | 561 ms |
+| SAM 2.1 | 1.86 s for a photo and 2 boxes |
+| RF-DETR | 523 ms |
+| EfficientSAM3 | 3.4 s for a photo and 1 phrase |
+| OWLv2 | 5.5 s for a photo and 24 queries |
+
+A first request also starts the worker, which takes 1.4–9.5 s. The full
+tables, with memory per worker, are in the results.
+
+**Promotion** happens one endpoint at a time, inside a window, after the
+registry-serving deployment (supervisor README) is in place. The procedure is
+in the
+[Pixel 6 models runbook](../../../runbooks/cerebrate-pixel6-models.md#promote-a-staged-endpoint):
+
+1. `git mv held-models/<m> models/<m>`.
+2. Re-point its two symlinks from `../../models/cerebrate-graph/` to
+   `../cerebrate-graph/`.
+3. Mark the variant `production` in `models/variants.yaml`. The validator
+   checks that a staged endpoint is in `held-models/` and a production one is
+   in `models/`.
+4. Pull in the guest, then `POST /v2/repository/models/<m>/load`. No restart is
+   needed.
+5. Run the promotion gate: `SUPERVISOR_PORT=8767 mlserver_staged_test.py
+   127.0.0.1:8081 127.0.0.1:8080 <gateway> <data> --only <m>`.
+
+Demotion is the reverse: unload, then move the folder back.
+
+
+## Shared lifecycle: every Pixel model on demand, one capacity rule (2026-10-25)
+
+All four adapter families now share one worker lifecycle,
+[`cerebrate_lifecycle.py`](models/cerebrate-graph/cerebrate_lifecycle.py):
+`cerebrate-graph` (graph, hetero and registry models), `cerebrate-infer`
+(MobileNet), `cerebrate-generate` (SmolLM2) and `cerebrate-gguf`
+(Granite-Docling). Each adapter keeps only its own request handling: tensors
+and hooks, the byte-line classifier, the token stream, the ~100 s document job.
+Client contracts are unchanged.
+
+- **Every worker runs on demand**, MobileNet, SmolLM2 and Granite included,
+  which used to be loaded at MLServer startup and never stopped. A model is
+  READY without a worker: its first request starts it, and it stops after the
+  system idle window, 600 s.
+- **Memory.** The supervisor refuses a start that would cross its reserve
+  (`ERROR: capacity: …`). The lifecycle then stops the least recently used
+  idle worker in this MLServer process and asks again. A worker serving a
+  request is never stopped; multi-call hooks hold theirs for the whole
+  request. If every other worker is busy, the request waits up to 30 s, then
+  fails with the supervisor's reason. Policy:
+  [`serving_policy.json`](models/cerebrate-graph/serving_policy.json), which
+  is generated; test stacks override it with `CEREBRATE_IDLE_STOP_S`,
+  `CEREBRATE_CAPACITY_WAIT_S` and `CEREBRATE_SUPERVISOR_PORT`.
+- **A lost worker** releases its slot, and the request runs once more on a
+  fresh one. Granite's timeouts are not retried: the caller stopped waiting,
+  but the worker may still be running.
+- **Removed:** `graph-canary` (the Step 1 smoke test on slot `graph3`, unused)
+  and `example-echo` (the Phase 1 placeholder). `cerebrate-graph/` is now only
+  the shared adapter's code.
+- **The health probe** is MobileNet through its endpoint,
+  [`mobilenet_probe.py`](../cerebrate-hetero/tests/mobilenet_probe.py): a
+  224×224 PNG of the i%256 input, which must return class 795. The worker's
+  raw port is no longer a probe target.
+- Tests: [`tests/test_lifecycle.py`](tests/test_lifecycle.py), standard
+  library only, against a fake supervisor with the real rule; the test-stack
+  results are in the supervisor README's capacity section.

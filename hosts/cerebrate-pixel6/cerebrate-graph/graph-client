@@ -1,0 +1,137 @@
+#!/usr/bin/env python3
+"""Direct test client for cerebrate-graph (bypasses MLServer).
+
+  graph-client describe HOST PORT
+  graph-client run HOST PORT --inputs in.npz [--save out.npz]
+                   [--reference ref.npz] [--repeat N]
+  graph-client local MODEL.onnx --inputs in.npz --save ref.npz
+
+`local` runs the model with ONNX Runtime's Python CPU provider (on the Mac,
+for development only) to produce the reference outputs `run --reference`
+compares the Pixel's outputs against. Inputs and outputs are .npz files keyed
+by tensor name.
+
+Requires numpy; `local` also needs onnxruntime. For example:
+  uvx --with numpy --with onnxruntime python -I graph-client local ...
+"""
+import argparse
+import json
+import socket
+import sys
+import time
+from pathlib import Path
+
+import numpy as np
+
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "mlserver" / "models" / "cerebrate-graph"))
+import cerebrate_graph_protocol as protocol  # noqa: E402
+
+
+def load_npz(path: str) -> dict:
+    with np.load(path) as f:
+        return {name: f[name] for name in f.files}
+
+
+def compare(outputs: dict, reference: dict) -> bool:
+    ok = True
+    for name, ref in reference.items():
+        got = outputs.get(name)
+        if got is None:
+            print(f"  {name}: MISSING from worker output")
+            ok = False
+            continue
+        if got.shape != ref.shape or got.dtype != ref.dtype:
+            print(f"  {name}: shape/dtype {got.shape}/{got.dtype} != reference {ref.shape}/{ref.dtype}")
+            ok = False
+            continue
+        a = got.astype(np.float64).ravel()
+        b = ref.astype(np.float64).ravel()
+        diff = np.abs(a - b)
+        denom = np.linalg.norm(a) * np.linalg.norm(b)
+        cosine = float(a @ b / denom) if denom else float("nan")
+        exact = int((diff == 0).sum())
+        print(f"  {name}: max_abs_diff={diff.max():.6g} mean_abs_diff={diff.mean():.6g} "
+              f"cosine={cosine:.6f} exact={exact}/{a.size} all_zero={not a.any()}")
+    return ok
+
+
+def cmd_describe(args) -> int:
+    with socket.create_connection((args.host, args.port), timeout=args.timeout) as sock:
+        description, done = protocol.call(sock, {})
+    print(json.dumps(description, indent=2))
+    print(done)
+    return 0
+
+
+def cmd_run(args) -> int:
+    inputs = load_npz(args.inputs)
+    timings = []
+    with socket.create_connection((args.host, args.port), timeout=args.timeout) as sock:
+        for _ in range(args.repeat):
+            t0 = time.monotonic()
+            outputs, done = protocol.call(sock, inputs)
+            done["round_trip_us"] = int((time.monotonic() - t0) * 1e6)
+            timings.append(done)
+    for name, array in outputs.items():
+        print(f"{name}: {array.dtype} {array.shape}")
+    for done in timings:
+        print(done)
+    if args.repeat > 1:
+        inference = sorted(d["inference_us"] for d in timings)
+        print(f"inference_us median={inference[len(inference) // 2]} min={inference[0]} max={inference[-1]}")
+    if args.save:
+        np.savez(args.save, **outputs)
+    if args.reference:
+        print("compare against", args.reference)
+        if not compare(outputs, load_npz(args.reference)):
+            return 1
+    return 0
+
+
+def cmd_local(args) -> int:
+    import onnxruntime as ort
+
+    session = ort.InferenceSession(args.model, providers=["CPUExecutionProvider"])
+    inputs = load_npz(args.inputs)
+    t0 = time.monotonic()
+    results = session.run(None, inputs)
+    print(f"local CPU run: {int((time.monotonic() - t0) * 1e6)} us, onnxruntime {ort.__version__}")
+    outputs = {o.name: r for o, r in zip(session.get_outputs(), results)}
+    for name, array in outputs.items():
+        print(f"{name}: {array.dtype} {array.shape}")
+    np.savez(args.save, **outputs)
+    return 0
+
+
+def main() -> int:
+    parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
+    sub = parser.add_subparsers(dest="command", required=True)
+
+    p = sub.add_parser("describe")
+    p.add_argument("host")
+    p.add_argument("port", type=int)
+    p.add_argument("--timeout", type=float, default=30.0)
+    p.set_defaults(func=cmd_describe)
+
+    p = sub.add_parser("run")
+    p.add_argument("host")
+    p.add_argument("port", type=int)
+    p.add_argument("--inputs", required=True)
+    p.add_argument("--save")
+    p.add_argument("--reference")
+    p.add_argument("--repeat", type=int, default=1)
+    p.add_argument("--timeout", type=float, default=120.0)
+    p.set_defaults(func=cmd_run)
+
+    p = sub.add_parser("local")
+    p.add_argument("model")
+    p.add_argument("--inputs", required=True)
+    p.add_argument("--save", required=True)
+    p.set_defaults(func=cmd_local)
+
+    args = parser.parse_args()
+    return args.func(args)
+
+
+if __name__ == "__main__":
+    sys.exit(main())

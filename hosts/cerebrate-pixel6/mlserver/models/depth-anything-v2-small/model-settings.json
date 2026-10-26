@@ -1,0 +1,15 @@
+{
+  "name": "depth-anything-v2-small",
+  "implementation": "cerebrate_graph_runtime.CerebrateGraphRuntime",
+  "parameters": {
+    "version": "v0.1.0",
+    "extra": {
+      "cerebrate_graph_worker": "gpu-depth",
+      "cerebrate_graph_port": 8774,
+      "cerebrate_graph_model_path": "/data/local/tmp/depth_anything_v2_small.tflite",
+      "cerebrate_graph_backend": "depth-anything-v2-small-fast",
+      "cerebrate_graph_request_timeout_s": 120,
+      "cerebrate_graph_photo": "depth"
+    }
+  }
+}

@@ -1,12 +1,11 @@
 """Thin MLServer custom runtime: translates a V2 inference request into
 cerebrate-gguf's typed-frame TCP protocol and back.
 
-Doclet Service V3 Stage 3. Follows cerebrate_generate_runtime.py's
-established shape (file-backed PID-tagged refcount, duplicated
-_discover_avf_gateway()/_supervisor_request() helpers rather than a
-shared base class -- see that module's docstring for why each Cerebrate
-adapter stays independent) with two differences forced by cerebrate-gguf
-itself, not by choice:
+Doclet Service V3 Stage 3. The request handling is this adapter's own (see
+cerebrate_generate_runtime.py's docstring); the worker lifecycle -- on-demand
+start, idle stop, making room, the lost-worker retry -- is the shared
+../cerebrate-graph/cerebrate_lifecycle.py (2026-10-25). cerebrate-gguf differs
+from the other workers in two ways it forces:
 
 - START needs a second GGUF path (mmproj), not just model.
 - A request carries an image AND a prompt, not one or the other, so this
@@ -38,7 +37,8 @@ were conflated into one flag:
                dropped, so this falls out for free once LOADED stops
                being conflated with CONNECTED.
 
-`self.ready` (the MLServer-visible flag) now tracks LOADED only. A
+`self.ready` (the MLServer-visible flag) now tracks LOADED only (since
+2026-10-25: the model settings are valid; the worker itself runs on demand). A
 broken socket, EOF, or timeout mid-request invalidates *that
 connection*, not the model: drop it, fail that one item, let the next
 request attempt a fresh connect. Deliberately NOT restarting the
@@ -50,20 +50,24 @@ via its own crash detection, and that's the only thing that should ever
 invalidate LOADED.
 """
 import asyncio
-import fcntl
 import itertools
 import os
-import socket
 import struct
-import subprocess
+import sys
 import time
 
 from mlserver import MLModel
 from mlserver.codecs.base64 import Base64Codec
 from mlserver.codecs.string import StringCodec
+from mlserver.errors import MLServerError
 from mlserver.types import InferenceRequest, InferenceResponse, ResponseOutput
 
-DEFAULT_HOST = "10.70.217.78"
+# The shared lifecycle lives with the shared adapter, beside this folder.
+_SHARED = os.path.join(os.path.dirname(os.path.dirname(os.path.realpath(__file__))), "cerebrate-graph")
+if _SHARED not in sys.path:
+    sys.path.insert(0, _SHARED)
+import cerebrate_lifecycle as lifecycle  # noqa: E402
+
 DEFAULT_PORT = 8768
 CONNECT_TIMEOUT_S = 5.0
 # Measured (Stage 2): a real Granite-Docling request takes ~100s on this
@@ -76,84 +80,9 @@ CONNECT_TIMEOUT_S = 5.0
 REQUEST_TIMEOUT_S = 600.0
 MAX_FRAME_BYTES = 4 * 1024 * 1024
 
-SUPERVISOR_PORT = 8767
-SUPERVISOR_CONNECT_TIMEOUT_S = 5.0
-SUPERVISOR_COMMAND_TIMEOUT_S = 20.0
-
-# See the identical REFCOUNT_PATH rationale in cerebrate_infer_runtime.py /
-# cerebrate_generate_runtime.py -- file-backed and PID-tagged for the same
-# two reasons: MLServer's rolling-reload semantics wipe in-process/class
-# state between load() calls, and a bare counter would climb forever
-# across `systemctl restart cerebrate-mlserver` without the PID tag.
-REFCOUNT_PATH = "/tmp/cerebrate-gguf.refcount"
-
-
-def _adjust_refcount(delta: int) -> int:
-    my_pid = os.getpid()
-    with open(REFCOUNT_PATH, "a+") as f:
-        fcntl.flock(f, fcntl.LOCK_EX)
-        f.seek(0)
-        owner_pid, _, count_str = f.read().strip().partition(":")
-        count = int(count_str) if owner_pid == str(my_pid) and count_str else 0
-        count = max(0, count + delta)
-        f.seek(0)
-        f.truncate()
-        f.write(f"{my_pid}:{count}")
-        fcntl.flock(f, fcntl.LOCK_UN)
-    return count
-
-
 FRAME_DATA = 0
 FRAME_DONE = 1
 FRAME_ERROR = 2
-
-
-def _discover_avf_gateway() -> str:
-    """Duplicated from the other two adapters' identical helper -- see
-    cerebrate_generate_runtime.py's docstring for why these stay
-    independent rather than shared."""
-    try:
-        out = subprocess.check_output(
-            ["ip", "route", "show", "default"], text=True, timeout=2
-        )
-        for line in out.splitlines():
-            parts = line.split()
-            if "via" in parts:
-                return parts[parts.index("via") + 1]
-    except (subprocess.SubprocessError, OSError, ValueError):
-        pass
-    return DEFAULT_HOST
-
-
-def _supervisor_request(host: str, command: str, fields: dict) -> str:
-    """Blocking by design -- see the identical helper in the other two
-    adapters for the full rationale (duplicated intentionally)."""
-    lines = [command] + [f"{k}: {v}" for k, v in fields.items()]
-    message = ("\n".join(lines) + "\n\n").encode("utf-8")
-    with socket.create_connection((host, SUPERVISOR_PORT), timeout=SUPERVISOR_CONNECT_TIMEOUT_S) as sock:
-        sock.settimeout(SUPERVISOR_COMMAND_TIMEOUT_S)
-        sock.sendall(message)
-        sock.shutdown(socket.SHUT_WR)
-        chunks = []
-        while True:
-            chunk = sock.recv(4096)
-            if not chunk:
-                break
-            chunks.append(chunk)
-    return b"".join(chunks).decode("utf-8", "replace")
-
-
-def _ensure_worker_started(host: str, model_path: str, mmproj_path: str) -> str:
-    """START is idempotent on the supervisor side for a matching
-    (model, mmproj) pair -- same idempotency/conflict contract as the
-    other two adapters' _ensure_worker_started, extended with the second
-    GGUF path cerebrate-gguf's supervisor slot requires."""
-    response = _supervisor_request(
-        host, "START", {"worker": "gguf", "model": model_path, "mmproj": mmproj_path}
-    )
-    if not response.startswith("OK"):
-        raise RuntimeError(f"cerebrate-supervisor refused START: {response.strip()}")
-    return response
 
 
 def _log(request_id: int, event: str, **fields) -> None:
@@ -197,14 +126,11 @@ def _decode_request(payload: InferenceRequest) -> tuple:
 
 
 class CerebrateGgufRuntime(MLModel):
-    # See REFCOUNT_PATH above / the identical comment in the other two
-    # adapters for why this is file-backed, not a class attribute.
-
     async def load(self) -> bool:
         extra = {}
         if self.settings.parameters is not None:
             extra = self.settings.parameters.extra or {}
-        self._host = extra.get("cerebrate_gguf_host") or _discover_avf_gateway()
+        self._host = extra.get("cerebrate_gguf_host") or lifecycle.discover_gateway()
         self._port = int(extra.get("cerebrate_gguf_port", DEFAULT_PORT))
         self._model_path = extra.get("cerebrate_gguf_model_path")
         self._mmproj_path = extra.get("cerebrate_gguf_mmproj_path")
@@ -215,57 +141,27 @@ class CerebrateGgufRuntime(MLModel):
         self._request_timeout_s = float(
             extra.get("cerebrate_gguf_request_timeout_s", REQUEST_TIMEOUT_S)
         )
+        if not (self._model_path and self._mmproj_path):
+            print("cerebrate-gguf: model-settings.json extra needs cerebrate_gguf_model_path and cerebrate_gguf_mmproj_path")
+            self.ready = False
+            return self.ready
         self._lock = asyncio.Lock()
         self._reader = None
         self._writer = None
-        self._counted = False
         self._request_ids = itertools.count(1)
-
-        if self._model_path and self._mmproj_path:
-            try:
-                await asyncio.to_thread(
-                    _ensure_worker_started, self._host, self._model_path, self._mmproj_path
-                )
-            except (OSError, RuntimeError) as exc:
-                print(f"cerebrate-gguf: failed to start worker via cerebrate-supervisor: {exc}")
-                self.ready = False
-                return self.ready
-            await asyncio.to_thread(_adjust_refcount, 1)
-            self._counted = True
-        else:
-            print(
-                "cerebrate-gguf: cerebrate_gguf_model_path/cerebrate_gguf_mmproj_path "
-                "not both set in model-settings.json extra -- assuming the worker is "
-                "already running (legacy, pre-supervisor mode)"
-            )
-
+        self._worker = lifecycle.Worker(
+            self.name, {"worker": "gguf", "model": self._model_path, "mmproj": self._mmproj_path},
+            host=self._host, drop=self._drop_connection,
+        )
+        self._worker.activate()
         self.ready = True
         return self.ready
 
     async def unload(self) -> bool:
-        await self._drop_connection()
-        if not (getattr(self, "_model_path", None) and getattr(self, "_mmproj_path", None)):
+        stopped = await self._worker.deactivate() if getattr(self, "_worker", None) else True
+        if stopped:
             self.ready = False
-            return True
-
-        remaining = await asyncio.to_thread(_adjust_refcount, -1) if self._counted else None
-        self._counted = False
-        if remaining is not None and remaining > 0:
-            self.ready = False
-            return True
-
-        try:
-            response = await asyncio.to_thread(
-                _supervisor_request, self._host, "STOP", {"worker": "gguf"}
-            )
-        except OSError as exc:
-            print(f"cerebrate-gguf: failed to STOP worker via cerebrate-supervisor: {exc}")
-            return False
-        if not response.startswith("OK"):
-            print(f"cerebrate-gguf: supervisor STOP did not confirm: {response.strip()}")
-            return False
-        self.ready = False
-        return True
+        return stopped
 
     async def _ensure_connected(self) -> None:
         if self._writer is not None and not self._writer.is_closing():
@@ -396,7 +292,12 @@ class CerebrateGgufRuntime(MLModel):
     async def predict(self, payload: InferenceRequest) -> InferenceResponse:
         image_bytes, prompt = _decode_request(payload)
         t0 = time.perf_counter()
-        text = await self._generate(image_bytes, prompt)
+        try:
+            # A lost worker (ConnectionError) restarts once; a timeout doesn't
+            # (the caller stopped waiting; the worker may still be running).
+            text = await self._worker.run(lambda: self._generate(image_bytes, prompt))
+        except lifecycle.WorkerUnavailable as exc:
+            raise MLServerError(f"cerebrate-gguf: could not start the worker: {exc}") from exc
         elapsed_us = int((time.perf_counter() - t0) * 1_000_000)
 
         outputs = [
