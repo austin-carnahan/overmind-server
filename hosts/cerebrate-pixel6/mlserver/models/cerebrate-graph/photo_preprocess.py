@@ -94,17 +94,28 @@ def _aa_weights(in_size, out_size):
     return m, p
 
 
-def torchvision_resize_u8(rgb, out_h, out_w):
+def torchvision_resize_u8(rgb, out_h, out_w, block=256):
     """torchvision v2.Resize((out_h, out_w)) on a uint8 HWC image (bilinear,
     antialias): horizontal pass, then vertical, each in fixed point with
     rounding and clamping -- bit-exact with torch's uint8 kernel (8/8 lane
-    photos). Integer sums stay far below 2^53, so float64 BLAS is exact."""
-    x = rgb.astype(np.float64)
+    photos). Integer sums stay far below 2^53, so float64 BLAS is exact in
+    any order: each pass runs in blocks of the other axis, with the
+    intermediate in uint8 (its values are clamped integers). The whole photo
+    in float64 at once took 830 MB for 12 MP; the guest has under 1 GB."""
+    x = rgb
     for axis, size in ((1, out_w), (0, out_h)):
         m, p = _aa_weights(x.shape[axis], size)
-        acc = np.tensordot(m, np.moveaxis(x, axis, 0), axes=(1, 0))
-        x = np.moveaxis(np.clip(np.floor((acc + (1 << (p - 1))) / (1 << p)), 0, 255), 0, axis)
-    return x.astype(np.uint8)
+        other = 1 - axis
+        shape = list(x.shape)
+        shape[axis] = size
+        y = np.empty(shape, np.uint8)
+        for s0 in range(0, x.shape[other], block):
+            sl = [slice(None)] * 3
+            sl[other] = slice(s0, s0 + block)
+            acc = np.tensordot(m, np.moveaxis(x[tuple(sl)].astype(np.float64), axis, 0), axes=(1, 0))
+            y[tuple(sl)] = np.moveaxis(np.clip(np.floor((acc + (1 << (p - 1))) / (1 << p)), 0, 255), 0, axis)
+        x = y
+    return x
 
 
 OWLV2_MEAN = np.array([0.48145466, 0.4578275, 0.40821073], np.float32)
@@ -120,39 +131,37 @@ def _mirror(i, n):
     return np.where(i >= n, period - i, i)
 
 
-def _gaussian_filter1d(x, sigma, axis):
-    """scipy.ndimage.gaussian_filter1d (truncate 4.0, mode mirror), float64
-    accumulation, result in x's dtype."""
+def _gaussian_rows(gather, n, wanted, sigma, block=128):
+    """scipy.ndimage.gaussian_filter1d (truncate 4.0, mode mirror) along the
+    first axis of a length-n array, only at the rows `wanted`: gather(idx)
+    returns those input rows as float64. float64 accumulation in tap order,
+    result float32 -- per output row exactly what filtering the whole array
+    computes."""
     radius = int(4.0 * sigma + 0.5)
-    if radius == 0:
-        return x
+    if sigma <= 0 or radius == 0:
+        return gather(wanted).astype(np.float32)
     t = np.arange(-radius, radius + 1, dtype=np.float64)
     w = np.exp(-0.5 / (sigma * sigma) * t * t)
     w /= w.sum()
-    n = x.shape[axis]
-    xm = np.moveaxis(x, axis, 0).astype(np.float64)
-    out = np.zeros_like(xm)
-    for k, wk in enumerate(w):
-        out += wk * xm[_mirror(np.arange(n) + k - radius, n)]
-    return np.moveaxis(out, 0, axis).astype(x.dtype)
+    out = None
+    for b0 in range(0, len(wanted), block):
+        idx = wanted[b0:b0 + block]
+        acc = 0.0
+        for k, wk in enumerate(w):
+            acc = acc + wk * gather(_mirror(idx + k - radius, n))   # as zeros + taps, in order
+        if out is None:
+            out = np.empty((len(wanted), acc.shape[1]), np.float32)
+        out[b0:b0 + len(idx)] = acc.astype(np.float32)
+    return out
 
 
-def _zoom_linear(x, out_shape):
-    """scipy.ndimage.zoom(order=1, mode='mirror', grid_mode=True) over the
-    first two axes of an HWC float32 image: source coordinate (o + 0.5) *
-    in / out - 0.5, linear weights in float64, result float32."""
-    def taps(n_in, n_out):
-        c = (np.arange(n_out, dtype=np.float64) + 0.5) * (n_in / n_out) - 0.5
-        i0 = np.floor(c).astype(np.int64)
-        t = c - i0
-        return _mirror(i0, n_in), _mirror(i0 + 1, n_in), 1.0 - t, t
-    y0, y1, wy0, wy1 = taps(x.shape[0], out_shape[0])
-    x0, x1, wx0, wx1 = taps(x.shape[1], out_shape[1])
-    xd = x.astype(np.float64)
-    a, b = xd[y0], xd[y1]
-    out = (wy0[:, None, None] * (wx0[None, :, None] * a[:, x0] + wx1[None, :, None] * a[:, x1])
-           + wy1[:, None, None] * (wx0[None, :, None] * b[:, x0] + wx1[None, :, None] * b[:, x1]))
-    return out.astype(np.float32)
+def _zoom_taps(n_in, n_out):
+    """scipy.ndimage.zoom(order=1, mode='mirror', grid_mode=True) taps: source
+    coordinate (o + 0.5) * in / out - 0.5, linear weights in float64."""
+    c = (np.arange(n_out, dtype=np.float64) + 0.5) * (n_in / n_out) - 0.5
+    i0 = np.floor(c).astype(np.int64)
+    t = c - i0
+    return _mirror(i0, n_in), _mirror(i0 + 1, n_in), 1.0 - t, t
 
 
 def owlv2_pixels(rgb, size=960):
@@ -161,15 +170,36 @@ def owlv2_pixels(rgb, size=960):
     square, Gaussian anti-aliasing when downscaling (sigma = (factor - 1) / 2,
     scipy truncate 4, mirror), linear zoom to size x size (grid mode, mirror),
     clipped to the padded image's range, CLIP mean/std. rgb uint8 HWC ->
-    float32 [1, 3, size, size]. Ports scipy.ndimage (the guest has no scipy)."""
-    x = (rgb.astype(np.float64) * (1 / 255)).astype(np.float32)
-    h, w = x.shape[:2]
+    float32 [1, 3, size, size]. Ports scipy.ndimage (the guest has no scipy).
+    Computed only at the rows and columns the zoom samples, a channel and a
+    block of rows at a time, the padding never materialized: the same values
+    as filtering the whole padded square, which took 1.6 GB for a 12 MP
+    photo (tests/test_photo_hooks.py checks them bit for bit)."""
+    h, w = rgb.shape[:2]
     s = max(h, w)
-    x = np.pad(x, ((0, s - h), (0, s - w), (0, 0)))
     sigma = max((s / size - 1) / 2, 0.0)
-    f = x
-    if sigma > 0:
-        f = _gaussian_filter1d(_gaussian_filter1d(x, sigma, 0), sigma, 1)
-    out = np.clip(_zoom_linear(f, (size, size)), x.min(), x.max())
+    y0, y1, wy0, wy1 = _zoom_taps(s, size)
+    x0, x1, wx0, wx1 = _zoom_taps(s, size)
+    rows, cols = np.unique(np.concatenate([y0, y1])), np.unique(np.concatenate([x0, x1]))
+    ry0, ry1, cx0, cx1 = (np.searchsorted(rows, y0), np.searchsorted(rows, y1),
+                          np.searchsorted(cols, x0), np.searchsorted(cols, x1))
+    scaled = lambda v: (np.asarray(v).astype(np.float64) * (1 / 255)).astype(np.float32)
+    lo = np.float32(0) if (h < s or w < s) else scaled(rgb.min())        # the padded square's range
+    hi = scaled(rgb.max())
+    out = np.empty((size, size, 3), np.float32)
+    for c in range(3):
+        def padded_rows(idx):                 # rows of the padded square, scaled as gathered
+            r = np.zeros((len(idx), s))
+            ok = idx < h
+            r[ok, :w] = scaled(rgb[idx[ok], :, c])
+            return r
+        f = _gaussian_rows(padded_rows, s, rows, sigma)                    # axis 0, at the sampled rows
+        ft = f.T
+        f = _gaussian_rows(lambda idx: ft[idx].astype(np.float64), s, cols, sigma).T   # axis 1, at the sampled columns
+        a, b = f.astype(np.float64)[ry0], f.astype(np.float64)[ry1]
+        z = (wy0[:, None] * (wx0[None, :] * a[:, cx0] + wx1[None, :] * a[:, cx1])
+             + wy1[:, None] * (wx0[None, :] * b[:, cx0] + wx1[None, :] * b[:, cx1]))
+        out[..., c] = z.astype(np.float32)
+    out = np.clip(out, lo, hi)
     out = (out - OWLV2_MEAN) / OWLV2_STD
     return np.ascontiguousarray(out.transpose(2, 0, 1))[None].astype(np.float32)

@@ -45,6 +45,37 @@ def bilinear(x, out_h, out_w, scale_h=None, scale_w=None, rows=None, cols=None):
     return (top * wy0[:, None] + bot * wy1[:, None]).astype(np.float32)
 
 
+def bilinear_rows(x, out_h, out_w, fn, rows=256):
+    """bilinear(x, out_h, out_w) mapped through fn (e.g. a threshold), built
+    in strips of output rows: the same values, without a float32 array of the
+    full output (a 12 MP photo's mask is 48 MB per channel, and the guest has
+    under 1 GB)."""
+    out = None
+    for r in range(0, out_h, rows):
+        part = fn(bilinear(x, out_h, out_w, rows=(r, min(r + rows, out_h))))
+        if out is None:
+            out = np.empty((part.shape[0], out_h, out_w), part.dtype)
+        out[:, r:r + part.shape[1]] = part
+    return out
+
+
+def inpaint_window(size, bbox, side_min=512, context=2.0):
+    """The region of a photo an inpainting model at a fixed size (MI-GAN:
+    512) should see: a square, where the photo allows, of at least side_min
+    px and `context` times the hole's extent, centred on the hole (bbox =
+    x0, y0, x1, y1) and clamped to the photo (size = w, h). The whole photo
+    squashed to 512 left a 12 MP photo's hole a few pixels wide and the fill
+    an 8x blur. Shared by the MLServer hook and Cerebrate MCP's inpaint."""
+    w, h = size
+    x0, y0, x1, y1 = bbox
+    side = max(side_min, math.ceil(context * max(x1 - x0, y1 - y0)))
+    ww, wh = min(side, w), min(side, h)
+    cx, cy = (x0 + x1) // 2, (y0 + y1) // 2
+    wx = min(max(cx - ww // 2, 0), w - ww)
+    wy = min(max(cy - wh // 2, 0), h - wh)
+    return wx, wy, wx + ww, wy + wh
+
+
 def _nms(boxes, scores, iou):
     """Greedy NMS as torchvision.ops.nms: highest score first, suppress
     IoU > iou."""

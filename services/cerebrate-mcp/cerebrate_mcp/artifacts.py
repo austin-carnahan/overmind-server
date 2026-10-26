@@ -49,13 +49,13 @@ class Artifacts:
         return path.read_bytes()
 
     # ---- outputs ----------------------------------------------------------
-    def new_run(self) -> str:
+    def new_run(self, prefix: str = "") -> str:
         self.root.mkdir(parents=True, exist_ok=True)
         cutoff = time.time() - self.ttl_s
         for d in self.root.iterdir():
             if d.is_dir() and d.stat().st_mtime < cutoff:
                 shutil.rmtree(d, ignore_errors=True)
-        run = time.strftime("%Y%m%d-%H%M%S-") + secrets.token_hex(3)
+        run = prefix + time.strftime("%Y%m%d-%H%M%S-") + secrets.token_hex(3)
         (self.root / run).mkdir()
         return run
 

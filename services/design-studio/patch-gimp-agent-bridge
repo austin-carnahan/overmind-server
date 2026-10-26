@@ -1,0 +1,41 @@
+#!/usr/bin/env python3
+"""Harden the GIMP Agent MCP bridge plug-in (gimp-agent-mcp, third party):
+its gimp_pdb_call refuses the PDB procedures that run caller-supplied code --
+the Python and Script-Fu evaluators and consoles, and Script-Fu's network
+server. Agents call named operations, never code (services/design-studio
+README, "Agent capabilities"). The bridge's own Python tool is already off
+(GIMP_AGENT_ALLOW_PYTHON=0); these went around it.
+
+Idempotent (a marker line); re-run after any bridge upgrade or reinstall --
+install-gimp-plugins does. Fails loudly if the bridge's code no longer has
+the expected shape. GIMP must restart the bridge to load it.
+  patch-gimp-agent-bridge [path/to/gimp-agent-bridge.py]"""
+import os
+import sys
+
+BLOCKED = ("python-fu-eval", "python-fu-console", "plug-in-script-fu-eval", "plug-in-script-fu-console",
+           "plug-in-script-fu-text-console", "plug-in-script-fu-server", "extension-script-fu")
+MARK = "# overmind-server: blocked code-running procedures"
+IMPORT_ANCHOR = "import agent_bridge_core as core  # noqa: E402\n"
+CALL_ANCHOR = '    def op_pdb_call(self, params):\n        proc = self._lookup(str(params["name"]))\n'
+
+default = os.path.expanduser("~/Library/Application Support/GIMP/3.2/plug-ins/gimp-agent-bridge/gimp-agent-bridge.py")
+path = sys.argv[1] if len(sys.argv) > 1 else default
+src = open(path).read()
+if MARK in src:
+    print(f"already patched: {path}")
+    sys.exit(0)
+if src.count(IMPORT_ANCHOR) != 1 or src.count(CALL_ANCHOR) != 1:
+    sys.exit(f"the bridge's code changed shape; not patched: {path}")
+src = src.replace(IMPORT_ANCHOR, IMPORT_ANCHOR + f"\n{MARK} (services/design-studio/patch-gimp-agent-bridge)\n"
+                  f"OVERMIND_BLOCKED = frozenset({BLOCKED!r})\n")
+src = src.replace(CALL_ANCHOR, '    def op_pdb_call(self, params):\n'
+                  '        if str(params["name"]).strip().lower() in OVERMIND_BLOCKED:\n'
+                  '            raise BridgeError(f"{params[\'name\']} runs arbitrary code; blocked for agents (overmind-server)")\n'
+                  '        proc = self._lookup(str(params["name"]))\n')
+tmp = path + ".overmind-tmp"
+with open(tmp, "w") as f:
+    f.write(src)
+os.chmod(tmp, os.stat(path).st_mode)
+os.replace(tmp, path)
+print(f"patched: {path}")

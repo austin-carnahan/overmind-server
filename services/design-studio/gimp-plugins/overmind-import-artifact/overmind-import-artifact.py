@@ -1,8 +1,22 @@
 #!/usr/bin/env python3
-"""GIMP 3 plug-in: import Overmind artifacts (e.g. Cerebrate inpaint patches)
-as layers, and keep each object's repairs in the object's own layer group.
+"""GIMP 3 plug-in: the GIMP end of Overmind's artifact transport. Publish
+what the document currently looks like for Cerebrate to work on, import
+results (e.g. inpaint patches) as layers, and keep each object's repairs in
+the object's own layer group.
 
-Two PDB procedures, called by agents through the GIMP MCP's gimp_pdb_call:
+Three PDB procedures, called by agents through the GIMP MCP's gimp_pdb_call:
+
+  overmind-publish(image, mode, x, y, width, height, format, name)
+      -> snapshot, image-url, mask-url, x, y, width, height
+      Upload the visible composite (what the canvas shows; hidden layers
+      excluded) of a region, and the selection over it as a mask, to the
+      artifact service; Cerebrate tools take the URLs as inputs.
+      - mode "selection": the window an inpainting model needs around the
+        selection (>= 512 px, twice its extent; photo_postprocess.inpaint_window)
+      - mode "image": the whole canvas (results then use document coordinates)
+      - mode "region": x, y, width, height
+      The snapshot's provenance (its region and a hash of its pixels) stays in
+      the document; results computed from it are imported with snapshot=.
 
   overmind-make-object-group(image, layer, name) -> group
       The layer's object group: its parent group if it is already in one,
@@ -12,7 +26,7 @@ Two PDB procedures, called by agents through the GIMP MCP's gimp_pdb_call:
       and where it sat), so later patches, whose offsets are in the photo's
       pixels, land where the object is now.
 
-  overmind-import-artifact(image, url, x, y, name, target, group-name, context-url, force)
+  overmind-import-artifact(image, url, x, y, name, target, group-name, context-url, snapshot, force)
       -> layer, group
       Fetch the image at url and add it as a layer.
       - No target: a new top layer at (x, y), image coordinates.
@@ -24,17 +38,28 @@ Two PDB procedures, called by agents through the GIMP MCP's gimp_pdb_call:
         the fill): compared with what the target shows at the placement spot
         first; a mismatch means a misplaced or stale patch, and the import is
         refused unless force. The check has to see enough of the ring.
+      - snapshot (a result computed from overmind-publish's snapshot): (x, y)
+        are in the snapshot's coordinates. The document must still show
+        exactly what was published there -- the region is re-rendered and its
+        hash compared -- or the import is refused (publish a new snapshot)
+        unless force: an optimistic concurrency check, so a fill computed
+        before someone edited that area is never silently applied.
       One undo step. Returns the new layer and its group.
 
 Why fetching here: GIMP's own file loading can't use a URL on macOS (the MCP
 bridge turns file arguments into local paths; GIO has no http backend), and
 agents should pass references, not pixels -- services/cerebrate-mcp/README.md,
 "GIMP handoff". Fetches are limited to the artifact service (allowed URL
-prefixes), no redirects, a size cap, and PNG/JPEG/WebP only. Overrides go in
-overmind-import-artifact.json next to this file:
-  {"allowed_prefixes": ["http://artifacts.home.arpa/artifacts/"], "max_bytes": 67108864}
+prefixes), no redirects, a size cap, and PNG/JPEG/WebP only. Publishing
+needs this host's upload token (create-only; services/cerebrate-mcp,
+"Uploads"). Settings go in overmind-import-artifact.json next to this file
+(0600 -- it holds the token):
+  {"allowed_prefixes": ["http://artifacts.home.arpa/artifacts/"], "max_bytes": 67108864,
+   "upload_url": "http://artifacts.home.arpa/artifacts/upload", "token": "<host>.<secret>"}
 """
+import hashlib
 import json
+import math
 import os
 import sys
 import tempfile
@@ -48,9 +73,10 @@ gi.require_version("Gimp", "3.0")
 gi.require_version("Gegl", "0.4")
 from gi.repository import Gegl, Gimp, Gio, GLib, GObject  # noqa: E402
 
-IMPORT, GROUP = "overmind-import-artifact", "overmind-make-object-group"
-ANCHOR = "overmind-object-anchor"
-DEFAULTS = {"allowed_prefixes": ["http://artifacts.home.arpa/artifacts/"], "max_bytes": 64 * 1024 * 1024}
+IMPORT, GROUP, PUBLISH = "overmind-import-artifact", "overmind-make-object-group", "overmind-publish"
+ANCHOR, SNAPSHOTS, KEEP_SNAPSHOTS = "overmind-object-anchor", "overmind-snapshots", 20
+DEFAULTS = {"allowed_prefixes": ["http://artifacts.home.arpa/artifacts/"], "max_bytes": 64 * 1024 * 1024,
+            "upload_url": "http://artifacts.home.arpa/artifacts/upload", "token": ""}
 SIGNATURES = ((b"\x89PNG\r\n\x1a\n", ".png"), (b"\xff\xd8\xff", ".jpg"), (b"RIFF", ".webp"))
 # Context check: per pixel, the largest channel difference; the ring "matches"
 # when the mean is small and few pixels differ a lot. Decoder differences
@@ -184,6 +210,86 @@ def check_context(image, drawable, ctx_layer, x, y):
     return {"pixels": n, "mean": round(mean, 2), "outliers": round(frac, 4)}
 
 
+# ---- snapshots ------------------------------------------------------------------------
+def inpaint_window(size, bbox, side_min=512, context=2.0):
+    """photo_postprocess.inpaint_window's rule (services/cerebrate-mcp): a
+    square of at least side_min and context x the selection's extent, centred
+    on it, clamped to the canvas."""
+    w, h = size
+    x0, y0, x1, y1 = bbox
+    side = max(side_min, math.ceil(context * max(x1 - x0, y1 - y0)))
+    ww, wh = min(side, w), min(side, h)
+    cx, cy = (x0 + x1) // 2, (y0 + y1) // 2
+    wx = min(max(cx - ww // 2, 0), w - ww)
+    wy = min(max(cy - wh // 2, 0), h - wh)
+    return wx, wy, ww, wh
+
+
+def visible_rgba(image, x, y, w, h):
+    """The visible composite over an image-space rect: what the canvas shows."""
+    vis = Gimp.Layer.new_from_visible(image, image, "overmind-snapshot")
+    try:
+        return bytes(rgba(vis, x, y, w, h))
+    finally:
+        vis.delete()
+
+
+def selection_gray(image, x, y, w, h):
+    sel = image.get_selection()
+    return bytes(sel.get_buffer().get(Gegl.Rectangle.new(x, y, w, h), 1.0, "Y u8", Gegl.AbyssPolicy.NONE))
+
+
+def encode(data, w, h, gray, fmt, tmps):
+    """Raw pixels -> PNG/JPEG bytes, through a temporary GIMP image."""
+    img = Gimp.Image.new(w, h, Gimp.ImageBaseType.GRAY if gray else Gimp.ImageBaseType.RGB)
+    try:
+        lay = Gimp.Layer.new(img, "x", w, h, Gimp.ImageType.GRAY_IMAGE if gray else Gimp.ImageType.RGBA_IMAGE, 100,
+                             Gimp.LayerMode.NORMAL)
+        img.insert_layer(lay, None, 0)
+        buf = lay.get_buffer()
+        buf.set(Gegl.Rectangle.new(0, 0, w, h), "Y u8" if gray else "R'G'B'A u8", data)
+        buf.flush()
+        fd, tmp = tempfile.mkstemp(prefix="overmind-publish-", suffix=".png" if gray or fmt == "png" else ".jpg")
+        os.close(fd)
+        tmps.append(tmp)
+        if not Gimp.file_save(Gimp.RunMode.NONINTERACTIVE, img, Gio.File.new_for_path(tmp), None):
+            raise Refused("GIMP could not encode the snapshot")
+        with open(tmp, "rb") as f:
+            return f.read()
+    finally:
+        img.delete()
+
+
+def upload(data, name, cfg):
+    if not cfg.get("token"):
+        raise Refused("no upload token configured (overmind-import-artifact.json)")
+    req = urllib.request.Request(f"{cfg['upload_url']}?name={name}", data=data, method="POST",
+                                 headers={"Authorization": f"Bearer {cfg['token']}", "User-Agent": PUBLISH,
+                                          "Content-Type": "application/octet-stream"})
+    try:
+        with urllib.request.build_opener(_NoRedirect).open(req, timeout=120) as r:
+            return json.load(r)
+    except urllib.error.HTTPError as exc:
+        raise Refused(f"upload refused: HTTP {exc.code} {exc.read().decode(errors='replace').strip()}") from exc
+
+
+def snapshots(image):
+    p = image.get_parasite(SNAPSHOTS)
+    return json.loads(bytes(p.get_data())) if p is not None else {}
+
+
+def remember(image, snap_id, entry):
+    d = snapshots(image)
+    d[snap_id] = entry
+    for k in sorted(d, key=lambda k: d[k]["t"])[:-KEEP_SNAPSHOTS]:
+        del d[k]
+    image.attach_parasite(Gimp.Parasite.new(SNAPSHOTS, Gimp.PARASITE_PERSISTENT, list(json.dumps(d).encode())))
+
+
+def snapshot_hash(image, x, y, w, h):
+    return hashlib.sha256(visible_rgba(image, x, y, w, h)).hexdigest()
+
+
 # ---- procedures -----------------------------------------------------------------------
 def _error(procedure, name, exc):
     return procedure.new_return_values(Gimp.PDBStatusType.EXECUTION_ERROR,
@@ -212,16 +318,68 @@ def run_group(procedure, config_, data):
                                             GObject.Value(Gimp.GroupLayer, group)])
 
 
+def run_publish(procedure, config_, data):
+    get = config_.get_property
+    image, mode, fmt = get("image"), (get("mode") or "selection").lower(), (get("format") or "png").lower()
+    cfg, tmps = config(), []
+    try:
+        W, H = image.get_width(), image.get_height()
+        ok, nonempty, sx0, sy0, sx1, sy1 = Gimp.Selection.bounds(image)
+        if mode == "selection":
+            if not nonempty:
+                raise Refused("mode selection: the selection is empty")
+            x, y, w, h = inpaint_window((W, H), (sx0, sy0, sx1, sy1))
+        elif mode == "image":
+            x, y, w, h = 0, 0, W, H
+        elif mode == "region":
+            x, y, w, h = get("x"), get("y"), get("width"), get("height")
+            if w <= 0 or h <= 0 or x < 0 or y < 0 or x + w > W or y + h > H:
+                raise Refused(f"region {x},{y} {w}x{h} isn't inside the {W}x{H} canvas")
+        else:
+            raise Refused("mode: selection, image or region")
+        if fmt not in ("png", "jpeg"):
+            raise Refused("format: png or jpeg")
+        pixels = visible_rgba(image, x, y, w, h)
+        name = (get("name") or "snapshot").lower()
+        img_ref = upload(encode(pixels, w, h, False, fmt, tmps), name, cfg)
+        mask_url = ""
+        if nonempty:
+            mask_url = upload(encode(selection_gray(image, x, y, w, h), w, h, True, "png", tmps), name + "-mask", cfg)["url"]
+        snap_id = img_ref["uri"].split("/")[2]                     # its upload run: unique
+        remember(image, snap_id, {"x": x, "y": y, "w": w, "h": h, "sha256": hashlib.sha256(pixels).hexdigest(),
+                                  "t": __import__("time").time()})
+    except Exception as exc:
+        return _error(procedure, PUBLISH, exc)
+    finally:
+        for t in tmps:
+            if os.path.exists(t):
+                os.unlink(t)
+    return Gimp.ValueArray.new_from_values([
+        GObject.Value(Gimp.PDBStatusType, Gimp.PDBStatusType.SUCCESS),
+        GObject.Value(GObject.TYPE_STRING, snap_id), GObject.Value(GObject.TYPE_STRING, img_ref["url"]),
+        GObject.Value(GObject.TYPE_STRING, mask_url),
+        GObject.Value(GObject.TYPE_INT, x), GObject.Value(GObject.TYPE_INT, y),
+        GObject.Value(GObject.TYPE_INT, w), GObject.Value(GObject.TYPE_INT, h)])
+
+
 def run_import(procedure, config_, data):
     get = config_.get_property
     image, url, x, y = get("image"), get("url"), get("x"), get("y")
-    target, force, ctx_url = get("target"), get("force"), get("context-url")
+    target, force, ctx_url, snap_id = get("target"), get("force"), get("context-url"), get("snapshot")
     name = get("name") or os.path.basename(urlsplit(url).path) or "artifact"
     cfg, tmps = config(), []
     try:
         group = existing_group(target) if target is not None and (target.is_group() or target.get_parent() is not None) else None
         dx, dy = (0, 0)
-        if group is not None:
+        if snap_id:
+            snap = snapshots(image).get(snap_id)
+            if snap is None:
+                raise Refused(f"snapshot {snap_id} isn't one of this document's (publish it from this image)")
+            dx, dy = snap["x"], snap["y"]                           # snapshot coordinates -> document
+            if not force and snapshot_hash(image, snap["x"], snap["y"], snap["w"], snap["h"]) != snap["sha256"]:
+                raise Refused(f"the document changed in snapshot {snap_id}'s region since it was published; "
+                              "publish a new snapshot and run again (or force)")
+        elif group is not None:
             try:
                 dx, dy = displacement(image, group)
             except Refused:
@@ -230,7 +388,7 @@ def run_import(procedure, config_, data):
         px, py = x + dx, y + dy
         image.undo_group_start()
         try:
-            if target is not None and ctx_url and not force:
+            if target is not None and ctx_url and not force and not snap_id:
                 ctx_layer = load_layer(image, ctx_url, cfg, tmps)   # loaded, never inserted
                 try:
                     # the ring starts CONTEXT_PX before the patch, less where the photo's edge clipped it
@@ -266,7 +424,7 @@ class OvermindArtifacts(Gimp.PlugIn):
         return False
 
     def do_query_procedures(self):
-        return [IMPORT, GROUP]
+        return [IMPORT, GROUP, PUBLISH]
 
     def do_create_procedure(self, name):
         rw = GObject.ParamFlags.READWRITE
@@ -279,6 +437,14 @@ class OvermindArtifacts(Gimp.PlugIn):
                 "lone layer), above the target, at (x, y) in photo pixels plus the group's movement since its anchor; "
                 "with context-url, the photo's pixels around the fill must match the target there, or the import is "
                 "refused unless force. One undo step. Returns the layer and its group.", name)
+        elif name == PUBLISH:
+            procedure = Gimp.Procedure.new(self, name, Gimp.PDBProcType.PLUGIN, run_publish, None)
+            procedure.set_documentation(
+                "Publish what the canvas shows (a region, and the selection as a mask) to Overmind's artifact service",
+                "Uploads the visible composite of the selection's inpainting window (mode selection), the whole canvas "
+                "(image) or x/y/width/height (region), and the selection over it as a mask, with this host's upload "
+                "token. Returns the snapshot id, the image and mask URLs (for Cerebrate) and the region. The snapshot's "
+                "provenance stays in the document, for importing results with snapshot=.", name)
         else:
             procedure = Gimp.Procedure.new(self, name, Gimp.PDBProcType.PLUGIN, run_group, None)
             procedure.set_documentation(
@@ -297,9 +463,22 @@ class OvermindArtifacts(Gimp.PlugIn):
             procedure.add_layer_argument("target", "Target", "Layer or group the patch repairs (optional)", True, rw)
             procedure.add_string_argument("group-name", "Group name", "Name for a new group (default: the target's)", "", rw)
             procedure.add_string_argument("context-url", "Context URL", "Cerebrate inpaint context, for the check", "", rw)
+            procedure.add_string_argument("snapshot", "Snapshot", "overmind-publish snapshot the result was computed from", "", rw)
             procedure.add_boolean_argument("force", "Force", "Place even if the check fails", False, rw)
             procedure.add_layer_return_value("layer", "Layer", "The new layer", False, rw)
             procedure.add_group_layer_return_value("group", "Group", "Its group (none without target)", True, rw)
+        elif name == PUBLISH:
+            procedure.add_string_argument("mode", "Mode", "selection, image or region", "selection", rw)
+            procedure.add_int_argument("x", "X", "Region x (mode region)", 0, GLib.MAXINT, 0, rw)
+            procedure.add_int_argument("y", "Y", "Region y (mode region)", 0, GLib.MAXINT, 0, rw)
+            procedure.add_int_argument("width", "Width", "Region width (mode region)", 0, GLib.MAXINT, 0, rw)
+            procedure.add_int_argument("height", "Height", "Region height (mode region)", 0, GLib.MAXINT, 0, rw)
+            procedure.add_string_argument("format", "Format", "png or jpeg (the mask is always png)", "png", rw)
+            procedure.add_string_argument("name", "Name", "File name stem", "snapshot", rw)
+            for rv, nick in (("snapshot", "Snapshot id"), ("image-url", "Image URL"), ("mask-url", "Mask URL (empty without a selection)")):
+                procedure.add_string_return_value(rv, nick, nick, "", rw)
+            for rv in ("x", "y", "width", "height"):
+                procedure.add_int_return_value(rv, rv, f"Snapshot region {rv}", 0, GLib.MAXINT, 0, rw)
         else:
             procedure.add_layer_argument("layer", "Layer", "The object's layer", False, rw)
             procedure.add_string_argument("name", "Name", "Group name (default: the layer's)", "", rw)

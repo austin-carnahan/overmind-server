@@ -47,9 +47,16 @@ these notes say otherwise.
   It worked earlier the same day, so it depends on the phone's load.
 
 ### Text-prompted segmentation (EfficientSAM3)
-- **2026-10-26, bedroom.jpg, full 4000×3000.** It OOM-killed MLServer: the
-  hook upsamples all kept masks to full resolution as float32. The MCP now
-  scales photos over 2048 px down first, and MLServer has survived since.
+- **2026-10-26, bedroom.jpg, full 4000×3000.** It OOM-killed MLServer.
+  - **The first guess was the masks.** The hook upsamples all kept masks to
+    full resolution as float32. The MCP scaled photos over 2048 px down as a
+    workaround.
+  - **Measured later the same day:** most of it was the host-side **resize to
+    1008 (+832 MB)**, plus about 140 MB per mask. OWLv2's preprocessing was
+    worse still: +1.6 GB and 14.5 s at 12 MP.
+  - **The fix is in the hooks:** about 240 MB for the whole EfficientSAM3
+    hook, with bit-identical outputs. The MCP's scaling was removed. See
+    `hosts/cerebrate-pixel6/mlserver/README.md`, "Phone photos".
 - **2026-10-26, bedroom.jpg at 2048, prompts "wicker lamp", "lamp", "table
   lamp", "vase".** No instances returned. The presence scores were 0.18,
   **0.73**, 0.19 and 0.11, so it believed a lamp was there but no instance
@@ -155,8 +162,9 @@ Run these when a test touches the step anyway.
   footprint to the user and say so.
 - **Inpaint window:** a context factor of 3× instead of 2×, or a minimum of
   768 px, on small objects. Does more surrounding help or blur?
-- **EfficientSAM3 threshold:** expose `threshold` (the hook supports it). Does
-  0.3 recover the lamp, and at what false-positive cost?
+- **EfficientSAM3 threshold:** now exposed on `segment_by_text` (from the next
+  deploy). Does 0.3 recover the lamp, and at what false-positive cost? The
+  recipe already says to retry at 0.3 when presence is high.
 - **Named objects:** OWLv2 → EdgeSAM vs. EfficientSAM3 vs. RF-DETR → EdgeSAM,
   on the same phrases, when the phone has the memory.
 - **Box → mask quality:** SAM 2.1 (`box-refinement@quality`) vs. EdgeSAM on

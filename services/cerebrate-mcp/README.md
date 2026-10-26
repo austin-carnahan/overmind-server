@@ -24,7 +24,7 @@ not per model, plus discovery:
 | `list_capabilities` | — | — | → every tool's callable endpoints, the tasks and their selections, the models |
 | `segment_region` | `photo-box-masks-v1` | `box-refinement` (EdgeSAM; `@quality` = SAM 2.1) | image, boxes → per box: score, polygons, compact mask, `mask_png` |
 | `detect_objects` | `photo-detections-v1` | `fixed-class-segmentation` (RF-DETR; `prompt-free-segmentation` = YOLOE) | image → labels, scores, boxes, polygons, compact masks (PNGs optional) |
-| `segment_by_text` | `photo-text-segmentation-v1` | `text-prompted-segmentation` (EfficientSAM3) | image, phrases → per phrase: presence, instances with polygons and mask PNGs (photos over 2048 px segmented scaled down) |
+| `segment_by_text` | `photo-text-segmentation-v1` | `text-prompted-segmentation` (EfficientSAM3) | image, phrases, optional `threshold` → per phrase: presence, instances with polygons and mask PNGs |
 | `detect_by_text` | `photo-text-detection-v1` | `open-vocabulary-detection` (OWLv2) | image, queries → boxes per query |
 | `estimate_depth` | `photo-depth-v1` | `relative-depth` (Depth Anything) | image → range, 16-bit depth PNG |
 | `inpaint` | `photo-inpaint-v1` | `inpainting` (MI-GAN) | image, mask (grown 7 px by default) → RGBA patch of the filled pixels + offset (whole photo with `composite`) |
@@ -121,21 +121,41 @@ With `CEREBRATE_MCP_PUBLIC_URL` set, every output file also has a `url`:
 - **Mask growing.** Growing the mask with PIL's MaxFilter took 15 s on a 12 MP
   mask on the Pi; `cv2.dilate` gives identical output in 0.7 s.
 
-### Large photos and text segmentation
+### Uploads
 
-`segment_by_text` sends photos over 2048 px scaled down, and maps boxes,
-masks and polygons back to the photo's pixels (`segmented_at` gives the size
-used).
+`POST /artifacts/upload?name=<stem>` creates one artifact from the request
+body. It's how GIMP publishes a snapshot of its document
+([`overmind-publish`](../design-studio/gimp-plugins/overmind-import-artifact/overmind-import-artifact.py)).
+Uploads are ordinary inputs to every tool, by URI or URL.
 
-- **Why.** EfficientSAM3's hook upsamples every kept mask to the photo as
-  float32 at once, so a 12 MP phone photo got MLServer OOM-killed on the
-  Pixel's 959 MB guest (2026-10-26).
-- **No loss.** The model sees 1008 px and predicts 288 px masks, so nothing is
-  lost.
-- **Interim.** Until the hook upsamples mask by mask, which is an MLServer
-  change.
+- **Create-only.** An upload makes a new artifact, with the usual 24 h
+  lifetime and a signed URL, and can't read, overwrite or delete anything.
+- **Per-host tokens.** Each host sends `Authorization: Bearer <host>.<secret>`.
+  Only a hash of the secret is stored, in
+  `/var/lib/overmind/cerebrate-mcp/upload-tokens.json`. Changes take effect
+  without a restart:
 
-The other contracts handled 12 MP photos (RF-DETR, YOLOE, EdgeSAM).
+  ```bash
+  docker exec cerebrate-mcp python -m cerebrate_mcp.uploads add macbook-m1   # prints the token once
+  docker exec cerebrate-mcp python -m cerebrate_mcp.uploads revoke macbook-m1
+  docker exec cerebrate-mcp python -m cerebrate_mcp.uploads list
+  ```
+
+- **Limits:** PNG or JPEG only (checked by decoding), 32 MB
+  (`CEREBRATE_MCP_UPLOAD_MAX_MB`), and 500 uploads per host per day
+  (`CEREBRATE_MCP_UPLOAD_DAILY_MAX`, counted from the host's `up-<host>-<date>`
+  folders).
+- **Plain HTTP, accepted for now.** Tokens travel over plain HTTP on the LAN,
+  like every `*.home.arpa` site, because the DNS plan defers HTTPS. Revisit
+  together with that plan.
+
+### Large photos
+
+Phone photos (12 MP) go to the models as sent. The MLServer hooks do their
+host steps in bounded memory (see
+[the MLServer README](../../hosts/cerebrate-pixel6/mlserver/README.md#phone-photos-host-steps-in-bounded-memory-prepared-2026-10-26)).
+An interim workaround that shrank `segment_by_text`'s photos was removed
+when the hooks were fixed.
 
 ## Adding models and contracts
 
@@ -288,6 +308,20 @@ Buckminster's recipe is
 4. `inpaint` patch URL → GIMP's
    [`overmind-import-artifact`](../design-studio/gimp-plugins/overmind-import-artifact/overmind-import-artifact.py)
    at the offset.
+
+**Working on the current document (snapshots).** Once a document has been
+edited, Cerebrate works on what it shows now, not on the source photo:
+
+1. GIMP's `overmind-publish` uploads the visible composite (the selection's
+   inpainting window, or the whole canvas) and the selection as a mask. It
+   keeps the snapshot's region and pixel hash in the document.
+2. The agent passes the URLs to a Cerebrate tool.
+3. `overmind-import-artifact` with `snapshot=` places the result at the
+   snapshot's origin plus its offset. It first re-renders that region and
+   compares hashes: an optimistic concurrency check. A document edited in the
+   meantime is refused rather than silently patched.
+
+The agent only ever handles URLs.
 
 What the 2026-10-26 spike established:
 - **GIMP can't load a URL itself on macOS.**

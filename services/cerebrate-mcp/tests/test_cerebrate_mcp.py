@@ -4,7 +4,8 @@ FastMCP's in-memory client: tool discovery, capability derivation (registry
 x readiness x contracts), staged/unready exclusion, a newly registered model
 appearing with no code change, target resolution, request/response mapping
 for segment_region, artifacts, polygons, signed artifact URLs, the inpaint
-window and patch, scaled-down text segmentation, and error reporting.
+window and patch, text segmentation's threshold, token-gated uploads, and
+error reporting.
   cd services/cerebrate-mcp && python -m unittest discover -s tests -v"""
 import asyncio
 import base64
@@ -138,7 +139,7 @@ class CerebrateMCP(unittest.TestCase):
                                if (m.get("serving") or {}).get("mlserver_model")}
         FakeMLServer.states.update({"cerebrate-infer": "READY", "cerebrate-generate": "READY"})
         FakeMLServer.requests, FakeMLServer.fail_with, FakeMLServer.seen_sizes = [], None, []
-        for k in ("CEREBRATE_MCP_PUBLIC_URL", "CEREBRATE_MCP_TEXT_SEG_MAX_SIDE"):
+        for k in ("CEREBRATE_MCP_PUBLIC_URL", "CEREBRATE_MCP_UPLOAD_MAX_MB", "CEREBRATE_MCP_UPLOAD_DAILY_MAX"):
             os.environ.pop(k, None)
         from cerebrate_mcp.server import create_app
         self.app = create_app()
@@ -328,7 +329,7 @@ class CerebrateMCP(unittest.TestCase):
         return hmac.new(key, f"{run}/{name}:{exp}".encode(), hashlib.sha256).hexdigest()[:32]
 
     def test_inpaint_window_and_composite(self):
-        from cerebrate_mcp.contracts import inpaint_window
+        inpaint_window = post.inpaint_window
         self.assertEqual(inpaint_window((4000, 3000), (2165, 1384, 2272, 1552)), (1962, 1212, 2474, 1724))
         self.assertEqual(inpaint_window((4000, 3000), (3900, 2900, 4000, 3000)), (3488, 2488, 4000, 3000))  # clamped
         self.assertEqual(inpaint_window((4000, 3000), (1000, 1000, 2000, 1500)), (500, 250, 2500, 2250))   # 2x context
@@ -346,24 +347,52 @@ class CerebrateMCP(unittest.TestCase):
         expect[600:640, 800:860] = FILL
         self.assertTrue(np.array_equal(full, expect))
 
-    def test_text_segmentation_scales_large_photos(self):
-        os.environ["CEREBRATE_MCP_TEXT_SEG_MAX_SIDE"] = "32"
-        from cerebrate_mcp.server import create_app
-        self.app = create_app()
-        out = self.call("segment_by_text", image=base64.b64encode(PHOTO).decode(), prompts=["lamp"])
-        self.assertEqual(FakeMLServer.seen_sizes[-1], (32, 24))
-        self.assertEqual((out["image"], out["segmented_at"]), ({"width": W, "height": H}, {"width": 32, "height": 24}))
+    def test_text_segmentation_threshold(self):
+        img = base64.b64encode(PHOTO).decode()
+        out = self.call("segment_by_text", image=img, prompts=["lamp"], threshold=0.3)
+        self.assertEqual(FakeMLServer.seen_sizes[-1], (W, H))                 # the photo as sent, full size
+        self.assertEqual(FakeMLServer.requests[-1][1].get("parameters"), {"threshold": 0.3})
         d = out["prompts"][0]["detections"][0]
-        self.assertEqual(d["box"], [16.0, 12.0, 48.0, 36.0])
-        self.assertEqual(d["polygons"][0]["points"], [16.0, 12.0, 16.0, 36.0, 48.0, 36.0, 48.0, 12.0])
-        full = box_mask([16, 12, 48, 36])
-        self.assertTrue(np.array_equal(post.decode_mask(d["mask"], (H, W)), full))
-        self.assertTrue(np.array_equal(np.asarray(Image.open(d["mask_png"]["path"])) > 0, full))
-        os.environ.pop("CEREBRATE_MCP_TEXT_SEG_MAX_SIDE")
+        self.assertEqual(d["polygons"][0]["points"], [16, 12, 16, 36, 48, 36, 48, 12])
+        self.call("segment_by_text", image=img, prompts=["lamp"])
+        self.assertNotIn("threshold", FakeMLServer.requests[-1][1].get("parameters") or {})
+        with self.assertRaisesRegex(ToolError, "threshold"):
+            self.call("segment_by_text", image=img, prompts=["lamp"], threshold=1.5)
+
+    def test_uploads(self):
+        from starlette.testclient import TestClient
+        from cerebrate_mcp.server import create_app
+        from cerebrate_mcp.uploads import Tokens
+        os.environ.update({"CEREBRATE_MCP_PUBLIC_URL": "http://artifacts.test", "CEREBRATE_MCP_UPLOAD_MAX_MB": "0.05",
+                           "CEREBRATE_MCP_UPLOAD_DAILY_MAX": "3"})
+        tokens = Tokens(Path(self.tmp) / "upload-tokens.json")
+        token = tokens.add("macbook-m1")
+        self.assertNotIn(token.split(".", 1)[1], (Path(self.tmp) / "upload-tokens.json").read_text())   # only its hash
         self.app = create_app()
-        out = self.call("segment_by_text", image=base64.b64encode(PHOTO).decode(), prompts=["lamp"])
-        self.assertEqual(FakeMLServer.seen_sizes[-1], (W, H))
-        self.assertNotIn("segmented_at", out)
+        auth = {"Authorization": f"Bearer {token}"}
+        with TestClient(self.app.http_app()) as http:
+            r = http.post("/artifacts/upload?name=snapshot", content=PHOTO, headers=auth)
+            self.assertEqual(r.status_code, 200, r.text)
+            ref = r.json()
+            self.assertEqual((ref["width"], ref["height"], ref["format"]), (W, H, "png"))
+            self.assertTrue(ref["uri"].startswith("artifact://up-macbook-m1-") and ref["uri"].endswith("/snapshot.png"))
+            self.assertEqual(Path(ref["path"]).read_bytes(), PHOTO)
+            self.assertEqual(http.get(ref["url"][len("http://artifacts.test"):]).content, PHOTO)   # downloadable by its URL
+            self.assertEqual(http.post("/artifacts/upload", content=PHOTO).status_code, 401)
+            self.assertEqual(http.post("/artifacts/upload", content=PHOTO, headers={"Authorization": f"Bearer {token}x"}).status_code, 401)
+            self.assertEqual(http.post("/artifacts/upload", content=b"GIF89a" + bytes(100), headers=auth).status_code, 415)
+            self.assertEqual(http.post("/artifacts/upload", content=bytes(60 * 1024), headers=auth).status_code, 413)
+            self.assertEqual(http.post("/artifacts/upload?name=../x", content=PHOTO, headers=auth).status_code, 400)
+            self.assertEqual(http.post("/artifacts/upload", content=jpeg(np.zeros((8, 8, 3), np.uint8)), headers=auth).json()["format"], "jpeg")
+            self.assertEqual(http.post("/artifacts/upload", content=PHOTO, headers=auth).status_code, 200)
+            self.assertEqual(http.post("/artifacts/upload", content=PHOTO, headers=auth).status_code, 429)   # 3 a day
+            tokens.revoke("macbook-m1")
+            self.assertEqual(http.post("/artifacts/upload", content=PHOTO, headers=auth).status_code, 401)  # revocation is immediate
+        # an upload is an ordinary input, by URI or URL
+        out = self.call("segment_region", image=ref["url"], boxes=[[4, 5, 30, 20]])
+        sent = {i["name"]: i for i in FakeMLServer.requests[-1][1]["inputs"]}
+        self.assertEqual(base64.b64decode(sent["photo"]["data"][0]), PHOTO)
+        self.assertEqual(len(out["masks"]), 1)
 
     def test_target_resolution(self):
         img = base64.b64encode(PHOTO).decode()

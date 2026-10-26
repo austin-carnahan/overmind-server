@@ -55,10 +55,19 @@ SSD.
 - [`install-gimp-plugins`](install-gimp-plugins) runs **on the Mac** (no
   sudo). It installs [`gimp-plugins/`](gimp-plugins/) into the GIMP profile;
   restart GIMP after a first install or a new procedure or argument. Today
-  that is `overmind-import-artifact`, which provides two procedures:
+  that is `overmind-import-artifact`, which provides three procedures:
+  - `overmind-publish`: uploads the visible composite of a region, and the
+    selection as a mask, for Cerebrate, keeping the snapshot's provenance in
+    the document. It needs the host's upload token in
+    `plug-ins/overmind-import-artifact/overmind-import-artifact.json` (0600).
   - `overmind-import-artifact`: adds an image from the artifact service by
-    URL, optionally into an object's layer group, after a context check;
+    URL, optionally into an object's layer group. It checks the photo's
+    context, or with `snapshot=`, that the document is unchanged since the
+    snapshot.
   - `overmind-make-object-group`: groups an object's layer and anchors it.
+
+  The installer also runs
+  [`patch-gimp-agent-bridge`](patch-gimp-agent-bridge) (below).
 - [`buckminster/cerebrate-gimp.md`](buckminster/cerebrate-gimp.md) is
   Buckminster's Cerebrate → GIMP recipe. Install it into its workspace with
   `sudo bash install-buckminster-cerebrate-runbook` (on Overmind).
@@ -66,6 +75,30 @@ SSD.
   and uses only the Python standard library. It pulls files with
   `openclaw nodes invoke ... file.fetch`, so the worker never needs SSH access
   to Overmind.
+
+## Agent capabilities: named operations, never code
+
+Agents call named GIMP operations with parameters. They never send code to
+run. When an agent needs a capability GIMP lacks, it becomes a reviewed
+plug-in procedure in [`gimp-plugins/`](gimp-plugins/), like the artifact
+import and publish.
+
+- **Python plug-ins are still allowed.** GIMP runs fixed, installed code
+  (the bridge, our plug-ins) with its bundled Python.
+- **Code-running procedures are blocked.** The GIMP Agent MCP's own Python
+  tool is off (`GIMP_AGENT_ALLOW_PYTHON=0`). But its `gimp_pdb_call` could
+  still reach the PDB procedures that run caller-supplied code:
+  - `python-fu-eval` and `python-fu-console`;
+  - the Script-Fu eval, console and text console;
+  - `extension-script-fu`;
+  - `plug-in-script-fu-server`, which opens a network port that runs Scheme.
+
+  [`patch-gimp-agent-bridge`](patch-gimp-agent-bridge) makes the bridge
+  refuse them. It's idempotent, and it fails loudly if the bridge's code
+  changes shape. Re-run `install-gimp-plugins` after any bridge upgrade, then
+  restart GIMP.
+- **Operator access stays.** The bridge's own `exec` is not an agent tool. It
+  needs the bridge's local token.
 
 ## Object groups and alignment (open decision)
 

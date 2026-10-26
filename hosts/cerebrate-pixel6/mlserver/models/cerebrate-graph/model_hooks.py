@@ -109,7 +109,14 @@ def _nearest_floor(in_size, out_size):
 
 
 class MiganHooks:
-    """MI-GAN 512 Places2 as the author's migan.onnx pipeline (MIT) wraps the generator."""
+    """MI-GAN 512 Places2 as the author's migan.onnx pipeline (MIT) wraps the
+    generator, on a window of the photo around the hole
+    (post.inpaint_window: >= 512 px, twice the hole's extent): the pipeline
+    squashes the whole photo to 512, which on a 12 MP photo left the hole a
+    few pixels wide and the fill an 8x blur, and held several float32 copies
+    of the photo. Outside the window the photo is returned as sent. Parameter
+    window=false (and output=raw) keep the whole-photo pipeline, as validated
+    against the author's."""
     S = 512
 
     def prepare(self, inputs, params=None):
@@ -126,28 +133,39 @@ class MiganHooks:
         if mask.shape != (h, w):
             raise ValueError(f"mask is {mask.shape[1]}x{mask.shape[0]}, the photo {w}x{h}")
         keep = np.where(mask >= 128, 0, 255).astype(np.uint8)          # the pipeline's mask: 255 = keep
-        chw = rgb.transpose(2, 0, 1).astype(np.float32)
-        small = np.round(post.bilinear(chw, self.S, self.S)).astype(np.uint8)          # Resize linear, Round, Cast
-        keep_s = keep[_nearest_floor(h, self.S)][:, _nearest_floor(w, self.S)]
+        raw = _raw(params)
+        window = (0, 0, w, h)
+        hole = np.argwhere(keep == 0)
+        if not raw and str(_param(params, "window", "true")).lower() not in ("0", "false", "no") and len(hole):
+            (y0, x0), (y1, x1) = hole.min(0), hole.max(0) + 1
+            window = post.inpaint_window((w, h), (int(x0), int(y0), int(x1), int(y1)), self.S)
+        wx0, wy0, wx1, wy1 = window
+        crop, keep_c = rgb[wy0:wy1, wx0:wx1], keep[wy0:wy1, wx0:wx1]
+        ch, cw = crop.shape[:2]
+        small = np.round(post.bilinear(crop.transpose(2, 0, 1).astype(np.float32), self.S, self.S)).astype(np.uint8)  # Resize linear, Round, Cast
+        keep_s = keep_c[_nearest_floor(ch, self.S)][:, _nearest_floor(cw, self.S)]
         x = small.astype(np.float32) * np.float32(2) / np.float32(255) - np.float32(1)
         k = keep_s.astype(np.float32) / np.float32(255)
         net = np.concatenate([(k - np.float32(0.5))[None], x * k[None]])[None].astype(np.float32)
-        return {"masked_image": net}, {"raw": _raw(params), "rgb": rgb, "keep": keep}
+        return {"masked_image": net}, {"raw": raw, "rgb": rgb, "keep": keep_c, "window": window}
 
     def finish(self, outputs, ctx):
-        rgb, keep = ctx["rgb"], ctx["keep"]
+        rgb, keep_c, (wx0, wy0, wx1, wy1) = ctx["rgb"], ctx["keep"], ctx["window"]
         h, w = rgb.shape[:2]
         if ctx["raw"]:
             return {**outputs, "original_size": np.array([h, w], np.int64)}
         g = outputs["image"].reshape(3, self.S, self.S).astype(np.float32)
         g = np.clip((g * np.float32(0.5) + np.float32(0.5)) * np.float32(255), 0, 255)
-        up = post.bilinear(g, h, w)
-        k = keep.astype(np.float32) / np.float32(255)
-        out = np.clip(rgb.transpose(2, 0, 1).astype(np.float32) * k + up * (np.float32(1) - k), 0, 255).astype(np.uint8)
-        ok, png = cv2.imencode(".png", np.ascontiguousarray(out.transpose(1, 2, 0)[..., ::-1]))
+        up = post.bilinear(g, wy1 - wy0, wx1 - wx0)
+        k = keep_c.astype(np.float32) / np.float32(255)
+        crop = rgb[wy0:wy1, wx0:wx1].transpose(2, 0, 1).astype(np.float32)
+        out = rgb.copy()
+        out[wy0:wy1, wx0:wx1] = np.clip(crop * k + up * (np.float32(1) - k), 0, 255).astype(np.uint8).transpose(1, 2, 0)
+        ok, png = cv2.imencode(".png", np.ascontiguousarray(out[..., ::-1]))
         if not ok:
             raise ValueError("PNG encoding failed")
         return {"result": _json({"image": {"width": w, "height": h}, "encoding": "png",
+                                 "window": [int(wx0), int(wy0), int(wx1), int(wy1)],
                                  "result": base64.b64encode(png.tobytes()).decode()})}
 
 
@@ -249,7 +267,7 @@ class Sam2Hooks:
             ious = outputs["iou"].reshape(-1, 3)
             for b, lg, iou in zip(ctx["boxes"], logits, ious):
                 order = [int(np.argmax(iou))] + ([k for k in range(3) if k != int(np.argmax(iou))] if ctx["all"] else [])
-                ms = post.bilinear(lg[order].astype(np.float32), h, w) > 0
+                ms = post.bilinear_rows(lg[order].astype(np.float32), h, w, lambda x: x > 0)
                 entry = {"box": [float(v) for v in b], "score": float(iou[order[0]]), "mask": post.encode_mask(ms[0])}
                 if ctx["all"]:
                     entry["candidates"] = [{"score": float(iou[k]), "mask": post.encode_mask(m)} for k, m in zip(order, ms)]
@@ -315,13 +333,12 @@ class RfdetrHooks:
         keep = np.where((score > thr) & (cls > 0))[0]
         keep = keep[np.argsort(-score[keep])]
         dets = []
-        if len(keep):
-            ms = post.bilinear(masks[keep].astype(np.float32), h, w) > 0
-            for q, m in zip(keep, ms):
-                cx, cy, bw, bh = (float(v) for v in boxes[q])
-                dets.append({"box": [(cx - bw / 2) * w, (cy - bh / 2) * h, (cx + bw / 2) * w, (cy + bh / 2) * h],
-                             "score": float(score[q]), "class_id": int(cls[q]), "label": COCO91.get(int(cls[q]), "N/A"),
-                             "mask": post.encode_mask(m)})
+        for q in keep:   # mask by mask, in strips: all kept masks at photo size at once can OOM the guest
+            m = post.bilinear_rows(masks[q:q + 1].astype(np.float32), h, w, lambda x: x > 0)[0]
+            cx, cy, bw, bh = (float(v) for v in boxes[q])
+            dets.append({"box": [(cx - bw / 2) * w, (cy - bh / 2) * h, (cx + bw / 2) * w, (cy + bh / 2) * h],
+                         "score": float(score[q]), "class_id": int(cls[q]), "label": COCO91.get(int(cls[q]), "N/A"),
+                         "mask": post.encode_mask(m)})
         return {"result": _json({"image": {"width": w, "height": h}, "detections": dets})}, done
 
 
@@ -337,7 +354,9 @@ class Esam3Hooks:
     stdlib CLIP tokenizer (context 16, padding mask = id 0). Detections as
     Sam3Processor: sigmoid(logit) * sigmoid(presence) > threshold (parameter,
     default 0.5); boxes cxcywh -> xyxy in photo pixels; masks bilinear to the
-    photo, sigmoid > 0.5. Parameter output=raw: the first phrase's raw
+    photo, sigmoid > 0.5 -- mask by mask, in strips of rows
+    (post.bilinear_rows): all kept masks at photo size at once got MLServer
+    OOM-killed on a 12 MP photo. Parameter output=raw: the first phrase's raw
     tensors."""
     S, CTX, MAX_PROMPTS = 1008, 16, 16
 
@@ -390,12 +409,11 @@ class Esam3Hooks:
             score = sig(logits) * sig(presence)[0]
             keep = np.where(score > thr)[0]
             dets = []
-            if len(keep):
-                ms = sig(post.bilinear(masks[keep].astype(np.float32), h, w)) > 0.5
-                for q, m in zip(keep, ms):
-                    cx, cy, bw, bh = (float(v) for v in boxes[q])
-                    dets.append({"box": [(cx - bw / 2) * w, (cy - bh / 2) * h, (cx + bw / 2) * w, (cy + bh / 2) * h],
-                                 "score": float(score[q]), "mask": post.encode_mask(m)})
+            for q in keep:
+                m = post.bilinear_rows(masks[q:q + 1].astype(np.float32), h, w, lambda x: sig(x) > 0.5)[0]
+                cx, cy, bw, bh = (float(v) for v in boxes[q])
+                dets.append({"box": [(cx - bw / 2) * w, (cy - bh / 2) * h, (cx + bw / 2) * w, (cy + bh / 2) * h],
+                             "score": float(score[q]), "mask": post.encode_mask(m)})
             doc["prompts"].append({"text": text, "presence": float(sig(presence)[0]), "detections": dets})
             del out, masks
         done["inference_us"] = done["vision_us"] + done["prompt_us"]

@@ -14,7 +14,10 @@ Environment (defaults for a same-host run on overmind-01):
                                  (e.g. http://artifacts.home.arpa); unset = no URLs in results
   CEREBRATE_MCP_URL_KEY_FILE     URL-signing key, created on first start (<artifact dir>/../url-key)
   CEREBRATE_MCP_URL_TTL_H        hours a signed URL stays valid (the artifact TTL)
-  CEREBRATE_MCP_TEXT_SEG_MAX_SIDE  segment_by_text scales larger photos down to this (2048)
+  CEREBRATE_MCP_UPLOAD_TOKENS    uploading hosts' token hashes (<artifact dir>/../upload-tokens.json;
+                                 managed with python -m cerebrate_mcp.uploads)
+  CEREBRATE_MCP_UPLOAD_MAX_MB    largest upload (32)
+  CEREBRATE_MCP_UPLOAD_DAILY_MAX uploads per host per day (500)
   CEREBRATE_MCP_INPUT_ROOTS      colon-separated directories image paths may come from
                                  (the artifact directory is always allowed)
   CEREBRATE_MCP_TIMEOUT_S        per inference (300: a cold model start plus a capacity wait)
@@ -31,6 +34,7 @@ from starlette.responses import FileResponse, JSONResponse, PlainTextResponse
 
 from . import contracts as c
 from .artifacts import Artifacts, InputError
+from .uploads import Tokens, UploadError, accept
 from .discovery import Discovery, TargetError
 from .mlserver import MLServer, MLServerError
 
@@ -56,7 +60,8 @@ def create_app() -> FastMCP:
                           [p for p in _env("INPUT_ROOTS", "").split(":") if p],
                           public_url=_env("PUBLIC_URL", ""), key_file=_env("URL_KEY_FILE", ""),
                           url_ttl_s=float(_env("URL_TTL_H", "0")) * 3600)
-    text_seg_max_side = int(_env("TEXT_SEG_MAX_SIDE", "2048"))
+    tokens = Tokens(_env("UPLOAD_TOKENS", str(artifacts.root.parent / "upload-tokens.json")))
+    upload_max, upload_daily = int(float(_env("UPLOAD_MAX_MB", "32")) * 1024 * 1024), int(_env("UPLOAD_DAILY_MAX", "500"))
 
     mcp = FastMCP("cerebrate", instructions=(
         "Inference on the Cerebrate Pixel 6 models. Call list_capabilities first: it lists the tools, the "
@@ -114,19 +119,15 @@ def create_app() -> FastMCP:
 
     @mcp.tool
     def segment_by_text(image: str, prompts: list[str], target: str = "text-prompted-segmentation",
-                        save_masks: bool = True) -> dict:
+                        save_masks: bool = True, threshold: float | None = None) -> dict:
         """Outline every instance of each short phrase (up to 16), e.g. ["lamp", "suitcase"]. Returns per
         phrase: presence score and instances with boxes, masks (polygons + compact encoding) and mask PNG
-        artifacts, all in the photo's pixels. Photos over 2048 px are segmented scaled down (the model sees
-        1008 px anyway). The image is cached by its content, so further phrases on it are faster."""
-        scaled = {}
-
-        def request(photo, size):
-            small, scaled["s"] = c.text_segmentation_scale(photo, size, text_seg_max_side)
-            return c.text_segmentation_request(small, prompts)
-        return run("segment_by_text", target, image, request,
-                   lambda doc, rid, size: c.text_segmentation_result(doc, post, artifacts, rid, size, save_masks,
-                                                                     scaled["s"]))
+        artifacts. threshold (default 0.5) is the instance cut-off, score x presence: lower it when presence
+        is high but nothing is returned. The image is cached by its content, so further phrases on it are
+        faster."""
+        return run("segment_by_text", target, image,
+                   lambda photo, size: c.text_segmentation_request(photo, prompts, threshold),
+                   lambda doc, rid, size: c.text_segmentation_result(doc, post, artifacts, rid, size, save_masks))
 
     @mcp.tool
     def detect_by_text(image: str, queries: list[str], target: str = "open-vocabulary-detection",
@@ -160,7 +161,7 @@ def create_app() -> FastMCP:
 
         def request(photo, size):
             mask_bytes, mask_size = artifacts.load_image(mask, "mask")
-            return c.inpaint_request(photo, size, mask_bytes, mask_size, grow_mask_px, ctx)
+            return c.inpaint_request(post, photo, size, mask_bytes, mask_size, grow_mask_px, ctx)
         return run("inpaint", target, image, request,
                    lambda doc, rid, size: c.inpaint_result(doc, artifacts, rid, ctx, composite))
 
@@ -179,6 +180,28 @@ def create_app() -> FastMCP:
             return artifacts.path_of(run, name).read_bytes()
         except InputError as exc:
             raise ValueError(str(exc)) from exc
+
+    @mcp.custom_route("/artifacts/upload", methods=["POST"])
+    async def artifact_upload(request: Request):
+        """Create one artifact from the request body (PNG/JPEG), for a host
+        with an upload token: e.g. GIMP publishing a snapshot of its document.
+        ?name= names the file. Returns its artifact:// URI and signed URL."""
+        host = tokens.host_for(request.headers.get("authorization"))
+        if host is None:
+            return PlainTextResponse("upload token missing, invalid or revoked\n", status_code=401)
+        length = request.headers.get("content-length")
+        if length and length.isdigit() and int(length) > upload_max:
+            return PlainTextResponse(f"larger than {upload_max} bytes\n", status_code=413)
+        body = bytearray()
+        async for chunk in request.stream():
+            body += chunk
+            if len(body) > upload_max:
+                return PlainTextResponse(f"larger than {upload_max} bytes\n", status_code=413)
+        try:
+            ref = accept(artifacts, host, bytes(body), request.query_params.get("name", ""), upload_max, upload_daily)
+        except UploadError as exc:
+            return PlainTextResponse(f"{exc}\n", status_code=exc.status)
+        return JSONResponse(ref)
 
     @mcp.custom_route("/artifacts/{run}/{name}", methods=["GET"])
     async def artifact_download(request: Request):

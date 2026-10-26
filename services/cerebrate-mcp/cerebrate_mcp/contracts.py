@@ -11,10 +11,8 @@ compact encoding and can also be saved as PNG artifacts, decoded with the
 hooks' own photo_postprocess.decode_mask. Every mask also comes as polygons
 (mask_polygons) -- the form an editor takes a selection in.
 
-Two adapters reshape the request itself, for the photo sizes a phone
-produces: inpaint sends a window around the mask instead of the whole photo
-and returns a patch, and segment_by_text sends large photos scaled down
-(text_segmentation_scale)."""
+inpaint reshapes the request itself: it sends a window around the mask
+instead of the whole photo and returns a patch."""
 import base64
 import hashlib
 import io
@@ -47,7 +45,7 @@ CONTRACTS = {c.interface: c for c in (
              "image; optional min_score, max_detections, save_masks"),
     Contract("photo-text-segmentation-v1", "segment_by_text", "text-prompted-segmentation",
              "outline every instance of each text phrase",
-             "image; prompts: up to 16 short phrases (photos over 2048 px are segmented scaled down)"),
+             "image; prompts: up to 16 short phrases; optional threshold"),
     Contract("photo-text-detection-v1", "detect_by_text", "open-vocabulary-detection",
              "boxes for each text query (no masks)",
              "image; queries: up to 256 phrases; optional threshold"),
@@ -131,27 +129,15 @@ def photo_request(photo: bytes, **parameters) -> tuple[list, dict]:
     return [bytes_input("photo", b64(photo))], {k: v for k, v in parameters.items() if v is not None}
 
 
-def text_segmentation_scale(photo: bytes, size: tuple, max_side: int) -> tuple[bytes, float]:
-    """A photo over max_side px goes to the model scaled down; the factor
-    maps results back. EfficientSAM3 sees 1008 px and predicts 288 px masks,
-    so nothing is lost -- and its hook upsamples every kept mask to the photo
-    as float32 at once, which on a 12 MP photo got MLServer OOM-killed on the
-    Pixel guest (959 MB). Interim until that hook upsamples mask by mask."""
-    if max(size) <= max_side:
-        return photo, 1.0
-    s = max(size) / max_side
-    im = Image.open(io.BytesIO(photo)).convert("RGB").resize((round(size[0] / s), round(size[1] / s)), Image.BILINEAR)
-    buf = io.BytesIO()
-    im.save(buf, format="JPEG", quality=95)
-    return buf.getvalue(), s
-
-
-def text_segmentation_request(photo: bytes, prompts: list[str]) -> tuple[list, dict]:
+def text_segmentation_request(photo: bytes, prompts: list[str], threshold: float | None = None) -> tuple[list, dict]:
     if not prompts or len(prompts) > 16:
         raise InputError("prompts: 1 to 16 phrases")
+    if threshold is not None and not 0 < threshold < 1:
+        raise InputError("threshold: between 0 and 1")
     return [bytes_input("photo", b64(photo)),
             tensor_input("image_id", "INT64", [1], [image_id(photo)]),
-            {"name": "prompts", "shape": [len(prompts)], "datatype": "BYTES", "data": list(prompts)}], {}
+            {"name": "prompts", "shape": [len(prompts)], "datatype": "BYTES", "data": list(prompts)}], \
+        ({"threshold": threshold} if threshold is not None else {})
 
 
 def text_detection_request(photo: bytes, queries: list[str], threshold: float | None) -> tuple[list, dict]:
@@ -179,23 +165,10 @@ def _png(im: Image.Image) -> bytes:
     return buf.getvalue()
 
 
-def inpaint_window(size: tuple, bbox: tuple, side_min: int = 512, context: float = 2.0) -> tuple:
-    """The crop sent to the inpainting model: a square (where the photo
-    allows) of at least side_min px and `context` times the mask's extent,
-    centred on the mask. The model works at a fixed size (MI-GAN: 512), so a
-    whole 12 MP photo squashed to 512 left a 15x26 px hole to fill and an 8x
-    blurred patch; a window keeps the fill near the photo's resolution."""
-    w, h = size
-    x0, y0, x1, y1 = bbox
-    side = max(side_min, math.ceil(context * max(x1 - x0, y1 - y0)))
-    ww, wh = min(side, w), min(side, h)
-    cx, cy = (x0 + x1) // 2, (y0 + y1) // 2
-    wx = min(max(cx - ww // 2, 0), w - ww)
-    wy = min(max(cy - wh // 2, 0), h - wh)
-    return wx, wy, wx + ww, wy + wh
-
-
-def inpaint_request(photo: bytes, size: tuple, mask: bytes, mask_size: tuple, grow_px: int, ctx: dict) -> tuple[list, dict]:
+def inpaint_request(post, photo: bytes, size: tuple, mask: bytes, mask_size: tuple, grow_px: int, ctx: dict) -> tuple[list, dict]:
+    """A window around the grown mask (post.inpaint_window, the rule the
+    MLServer hook applies too: >= 512 px, twice the hole's extent), not the
+    whole photo."""
     if size != mask_size:
         raise InputError(f"mask is {mask_size[0]}x{mask_size[1]}, the image {size[0]}x{size[1]}")
     if not 0 <= grow_px <= 64:
@@ -204,7 +177,7 @@ def inpaint_request(photo: bytes, size: tuple, mask: bytes, mask_size: tuple, gr
     bbox = grown.getbbox()
     if bbox is None:
         raise InputError("mask: empty (no white pixels)")
-    window = inpaint_window(size, bbox)
+    window = post.inpaint_window(size, bbox)
     im = Image.open(io.BytesIO(photo)).convert("RGB")
     ctx.update(window=window, bbox=bbox, mask=grown.crop(window), photo=im)
     return [bytes_input("photo", b64(_png(im.crop(window)))), bytes_input("mask", b64(_png(ctx["mask"])))], {}
@@ -236,30 +209,17 @@ def detections_result(doc: dict, post, art: Artifacts, run: str, size: tuple,
     return {"image": doc["image"], "detections": out, "total_detections": total}
 
 
-def _upscaled_mask(post, enc: dict, small: tuple, size: tuple) -> dict:
-    """A mask from the scaled-down photo, at the original size (nearest)."""
-    m = post.decode_mask(enc, (small[1], small[0])).astype(np.uint8) * 255
-    return post.encode_mask(np.asarray(Image.fromarray(m).resize(size, Image.NEAREST)) >= 128)
-
-
-def text_segmentation_result(doc: dict, post, art: Artifacts, run: str, size: tuple, save_masks: bool,
-                             scale: float = 1.0) -> dict:
-    small = (doc["image"]["width"], doc["image"]["height"])
+def text_segmentation_result(doc: dict, post, art: Artifacts, run: str, size: tuple, save_masks: bool) -> dict:
     prompts = []
     for p, pr in enumerate(doc["prompts"]):
         dets = []
         for i, d in enumerate(pr["detections"]):
-            full = d["mask"] if scale == 1 else _upscaled_mask(post, d["mask"], small, size)
-            item = {"box": [v * scale for v in d["box"]], "score": d["score"], "mask": full,
-                    "polygons": mask_polygons(post, d["mask"], scale)}
+            item = {"box": d["box"], "score": d["score"], "mask": d["mask"], "polygons": mask_polygons(post, d["mask"])}
             if save_masks:
-                item["mask_png"] = mask_png(post, art, run, f"prompt{p}-mask{i}.png", full, size)
+                item["mask_png"] = mask_png(post, art, run, f"prompt{p}-mask{i}.png", d["mask"], size)
             dets.append(item)
         prompts.append({"text": pr["text"], "presence": pr.get("presence"), "detections": dets})
-    out = {"image": {"width": size[0], "height": size[1]}, "prompts": prompts}
-    if scale != 1:
-        out["segmented_at"] = {"width": small[0], "height": small[1]}
-    return out
+    return {"image": doc["image"], "prompts": prompts}
 
 
 def depth_result(doc: dict, art: Artifacts, run: str) -> dict:

@@ -904,7 +904,7 @@ None is served in production yet.
 | Endpoint | Interface | Request | `result` |
 | --- | --- | --- | --- |
 | `depth-anything-v2-small` | `photo-depth-v1` | `photo` | `depth`: 686×518 16-bit PNG (base64) with `min` and `max`. Value = min + png/65535·(max−min). Relative inverse depth, larger = nearer. |
-| `mi-gan-512` | `photo-inpaint-v1` | `photo`, `mask` (an image of the same size, white = remove) | The inpainted photo as a PNG (base64), composited like the author's `migan.onnx` pipeline: pixels outside the mask are unchanged. |
+| `mi-gan-512` | `photo-inpaint-v1` | `photo`, `mask` (an image of the same size, white = remove). Parameter `window` (default true: the model sees a window around the hole, at least 512 px and twice its extent; false = the whole photo, as validated). | The inpainted photo as a PNG (base64) and the `window` used, composited like the author's `migan.onnx` pipeline: pixels outside the mask are unchanged. |
 | `dinov2-s14` | `photo-embedding-v1` | `photo`. Parameter `patches=true` adds the tokens. | `embedding`: 384 little-endian float32 (base64), the mean of the 1,024 patch tokens, not normalized. `patch_tokens` [1024, 384] are optional. |
 | `yoloe-11s-pf` | `photo-detections-v1` | `photo` | As `yoloe-v8s-pf`: detections with 4,585-class labels and masks. |
 | `sam2.1-hiera-tiny` | `photo-box-masks-v1` | `photo?`, `image_id` (INT64 [1]), `boxes?` (FP32 [N,4] xyxy in photo pixels). Parameter `masks=all` returns all three candidates. | `masks`: per box, the best candidate by predicted IoU, with box, score and mask. The image is cached per `image_id`, so later boxes need no photo. |
@@ -988,3 +988,47 @@ Client contracts are unchanged.
 [Cerebrate MCP](../../../services/cerebrate-mcp/README.md) exposes to agents:
 one tool per contract, with targets derived from the registry and this
 MLServer's readiness.
+
+## Phone photos: host steps in bounded memory (prepared 2026-10-26)
+
+**Status:** tested; to deploy with the GIMP snapshot work. Deploying it needs one MLServer restart.
+
+**Background.** On 2026-10-26 a 4000×3000 phone photo sent to `efficientsam3-rvm`
+got MLServer OOM-killed: the guest has 959 MB, with about 400–540 MB free.
+Measured on the Mac with the same code, the host steps were the problem, not
+the models:
+
+| Host step on a 12 MP photo | Before | After |
+| --- | --- | --- |
+| EfficientSAM3 resize to 1008 (`torchvision_resize_u8`) | +832 MB | +98 MB |
+| OWLv2 preprocessing (`owlv2_pixels`) | +1,620 MB, 14.5 s | +234 MB, 0.7 s |
+| Masks to the photo (EfficientSAM3, RF-DETR, SAM 2.1) | about 140 MB per mask, all at once | about 19 MB, one mask at a time |
+| Whole EfficientSAM3 hook, 5 instances | about 880 MB | about 240 MB |
+
+**Changes. The values are the same; only memory and time change:**
+- **`torchvision_resize_u8`:** runs each pass in blocks of the other axis.
+  The intermediate is uint8, since its values are clamped integers. The
+  integer float64 sums are exact in any order.
+- **`owlv2_pixels`:** computes the blur only at the rows and columns the zoom
+  samples (about 1,920 of the padded 4000), one channel and a block of rows at
+  a time, without ever creating the padding. Same float64 sums, same order.
+- **Masks:** `post.bilinear_rows` upsamples one mask at a time, in 256-row
+  strips.
+- **`mi-gan-512` gets its window.** Squashing the whole photo to 512 left a
+  12 MP photo's hole a few pixels wide, and the fill an 8× blur. It also held
+  float32 copies of the photo. `window=false` and `output=raw` keep the
+  validated whole-photo pipeline. The window rule
+  (`photo_postprocess.inpaint_window`) is shared with Cerebrate MCP's
+  `inpaint`.
+
+**Tests.** [`tests/test_photo_hooks.py`](tests/test_photo_hooks.py) checks:
+- both preprocessing functions bit-identical to the previous implementations
+  (kept in the test as references), across portrait, landscape, square,
+  upscaled and downscaled cases;
+- EfficientSAM3's masks identical to whole-photo upsampling, with a fake
+  worker;
+- MI-GAN's window: the photo untouched outside the hole, and the old pipeline
+  kept with `window=false` or a photo smaller than the window.
+
+On the guest's own numpy (2.5.3) the same comparisons were bit-identical, on
+small images, without touching the running MLServer.

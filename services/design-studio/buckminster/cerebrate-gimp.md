@@ -23,17 +23,29 @@ its members, unless the user asks for detailed work.
   with the rest of its object. Move a member only when the user asks for
   that one piece. Nothing is position-locked to stop this.
 
-## 1. Point Cerebrate at the photo
+## 1. Point Cerebrate at the image: the photo, or what the document shows now
 
-Cerebrate reads design-studio project sources directly:
-`/mnt/substrate/design-studio/projects/<project>/sources/<sha256>.<ext>`.
-The path is in `project.json` under `sources[].file`.
+- **An untouched document:** pass the project source's path. Cerebrate reads
+  design-studio project sources directly:
+  `/mnt/substrate/design-studio/projects/<project>/sources/<sha256>.<ext>`.
+  The path is in `project.json` under `sources[].file`. Results come back in
+  the photo's pixels, which line up with the document only while it has the
+  same size and hasn't been cropped or scaled. Check with
+  `gimp_gimp_image_info`.
+- **A document that has been edited** (anything moved, removed or repaired):
+  **publish a snapshot** of what it shows now:
 
-- Masks come back in that photo's pixels. They line up with the GIMP document
-  only if the document has the same size and hasn't been cropped or scaled.
-  Check with `gimp_gimp_image_info`.
-- Results also carry `artifact://` URIs and `url`s. Either can be passed back
-  as an input, for example a mask to `inpaint`.
+  ```
+  gimp_gimp_pdb_call(name="overmind-publish", args={"image": <id>, "mode": "image", "format": "jpeg"})
+  ```
+
+  It returns `[snapshot, image_url, mask_url, x, y, width, height]`. Pass
+  `image_url` to any Cerebrate tool. With `mode: "image"` the snapshot is the
+  whole canvas, so results are in document coordinates. For inpainting, use
+  `mode: "selection"` (step 5).
+
+Results also carry `artifact://` URIs and `url`s. Either can be passed back
+as an input, for example a mask to `inpaint`.
 
 ## 2. Find and outline
 
@@ -44,7 +56,9 @@ use one of these:
   categories and reliable labels. `target="prompt-free-segmentation"` finds
   more objects, but its labels are odd.
 - **`cerebrate__segment_by_text`**: phrases, e.g. `["wicker lamp", "rug"]`.
-  Use this when you know what you want.
+  Use this when you know what you want. If a phrase's `presence` is high
+  (say above 0.5) but no instances come back, retry with `threshold: 0.3`.
+  It missed the bedroom lamp at 0.73 presence with the default 0.5.
 - **`cerebrate__detect_by_text`** then **`cerebrate__segment_region`**: boxes
   from phrases, then precise masks for those boxes.
 
@@ -100,6 +114,31 @@ layer (step 5).
 
 ## 5. Remove or repaint → patch layer
 
+**On an edited document, use a snapshot (the default once anything has
+changed):**
+
+1. Select the region to fill (step 3's polygon rings, or any GIMP selection).
+2. `gimp_gimp_pdb_call(name="overmind-publish", args={"image": <id>, "mode": "selection"})`
+   returns `[snapshot, image_url, mask_url, x, y, width, height]`: the window
+   around the selection as it looks now, and the selection as a mask.
+3. `cerebrate__inpaint(image=<image_url>, mask=<mask_url>)`
+4. Place the patch, in the repaired object's group, with the snapshot:
+
+   ```
+   gimp_gimp_pdb_call(name="overmind-import-artifact",
+                      args={"image": <id>, "url": <patch.url>, "x": <offset x>, "y": <offset y>,
+                            "name": "Lamp removed", "target": <layer or group id>, "snapshot": <snapshot>})
+   ```
+
+   The offsets are the snapshot's; the plug-in adds its origin. It first
+   checks that the document still shows exactly what was published there.
+   If it says *"the document changed … since it was published"*, someone
+   edited that area, or you already used this snapshot. Publish a new one and
+   run again, once; if it happens again, report it. **One snapshot, one
+   repair.**
+
+**On an untouched document, the photo works directly:**
+
 1. `cerebrate__inpaint(image=<source path>, mask=<mask_png uri or url>)`.
    The mask is grown 7 px by default.
 2. The result is `patch.url`, `offset [x, y]` and `size`: an RGBA patch
@@ -131,8 +170,8 @@ layer (step 5).
    - *"can't verify"*: the wrong target.
    - *"scaled or transformed"*: the group was resized since it was grouped.
 
-   A patch computed from the original photo doesn't fit any of these.
-   Inpainting the document's *current* pixels isn't available yet.
+   In all three cases the photo no longer matches the document. Use the
+   snapshot route above instead.
 
 Inpaint one modest object at a time. The inpainting model works at 512 px,
 on small and medium holes:
@@ -156,6 +195,10 @@ one.
 
 - Omit optional `gimp_gimp_pdb_call` arguments instead of passing `null`. For
   example, `parent=null` fails on `gimp-image-insert-layer`.
+- Named operations only: GIMP's code evaluators (`python-fu-eval`, Script-Fu
+  eval, console and server) are blocked. If you need something GIMP can't do
+  through its procedures, say so; it becomes a reviewed plug-in, not code you
+  send.
 - A model may first need to start or wait for memory on the Pixel: up to a few
   minutes. "No capacity" means the phone is busy. Retry later, don't loop.
 - Depth: `cerebrate__estimate_depth` returns a map artifact. It's data for

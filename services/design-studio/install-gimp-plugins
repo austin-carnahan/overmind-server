@@ -18,11 +18,20 @@ else
 fi
 [ -d "$profile" ] || { echo "no GIMP profile at $profile (start GIMP 3.2 once first)" >&2; exit 1; }
 
+# The third-party bridge's evaluator block (re-applied after bridge upgrades).
+bridge="$profile/plug-ins/gimp-agent-bridge/gimp-agent-bridge.py"
+if [ -f "$bridge" ]; then
+    python3 "$(dirname "$0")/patch-gimp-agent-bridge" "$bridge"
+else
+    echo "no GIMP Agent MCP bridge at $bridge; skipped its patch"
+fi
+
 for dir in "$src"/*/; do
     name=$(basename "$dir")
     dest="$profile/plug-ins/$name"
     mkdir -p "$dest"
     install -m 755 "$dir/$name.py" "$dest/$name.py"
+    [ -f "$dest/$name.json" ] && chmod 600 "$dest/$name.json"     # settings hold the upload token
     echo "installed $name -> $dest"
 done
-echo "Restart GIMP if any plug-in is new (it registers plug-ins at start-up)."
+echo "Restart GIMP if a plug-in, procedure or argument is new, or the bridge was patched."
