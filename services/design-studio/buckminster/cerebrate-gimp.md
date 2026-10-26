@@ -70,6 +70,26 @@ given a bed's box outlined the comforter and left out the pillows. Add the
 missing parts: segment their boxes too and add their rings to the selection,
 or retry with `target="box-refinement@quality"`.
 
+**Objects have parts.** Segment parts the main mask misses (pillows on a
+bed) on their own, and keep each as its own layer **inside the object's
+group**, so they move together.
+- **Before moving:** cut the parts and group everything.
+- **Already moved:** cut each part from the original photo, then
+  `gimp_gimp_layer(action="move")` it by the group's move: the main
+  cutout's current position minus its mask's bounding-box corner (from
+  Cerebrate's result).
+
+**Recover before generating.** Pixels a mask missed are still in the photo.
+Fix the mask (union two models' masks; fill enclosed holes) and cut the
+missing pixels as a "(recovered pixels)" layer. Only pixels the photo
+never showed can be made up, and only if they become visible. Even then,
+first try continuing the object's own texture (a shifted copy along its
+edge). MI-GAN fills with background, not more object.
+
+**Protect what stays in front.** Anything that overlaps the area you rebuild
+and isn't moving (a rug against the bed) gets its own object group above
+the reconstruction. Otherwise the rebuilt floor covers it.
+
 Labels are often wrong (the wicker lamp came back as "vase" and "ornament").
 Name layers from what you asked for or what you see, not from the model's
 label. Every mask has **`polygons`**: rings `{"hole": bool, "points": [x0, y0,

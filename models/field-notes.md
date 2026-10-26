@@ -96,6 +96,10 @@ these notes say otherwise.
   (pillow boxes, or `@quality`) when it doesn't.
 
 ### Inpainting (MI-GAN)
+- **2026-10-26, completing a hidden part of an object** (the bed skirt behind
+  the rug): it filled the gap with floor. MI-GAN removes objects; it doesn't
+  complete them. Continue the object's own visible texture instead (see
+  "Large holes").
 - **2026-10-26, hotel-room.jpg (sample run).** Fine one object at a time.
   Needed the mask grown about 7 px, or the fill picks up the object's edge.
 - **2026-10-26, bedroom.jpg, the lamp.**
@@ -166,9 +170,49 @@ the room's own pixels worked. Mean difference from the prototype: 1.8 levels
 6. **Timing.** About 24 s of GIMP geometry (6 pieces) and a 12 s blend loop:
    publish ×2 (6.7 s), blend 3.5 s (2.1 s computing), import 1.7 s.
 
+**Fixes on the experiment document (2026-10-26, stages 08a–08f).**
+- **Rug.** The footprint's 22 px growth had covered an 11% strip of the rug.
+  The rug became its own object in front (EdgeSAM rug mask, from OWLv2
+  "a sheepskin rug"), and now matches the photo (mean difference 0.04). Any
+  object that stays in place and overlaps the footprint has to be protected
+  like this.
+- **Pillows.** The bed cutout held only the pillows' edges, so after the move
+  their holes showed the rebuilt wall. Each pillow is now its own layer in
+  the Bed group, from its own EdgeSAM mask (0.98 / 0.95).
+  - **Alignment needed no new tool.** The group's move is the cutout's
+    position now minus its mask's bounding box. Shifted by it, the pillows
+    are pixel-identical to the cutout where both have pixels.
+- **Missing bed pixels: recover, don't generate.** Mask candidates against
+  the gaps in the cutout:
+
+  | Candidate | Result |
+  | --- | --- |
+  | SAM 2.1 (`@quality`, 0.96) alone | added 130 px |
+  | EdgeSAM from the RF-DETR box (a different box) | most pillow interiors, the pinholes, part of the shadow band, and the skirt's fringe |
+  | Their union, enclosed holes filled | 56% of the gaps |
+  | Closing (20 px) | would have recovered all the gaps |
+
+  The union left one 2,087 px shadow pocket, under the comforter's right end.
+  It was added by hand after checking it's the bed's shadowed side.
+  - **Total:** 9,586 real photo pixels.
+  - **Closing rejected:** a broad closing wasn't needed.
+- **Hidden skirt.** The skirt hidden behind the rug becomes visible once the
+  bed moves: 3,766 px, the bed's convex outline inside the rug.
+  - **MI-GAN filled it with floor:** an object-removal model completes the
+    background, not the object. Its layer is kept, hidden.
+  - **What worked:** continuing the visible skirt, a copy shifted 60 px along
+    its own lower edge. The region is grown 5 px into the skirt's edge,
+    because the bed and rug masks left a sliver between them.
+  - **Lesson:** the reconstruction idea (copy along the surface's own
+    geometry) applies to objects too.
+
 **Limits:**
 - A small light speck by the rug's left tip, probably skirt fringe left
   inside the rug margin.
+- The recovered shadow pocket's right end is blocky, a straight edge from the
+  correction.
+- The continued skirt's lower edge follows the convex outline, so it's
+  straighter than the real fringe.
 - Anything truly hidden (an outlet behind the bed) can't come back.
 - The geometry was done by hand, as an operator. It isn't automated or in
   Buckminster's recipe yet.
