@@ -5,3 +5,5 @@ mcp==2.3.0
 pyyaml==6.0.3
 numpy==2.5.4
 pillow==12.3.0
+# Mask -> polygon tracing (contracts.mask_polygons). 5.0.0.93: 2026-07-02.
+opencv-python-headless==5.0.0.93

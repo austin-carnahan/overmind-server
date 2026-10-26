@@ -52,6 +52,14 @@ SSD.
   `GIMP Agent Bridge.app`, which opens GIMP through LaunchServices with the
   bridge on. Use it instead of `gimp_launch`, which ties GIMP's lifetime to
   the node host.
+- [`install-gimp-plugins`](install-gimp-plugins) runs **on the Mac** (no
+  sudo). It installs [`gimp-plugins/`](gimp-plugins/) into the GIMP profile;
+  restart GIMP after a first install. Today that is
+  `overmind-import-artifact`, which adds an image from the artifact service as
+  a layer by URL (Cerebrate inpaint patches).
+- [`buckminster/cerebrate-gimp.md`](buckminster/cerebrate-gimp.md) is
+  Buckminster's Cerebrate → GIMP recipe. Install it into its workspace with
+  `sudo bash install-buckminster-cerebrate-runbook` (on Overmind).
 - [`design-checkpoint`](design-checkpoint) runs **on Overmind as `openclaw`**
   and uses only the Python standard library. It pulls files with
   `openclaw nodes invoke ... file.fetch`, so the worker never needs SSH access

@@ -22,12 +22,12 @@ not per model, plus discovery:
 | Tool | Contract | Default target | Inputs → output |
 | --- | --- | --- | --- |
 | `list_capabilities` | — | — | → every tool's callable endpoints, the tasks and their selections, the models |
-| `segment_region` | `photo-box-masks-v1` | `box-refinement` (EdgeSAM; `@quality` = SAM 2.1) | image, boxes → per box: score, compact mask, `mask_png` |
-| `detect_objects` | `photo-detections-v1` | `fixed-class-segmentation` (RF-DETR; `prompt-free-segmentation` = YOLOE) | image → labels, scores, boxes, compact masks (PNGs optional) |
-| `segment_by_text` | `photo-text-segmentation-v1` | `text-prompted-segmentation` (EfficientSAM3) | image, phrases → per phrase: presence, instances, mask PNGs |
+| `segment_region` | `photo-box-masks-v1` | `box-refinement` (EdgeSAM; `@quality` = SAM 2.1) | image, boxes → per box: score, polygons, compact mask, `mask_png` |
+| `detect_objects` | `photo-detections-v1` | `fixed-class-segmentation` (RF-DETR; `prompt-free-segmentation` = YOLOE) | image → labels, scores, boxes, polygons, compact masks (PNGs optional) |
+| `segment_by_text` | `photo-text-segmentation-v1` | `text-prompted-segmentation` (EfficientSAM3) | image, phrases → per phrase: presence, instances with polygons and mask PNGs (photos over 2048 px segmented scaled down) |
 | `detect_by_text` | `photo-text-detection-v1` | `open-vocabulary-detection` (OWLv2) | image, queries → boxes per query |
 | `estimate_depth` | `photo-depth-v1` | `relative-depth` (Depth Anything) | image → range, 16-bit depth PNG |
-| `inpaint` | `photo-inpaint-v1` | `inpainting` (MI-GAN) | image, mask (grown 7 px by default) → PNG with the masked region repainted |
+| `inpaint` | `photo-inpaint-v1` | `inpainting` (MI-GAN) | image, mask (grown 7 px by default) → RGBA patch of the filled pixels + offset (whole photo with `composite`) |
 | `embed_image` | `photo-embedding-v1` | `image-embedding` (DINOv2) | image → 384 float32 (base64) |
 
 **Targets.** A target can be any of:
@@ -45,16 +45,91 @@ Endpoints without a photo contract are left out: MobileNet, SmolLM2, and
 Granite-Docling, which already has its own service, Doclet.
 
 **Images and artifacts.**
-- **Image inputs** are base64, a `data:` URI, an `artifact://` URI from an
-  earlier result, or a file under the allowed input directories
-  (`file:///…`, or an absolute path that exists there).
+- **Image inputs** are base64, a `data:` URI, an `artifact://` URI or artifact
+  URL from an earlier result, or a file under the allowed input directories
+  (`file:///…`, or an absolute path that exists there). The deployment allows
+  the design-studio project store
+  (`/mnt/substrate/design-studio/projects/<project>/sources/…`, read-only), so
+  an agent passes a source's path instead of its bytes.
 - **Outputs** are compact JSON. Masks keep the hooks' bbox+RLE/bit encoding,
   decodable with
-  [`photo_postprocess.decode_mask`](../../hosts/cerebrate-pixel6/mlserver/models/cerebrate-graph/photo_postprocess.py).
-- **Output files** (mask PNGs, depth maps, inpainted images) are written to the
+  [`photo_postprocess.decode_mask`](../../hosts/cerebrate-pixel6/mlserver/models/cerebrate-graph/photo_postprocess.py),
+  and also come as **polygons** (below).
+- **Output files** (mask PNGs, depth maps, inpaint patches) are written to the
   artifact directory and returned as `{"uri": "artifact://<run>/<name>",
-  "path": …}`. A remote client reads them as the MCP resource with that URI; a
-  same-host client can use the path. They are kept 24 h.
+  "path": …, "url": …}`. A remote MCP client reads them as the MCP resource
+  with that URI; a same-host client can use the path; any other tool fetches
+  the **signed URL** (below). They are kept 24 h.
+
+### Polygons
+
+Each mask is also a list of rings `{"hole": bool, "points": [x0, y0, x1, y1,
+…]}` in image pixels, ordered so that replaying them with an editor's
+polygon select rebuilds the mask: the first ring `replace`, later outer rings
+`add`, holes `subtract`. Each outer ring comes with its own holes, largest
+first, so an island inside a hole is added back after that hole. They are
+GIMP's `gimp-image-select-polygon` `segs` as is.
+
+- **Pixel corners, not centres.** Vertices are traced on the pixel grid's
+  corners (contours of the mask upscaled 2×, `q → (q + 1) // 2`). Traced
+  through pixel centres, GIMP — which keeps a pixel when its centre is inside
+  — lost half a pixel all round.
+- **Simplified to 1 px** (Douglas–Peucker). On a 4000×3000 photo (23 masks
+  from EdgeSAM and YOLOE, up to 20 rings and 6 holes each), GIMP selections
+  rebuilt from them matched the masks at IoU **0.998 median, 0.990 minimum**
+  (the smallest mask, a pillow). The 23 masks took 103 KB as polygons vs
+  307 KB as RLE, and 3.5 s to replay in GIMP.
+
+### Artifact URLs
+
+With `CEREBRATE_MCP_PUBLIC_URL` set, every output file also has a `url`:
+`http://artifacts.home.arpa/artifacts/<run>/<name>?exp=…&sig=…`.
+
+- **Served by** this container's `/artifacts/{run}/{name}` route, through
+  Caddy's `artifacts.home.arpa` site, which proxies only that path. The MCP
+  endpoint itself stays loopback-only. The file is the same one the
+  `artifact://` resource reads; nothing is copied.
+- **Signed:** an HMAC-SHA256 over the run, name and expiry, with a key created
+  on first start (`/var/lib/overmind/cerebrate-mcp/url-key`, 0600). A URL
+  works for that one file until it expires (the artifact TTL, 24 h) or the
+  file is pruned. A wrong or expired signature gets 403.
+- **HTTP over the LAN/Tailnet**, like every `*.home.arpa` site (the DNS plan
+  defers HTTPS; Tailscale is the transport security).
+- **Why URLs:** MCP doesn't forward a resource from one server to another, so
+  `artifact://` means nothing to GIMP's MCP. A URL lets the consuming tool
+  fetch the file itself and the agent passes only the reference. Passed back
+  to this server as an input, the store's own URL is read locally.
+
+### Inpaint patches
+
+`inpaint` doesn't send the whole photo. The inpainting model works at a fixed
+512 px: the whole 4000×3000 photo squashed to 512 left a 15×26 px hole and an
+8× blurred, 15 MB result.
+
+- **The window.** The adapter sends a square window around the grown mask, at
+  least 512 px and twice the mask's extent, clamped to the photo.
+- **The patch.** It returns an RGBA patch, alpha = the grown mask, cut to the
+  mask's bounds, with its `offset` and `size`. Placed as a layer at the
+  offset, it covers only the filled pixels, so other edits underneath survive.
+- **Measured.** On the lamp in bedroom.jpg: 2.5 s and a clean fill, vs 23 s
+  and a blur for the whole photo. `composite=True` also saves the whole photo
+  with the patch applied.
+
+### Large photos and text segmentation
+
+`segment_by_text` sends photos over 2048 px scaled down, and maps boxes,
+masks and polygons back to the photo's pixels (`segmented_at` gives the size
+used).
+
+- **Why.** EfficientSAM3's hook upsamples every kept mask to the photo as
+  float32 at once, so a 12 MP phone photo got MLServer OOM-killed on the
+  Pixel's 959 MB guest (2026-10-26).
+- **No loss.** The model sees 1008 px and predicts 288 px masks, so nothing is
+  lost.
+- **Interim.** Until the hook upsamples mask by mask, which is an MLServer
+  change.
+
+The other contracts handled 12 MP photos (RF-DETR, YOLOE, EdgeSAM).
 
 ## Adding models and contracts
 
@@ -181,17 +256,37 @@ The live run:
 - **No restart needed.** Staging OWLv2 in the registry copy removed it, and
   `detect_by_text`, from discovery without a restart; reverting restored them.
 
+## GIMP handoff
+
+Buckminster's recipe is
+[`services/design-studio/buckminster/cerebrate-gimp.md`](../design-studio/buckminster/cerebrate-gimp.md):
+1. source path → Cerebrate;
+2. polygons → `gimp-image-select-polygon`;
+3. duplicate layer + selection mask → cutout layer;
+4. `inpaint` patch URL → GIMP's
+   [`overmind-import-artifact`](../design-studio/gimp-plugins/overmind-import-artifact/overmind-import-artifact.py)
+   at the offset.
+
+What the 2026-10-26 spike established:
+- **GIMP can't load a URL itself on macOS.**
+  - The GIMP MCP bridge turns every file argument into a local path
+    (`/http:/…`).
+  - GIMP's GIO has only the `file` and `resource` schemes (no gvfs), so an
+    http GFile is a dummy that `file_load_layer` returns nothing for.
+- **Its bundled Python (3.14, OpenSSL, certifi) fetches HTTP and HTTPS**,
+  hence the plug-in: download (artifact service only, no redirects, size cap,
+  PNG/JPEG/WebP), then load the temporary file.
+- **The bridge's `pdb_call` can't pass object arrays** (`gimp-edit-copy`) or
+  a null `parent`, hence the duplicate-and-mask cutout.
+
 ## Remaining gaps
 
-- **Not deployed.** It is not in the compose stack, and `/opt/overmind` doesn't
-  have the registry line yet.
-- **Not connected to OpenClaw yet.** That needs a config change and a Gateway
-  restart. Whether OpenClaw surfaces MCP *resources* to agents is unverified;
-  if it doesn't, a remote agent gets masks through the compact encoding, or
-  the path with the existing artifact transport (e.g. the Mac's file
-  transfer).
-- **No authentication.** The endpoint is loopback-only, and any same-host
-  process can call it, like garmin-mcp.
+- **OpenClaw resources unverified.** Whether OpenClaw surfaces MCP
+  *resources* to agents is unverified. With artifact URLs and source paths an
+  agent doesn't need them.
+- **No authentication on the MCP endpoint.** It is loopback-only, and any
+  same-host process can call it, like garmin-mcp. Artifact downloads need a
+  signed URL.
 - **Readiness is MLServer's.** A READY on-demand model may still need a few
   seconds to start, or wait for memory (the supervisor's capacity rule).
   `list_capabilities` doesn't show capacity.

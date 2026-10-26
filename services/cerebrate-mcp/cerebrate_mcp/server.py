@@ -10,6 +10,11 @@ Environment (defaults for a same-host run on overmind-01):
   CEREBRATE_MCP_ADAPTER_DIR      the MLServer adapter's cerebrate-graph/ (photo_postprocess.py)
   CEREBRATE_MCP_ARTIFACT_DIR     output files (/var/lib/overmind/cerebrate-mcp/artifacts)
   CEREBRATE_MCP_ARTIFACT_TTL_H   hours to keep them (24)
+  CEREBRATE_MCP_PUBLIC_URL       base URL the /artifacts route is reachable at by other machines
+                                 (e.g. http://artifacts.home.arpa); unset = no URLs in results
+  CEREBRATE_MCP_URL_KEY_FILE     URL-signing key, created on first start (<artifact dir>/../url-key)
+  CEREBRATE_MCP_URL_TTL_H        hours a signed URL stays valid (the artifact TTL)
+  CEREBRATE_MCP_TEXT_SEG_MAX_SIDE  segment_by_text scales larger photos down to this (2048)
   CEREBRATE_MCP_INPUT_ROOTS      colon-separated directories image paths may come from
                                  (the artifact directory is always allowed)
   CEREBRATE_MCP_TIMEOUT_S        per inference (300: a cold model start plus a capacity wait)
@@ -22,7 +27,7 @@ from pathlib import Path
 from fastmcp import FastMCP
 from fastmcp.exceptions import ToolError
 from starlette.requests import Request
-from starlette.responses import JSONResponse
+from starlette.responses import FileResponse, JSONResponse, PlainTextResponse
 
 from . import contracts as c
 from .artifacts import Artifacts, InputError
@@ -48,13 +53,20 @@ def create_app() -> FastMCP:
     import photo_postprocess as post   # the hooks' own mask codec
     artifacts = Artifacts(_env("ARTIFACT_DIR", "/var/lib/overmind/cerebrate-mcp/artifacts"),
                           float(_env("ARTIFACT_TTL_H", "24")) * 3600,
-                          [p for p in _env("INPUT_ROOTS", "").split(":") if p])
+                          [p for p in _env("INPUT_ROOTS", "").split(":") if p],
+                          public_url=_env("PUBLIC_URL", ""), key_file=_env("URL_KEY_FILE", ""),
+                          url_ttl_s=float(_env("URL_TTL_H", "0")) * 3600)
+    text_seg_max_side = int(_env("TEXT_SEG_MAX_SIDE", "2048"))
 
     mcp = FastMCP("cerebrate", instructions=(
         "Inference on the Cerebrate Pixel 6 models. Call list_capabilities first: it lists the tools, the "
         "tasks and models each can call right now, and their inputs. Images are base64 (or data: URIs), "
-        "artifact:// URIs from earlier results, or allowed absolute paths. Results are compact JSON; masks, "
-        "depth maps and inpainted images are artifact:// files, readable as resources."))
+        "artifact:// URIs or artifact URLs from earlier results, or allowed absolute paths. Results are compact "
+        "JSON. Every mask comes as polygons (rings of flat [x0, y0, x1, y1, ...] image-pixel points, ready for "
+        "an editor's polygon select: first ring replace, later outer rings add, holes subtract). Output files "
+        "(mask PNGs, depth maps, inpaint patches) are artifact:// resources and, where configured, signed "
+        "http URLs another tool (e.g. GIMP's overmind-import-artifact) can fetch directly -- pass the URL, "
+        "not the bytes."))
 
     def run(tool: str, target: str, image: str, request, shape) -> dict:
         interface = c.TOOL_CONTRACT[tool]
@@ -82,7 +94,8 @@ def create_app() -> FastMCP:
     def segment_region(image: str, boxes: list[list[float]], target: str = "box-refinement") -> dict:
         """Precise masks for regions of an image, one per box [x0, y0, x1, y1] (image pixels). target: a
         task such as "box-refinement" (fast, default) or "box-refinement@quality", or a model id. Returns
-        per box: score, the mask (compact encoding) and mask_png (an artifact:// PNG, white = region)."""
+        per box: score, the mask as polygons and in a compact encoding, and mask_png (an artifact:// PNG,
+        white = region, with a url where configured)."""
         return run("segment_region", target, image,
                    lambda photo, size: c.segment_region_request(photo, boxes),
                    lambda doc, rid, size: c.segment_region_result(doc, post, artifacts, rid, size))
@@ -92,7 +105,8 @@ def create_app() -> FastMCP:
                        max_detections: int = 50, save_masks: bool = False) -> dict:
         """Find and outline objects with no prompt. target: "fixed-class-segmentation" (default: 80 common
         categories, clean labels), "prompt-free-segmentation" (4,585 tags: more objects, odder labels) or a
-        model id. Returns labels, scores, boxes and compact masks; save_masks adds artifact:// PNGs."""
+        model id. Returns labels, scores, boxes and masks (polygons + compact encoding); save_masks adds
+        mask PNG artifacts."""
         return run("detect_objects", target, image,
                    lambda photo, size: c.photo_request(photo),
                    lambda doc, rid, size: c.detections_result(doc, post, artifacts, rid, size, min_score,
@@ -102,11 +116,17 @@ def create_app() -> FastMCP:
     def segment_by_text(image: str, prompts: list[str], target: str = "text-prompted-segmentation",
                         save_masks: bool = True) -> dict:
         """Outline every instance of each short phrase (up to 16), e.g. ["lamp", "suitcase"]. Returns per
-        phrase: presence score and instances with boxes, compact masks and artifact:// mask PNGs. The image
-        is cached by its content, so further phrases on the same image are faster."""
-        return run("segment_by_text", target, image,
-                   lambda photo, size: c.text_segmentation_request(photo, prompts),
-                   lambda doc, rid, size: c.text_segmentation_result(doc, post, artifacts, rid, size, save_masks))
+        phrase: presence score and instances with boxes, masks (polygons + compact encoding) and mask PNG
+        artifacts, all in the photo's pixels. Photos over 2048 px are segmented scaled down (the model sees
+        1008 px anyway). The image is cached by its content, so further phrases on it are faster."""
+        scaled = {}
+
+        def request(photo, size):
+            small, scaled["s"] = c.text_segmentation_scale(photo, size, text_seg_max_side)
+            return c.text_segmentation_request(small, prompts)
+        return run("segment_by_text", target, image, request,
+                   lambda doc, rid, size: c.text_segmentation_result(doc, post, artifacts, rid, size, save_masks,
+                                                                     scaled["s"]))
 
     @mcp.tool
     def detect_by_text(image: str, queries: list[str], target: str = "open-vocabulary-detection",
@@ -126,16 +146,21 @@ def create_app() -> FastMCP:
                    lambda doc, rid, size: c.depth_result(doc, artifacts, rid))
 
     @mcp.tool
-    def inpaint(image: str, mask: str, target: str = "inpainting", grow_mask_px: int = 7) -> dict:
+    def inpaint(image: str, mask: str, target: str = "inpainting", grow_mask_px: int = 7,
+                composite: bool = False) -> dict:
         """Inpainting: repaint the masked region from its surroundings (e.g. to erase an object). mask: an
         image of the same size, white = region to fill (a mask_png from segment_region works directly).
-        grow_mask_px widens the mask first (default 7; the fill needs a margin around an object). Works best
-        on one modest region at a time. Returns the result as an artifact:// PNG."""
+        grow_mask_px widens the mask first (default 7; the fill needs a margin around an object). The model
+        runs on a window around the mask, so one modest region at a time works best. Returns a patch: an
+        RGBA PNG covering only the filled pixels (artifact + url), its offset [x, y] and size in the photo --
+        place it as a layer at the offset. composite=True also returns the whole repainted photo."""
+        ctx = {}
+
         def request(photo, size):
             mask_bytes, mask_size = artifacts.load_image(mask, "mask")
-            return c.inpaint_request(photo, size, mask_bytes, mask_size, grow_mask_px)
+            return c.inpaint_request(photo, size, mask_bytes, mask_size, grow_mask_px, ctx)
         return run("inpaint", target, image, request,
-                   lambda doc, rid, size: c.inpaint_result(doc, artifacts, rid))
+                   lambda doc, rid, size: c.inpaint_result(doc, artifacts, rid, ctx, composite))
 
     @mcp.tool
     def embed_image(image: str, target: str = "image-embedding") -> dict:
@@ -152,6 +177,21 @@ def create_app() -> FastMCP:
             return artifacts.path_of(run, name).read_bytes()
         except InputError as exc:
             raise ValueError(str(exc)) from exc
+
+    @mcp.custom_route("/artifacts/{run}/{name}", methods=["GET"])
+    async def artifact_download(request: Request):
+        """Signed, read-only download of one output file -- the route the
+        artifacts.home.arpa Caddy site exposes (nothing else of this server is)."""
+        run_id, name = request.path_params["run"], request.path_params["name"]
+        if not artifacts.verify(run_id, name, request.query_params.get("exp", ""), request.query_params.get("sig", "")):
+            return PlainTextResponse("invalid or expired link\n", status_code=403)
+        try:
+            path = artifacts.path_of(run_id, name)
+        except InputError:
+            return PlainTextResponse("not found\n", status_code=404)
+        media = {".png": "image/png", ".jpg": "image/jpeg", ".jpeg": "image/jpeg"}.get(path.suffix.lower(),
+                                                                                       "application/octet-stream")
+        return FileResponse(path, media_type=media, headers={"Cache-Control": "private, max-age=3600, immutable"})
 
     @mcp.custom_route("/healthz", methods=["GET"])
     async def healthz(request: Request) -> JSONResponse:

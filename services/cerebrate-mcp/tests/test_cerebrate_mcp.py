@@ -3,7 +3,8 @@ repository index) and a temporary copy of the real model registry, through
 FastMCP's in-memory client: tool discovery, capability derivation (registry
 x readiness x contracts), staged/unready exclusion, a newly registered model
 appearing with no code change, target resolution, request/response mapping
-for segment_region, artifacts, and error reporting.
+for segment_region, artifacts, polygons, signed artifact URLs, the inpaint
+window and patch, scaled-down text segmentation, and error reporting.
   cd services/cerebrate-mcp && python -m unittest discover -s tests -v"""
 import asyncio
 import base64
@@ -31,6 +32,7 @@ from fastmcp import Client  # noqa: E402
 from fastmcp.exceptions import ToolError  # noqa: E402
 
 W, H = 64, 48
+FILL = (200, 50, 50)
 
 
 def png(array) -> bytes:
@@ -58,6 +60,7 @@ def box_mask(box):
 class FakeMLServer(BaseHTTPRequestHandler):
     states: dict = {}
     requests: list = []
+    seen_sizes: list = []
     fail_with: str | None = None
 
     def log_message(self, *args):
@@ -86,8 +89,22 @@ class FakeMLServer(BaseHTTPRequestHandler):
             boxes = [flat[i:i + 4] for i in range(0, len(flat), 4)]
             doc = {"image": image, "image_id": inputs["image_id"]["data"][0],
                    "masks": [{"box": b, "score": 0.9, "mask": post.encode_mask(box_mask(b))} for b in boxes]}
-        elif "mask" in inputs:
-            doc = {"image": image, "encoding": "png", "result": base64.b64encode(PHOTO).decode()}
+        elif "mask" in inputs:      # "inpaint": the sent photo with the masked pixels painted FILL
+            photo = np.array(Image.open(io.BytesIO(base64.b64decode(inputs["photo"]["data"][0]))).convert("RGB"))
+            hole = np.asarray(Image.open(io.BytesIO(base64.b64decode(inputs["mask"]["data"][0])))) >= 128
+            photo[hole] = FILL
+            doc = {"image": {"width": photo.shape[1], "height": photo.shape[0]}, "encoding": "png",
+                   "result": base64.b64encode(png(photo)).decode()}
+        elif "prompts" in inputs:   # one instance per phrase: the photo's central quarter
+            ph = Image.open(io.BytesIO(base64.b64decode(inputs["photo"]["data"][0])))
+            w, h = ph.size
+            FakeMLServer.seen_sizes.append((w, h))
+            box = [w // 4, h // 4, 3 * w // 4, 3 * h // 4]
+            m = np.zeros((h, w), bool)
+            m[box[1]:box[3], box[0]:box[2]] = True
+            doc = {"image": {"width": w, "height": h}, "image_id": inputs["image_id"]["data"][0],
+                   "prompts": [{"text": t, "presence": 0.9, "detections": [{"box": box, "score": 0.8, "mask": post.encode_mask(m)}]}
+                               for t in inputs["prompts"]["data"]]}
         elif endpoint.startswith("depth") or endpoint.startswith("test-depth"):
             d = base64.b64encode(png(np.zeros((8, 8), np.uint16))).decode()
             doc = {"image": image, "depth": {"width": 8, "height": 8, "encoding": "png16", "min": 0.0, "max": 1.0, "data": d}}
@@ -120,7 +137,9 @@ class CerebrateMCP(unittest.TestCase):
         FakeMLServer.states = {m["serving"]["mlserver_model"]: "READY" for m in catalog["models"].values()
                                if (m.get("serving") or {}).get("mlserver_model")}
         FakeMLServer.states.update({"cerebrate-infer": "READY", "cerebrate-generate": "READY"})
-        FakeMLServer.requests, FakeMLServer.fail_with = [], None
+        FakeMLServer.requests, FakeMLServer.fail_with, FakeMLServer.seen_sizes = [], None, []
+        for k in ("CEREBRATE_MCP_PUBLIC_URL", "CEREBRATE_MCP_TEXT_SEG_MAX_SIDE"):
+            os.environ.pop(k, None)
         from cerebrate_mcp.server import create_app
         self.app = create_app()
 
@@ -232,11 +251,112 @@ class CerebrateMCP(unittest.TestCase):
         blob = asyncio.run(read())[0].blob
         self.assertEqual(base64.b64decode(blob), Path(out["masks"][0]["mask_png"]["path"]).read_bytes())
         res = self.call("inpaint", image=base64.b64encode(PHOTO).decode(), mask=out["masks"][0]["mask_png"]["uri"])
-        self.assertTrue(Path(res["result_png"]["path"]).is_file())
         sent = {i["name"]: i for i in FakeMLServer.requests[-1][1]["inputs"]}
         grown = np.asarray(Image.open(io.BytesIO(base64.b64decode(sent["mask"]["data"][0])))) > 0
         expected = box_mask([0, 0, 30 + 7, 20 + 7])    # the (4, 5, 30, 20) box grown 7 px, clipped at the image edge
-        self.assertTrue(np.array_equal(grown, expected))
+        self.assertTrue(np.array_equal(grown, expected))  # a 64x48 photo is its own window
+        # the patch: the grown mask's bounds, alpha = the grown mask, the fill inside
+        self.assertEqual((res["offset"], res["size"], res["window"]), ([0, 0], [37, 27], [0, 0, W, H]))
+        patch = np.asarray(Image.open(res["patch"]["path"]))
+        self.assertEqual(patch.shape, (27, 37, 4))
+        self.assertTrue(np.array_equal(patch[..., 3] > 0, expected[:27, :37]))
+        self.assertTrue((patch[..., :3][expected[:27, :37]] == FILL).all())
+        self.assertNotIn("result_png", res)
+
+    def test_polygons_rebuild_the_mask(self):
+        """Rings replayed as an editor would (replace, add, subtract; a pixel
+        is in a ring when its centre is) give back exactly the mask -- an
+        outer ring with a hole, an island inside the hole, a separate blob."""
+        import cv2
+        from cerebrate_mcp.contracts import mask_polygons
+        m = np.zeros((H, W), bool)
+        m[4:40, 4:40] = True
+        m[12:32, 12:32] = False
+        m[18:26, 18:26] = True
+        m[10:20, 48:60] = True
+        rings = mask_polygons(post, post.encode_mask(m))
+        self.assertEqual([r["hole"] for r in rings], [False, True, False, False])
+        self.assertEqual(rings[0]["points"], [4, 4, 4, 40, 40, 40, 40, 4])   # pixel corners
+        sel = np.zeros((H, W), bool)
+        yy, xx = np.mgrid[0:H, 0:W]
+        for k, r in enumerate(rings):
+            poly = np.array(r["points"], np.float32).reshape(-1, 1, 2)
+            inside = np.array([cv2.pointPolygonTest(poly, (float(x) + 0.5, float(y) + 0.5), False) > 0
+                               for x, y in zip(xx.ravel(), yy.ravel())]).reshape(H, W)
+            sel = (sel & ~inside) if r["hole"] else (inside if k == 0 else sel | inside)
+        self.assertTrue(np.array_equal(sel, m))
+        out = self.call("detect_objects", image=base64.b64encode(PHOTO).decode())
+        self.assertEqual(out["detections"][0]["polygons"], [{"hole": False, "points": [1, 2, 1, 12, 10, 12, 10, 2]}])
+
+    def test_artifact_urls(self):
+        from starlette.testclient import TestClient
+        os.environ["CEREBRATE_MCP_PUBLIC_URL"] = "http://artifacts.test"
+        from cerebrate_mcp.server import create_app
+        self.app = create_app()
+        out = self.call("segment_region", image=base64.b64encode(PHOTO).decode(), boxes=[[4, 5, 30, 20]])
+        ref = out["masks"][0]["mask_png"]
+        self.assertTrue(ref["url"].startswith("http://artifacts.test/artifacts/"))
+        self.assertTrue((Path(self.tmp) / "url-key").is_file())
+        with TestClient(self.app.http_app()) as http:
+            path = ref["url"][len("http://artifacts.test"):]
+            r = http.get(path)
+            self.assertEqual((r.status_code, r.headers["content-type"]), (200, "image/png"))
+            self.assertEqual(r.content, Path(ref["path"]).read_bytes())
+            self.assertEqual(http.get(path[:-1] + ("0" if path[-1] != "0" else "1")).status_code, 403)   # tampered
+            other = path.replace("mask-0.png", "mask-1.png")
+            self.assertEqual(http.get(other).status_code, 403)          # a signature covers one file
+            run, name = path.split("?")[0].split("/")[2:4]
+            expired = self.app_artifacts_sig(run, name, 1)
+            self.assertEqual(http.get(f"/artifacts/{run}/{name}?exp=1&sig={expired}").status_code, 403)
+        # the store's own URL is accepted as an input, read locally
+        res = self.call("inpaint", image=base64.b64encode(PHOTO).decode(), mask=ref["url"])
+        self.assertTrue(res["patch"]["url"].startswith("http://artifacts.test/artifacts/"))
+        with self.assertRaisesRegex(ToolError, "invalid or expired"):
+            self.call("inpaint", image=base64.b64encode(PHOTO).decode(), mask=ref["url"].replace("sig=", "sig=0"))
+
+    def app_artifacts_sig(self, run, name, exp):
+        import hashlib
+        import hmac
+        key = (Path(self.tmp) / "url-key").read_bytes()
+        return hmac.new(key, f"{run}/{name}:{exp}".encode(), hashlib.sha256).hexdigest()[:32]
+
+    def test_inpaint_window_and_composite(self):
+        from cerebrate_mcp.contracts import inpaint_window
+        self.assertEqual(inpaint_window((4000, 3000), (2165, 1384, 2272, 1552)), (1962, 1212, 2474, 1724))
+        self.assertEqual(inpaint_window((4000, 3000), (3900, 2900, 4000, 3000)), (3488, 2488, 4000, 3000))  # clamped
+        self.assertEqual(inpaint_window((4000, 3000), (1000, 1000, 2000, 1500)), (500, 250, 2500, 2250))   # 2x context
+        self.assertEqual(inpaint_window((300, 200), (10, 10, 20, 20)), (0, 0, 300, 200))                  # small photo
+        big = np.random.default_rng(1).integers(0, 255, (700, 900, 3), dtype=np.uint8)
+        mask = np.zeros((700, 900), np.uint8)
+        mask[600:640, 800:860] = 255
+        res = self.call("inpaint", image=base64.b64encode(png(big)).decode(), mask=base64.b64encode(png(mask)).decode(),
+                        grow_mask_px=0, composite=True)
+        sent = {i["name"]: i for i in FakeMLServer.requests[-1][1]["inputs"]}
+        self.assertEqual(Image.open(io.BytesIO(base64.b64decode(sent["photo"]["data"][0]))).size, (512, 512))
+        self.assertEqual((res["offset"], res["size"], res["window"]), ([800, 600], [60, 40], [388, 188, 900, 700]))
+        full = np.asarray(Image.open(res["result_png"]["path"]))
+        expect = big.copy()
+        expect[600:640, 800:860] = FILL
+        self.assertTrue(np.array_equal(full, expect))
+
+    def test_text_segmentation_scales_large_photos(self):
+        os.environ["CEREBRATE_MCP_TEXT_SEG_MAX_SIDE"] = "32"
+        from cerebrate_mcp.server import create_app
+        self.app = create_app()
+        out = self.call("segment_by_text", image=base64.b64encode(PHOTO).decode(), prompts=["lamp"])
+        self.assertEqual(FakeMLServer.seen_sizes[-1], (32, 24))
+        self.assertEqual((out["image"], out["segmented_at"]), ({"width": W, "height": H}, {"width": 32, "height": 24}))
+        d = out["prompts"][0]["detections"][0]
+        self.assertEqual(d["box"], [16.0, 12.0, 48.0, 36.0])
+        self.assertEqual(d["polygons"][0]["points"], [16.0, 12.0, 16.0, 36.0, 48.0, 36.0, 48.0, 12.0])
+        full = box_mask([16, 12, 48, 36])
+        self.assertTrue(np.array_equal(post.decode_mask(d["mask"], (H, W)), full))
+        self.assertTrue(np.array_equal(np.asarray(Image.open(d["mask_png"]["path"])) > 0, full))
+        os.environ.pop("CEREBRATE_MCP_TEXT_SEG_MAX_SIDE")
+        self.app = create_app()
+        out = self.call("segment_by_text", image=base64.b64encode(PHOTO).decode(), prompts=["lamp"])
+        self.assertEqual(FakeMLServer.seen_sizes[-1], (W, H))
+        self.assertNotIn("segmented_at", out)
 
     def test_target_resolution(self):
         img = base64.b64encode(PHOTO).decode()

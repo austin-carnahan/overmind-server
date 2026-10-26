@@ -55,6 +55,21 @@ http://inference.home.arpa {
 	reverse_proxy host.docker.internal:8500
 }
 
+# Read-only artifact downloads (masks, inpaint patches, depth maps) from
+# cerebrate-mcp, by signed URL -- so a tool on another machine (GIMP's
+# overmind-import-artifact plug-in) fetches a result by reference instead of
+# an agent moving its bytes. Only /artifacts/* is proxied: cerebrate-mcp's
+# MCP endpoint stays loopback-only. See services/cerebrate-mcp/README.md,
+# "Artifact URLs".
+http://artifacts.home.arpa {
+	handle /artifacts/* {
+		reverse_proxy cerebrate-mcp:8000
+	}
+	handle {
+		respond 404
+	}
+}
+
 # Routed through ContainerNursery, not straight to doclet -- lets doclet
 # sleep when unused instead of always-on (services/containernursery/).
 # The Host header this vhost forwards (doclet.home.arpa) is what

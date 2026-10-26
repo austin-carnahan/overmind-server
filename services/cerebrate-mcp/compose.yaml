@@ -21,13 +21,24 @@ services:
       # results are valid for same-host clients too.
       CEREBRATE_MCP_ARTIFACT_DIR: /var/lib/overmind/cerebrate-mcp/artifacts
       CEREBRATE_MCP_ARTIFACT_TTL_H: "24"
+      # Signed artifact URLs in results (README, "Artifact URLs"): served by
+      # this container's /artifacts route through Caddy's artifacts.home.arpa
+      # site -- the only path of this server reachable from other machines.
+      # The signing key is created on first start at
+      # /var/lib/overmind/cerebrate-mcp/url-key.
+      CEREBRATE_MCP_PUBLIC_URL: http://artifacts.home.arpa
+      # Design-studio project sources (immutable, world-readable) as image
+      # inputs by path, so an agent passes a reference, not the photo's bytes.
+      CEREBRATE_MCP_INPUT_ROOTS: /mnt/substrate/design-studio/projects
       CEREBRATE_MCP_HOST: "0.0.0.0"
       CEREBRATE_MCP_PORT: "8000"
     volumes:
       - ./cerebrate_mcp:/app/cerebrate_mcp:ro
       - ../../models:/repo/models:ro
       - ../../hosts/cerebrate-pixel6/mlserver/models/cerebrate-graph:/repo/adapter:ro
-      - /var/lib/overmind/cerebrate-mcp/artifacts:/var/lib/overmind/cerebrate-mcp/artifacts
+      # The service's state directory: artifacts/ and the URL-signing key.
+      - /var/lib/overmind/cerebrate-mcp:/var/lib/overmind/cerebrate-mcp
+      - /mnt/substrate/design-studio/projects:/mnt/substrate/design-studio/projects:ro
     extra_hosts:
       - "host.docker.internal:host-gateway"
     # Host port 8002: 8000 is cloudflare-solver's, 8001 garmin-mcp's.

@@ -1,0 +1,26 @@
+#!/usr/bin/env bash
+# Install Buckminster's Cerebrate -> GIMP recipe into its OpenClaw workspace
+# (owned by `openclaw`, hence sudo), and point AGENTS.md at it once.
+# Workspace files are read at session start: no Gateway restart needed.
+#
+#   sudo bash /opt/overmind/services/design-studio/install-buckminster-cerebrate-runbook
+set -euo pipefail
+
+src=$(cd "$(dirname "$0")" && pwd)/buckminster/cerebrate-gimp.md
+ws=/home/openclaw/.openclaw/agents/buckminster/workspace
+pointer='- **Cerebrate → GIMP** (find/outline objects, cut to layers, remove with inpaint patches): follow `runbooks/cerebrate-gimp.md`. Pass references (paths, polygon points, artifact URLs), never image bytes.'
+
+[ "$(id -u)" = 0 ] || { echo "run with sudo" >&2; exit 1; }
+[ -f "$ws/AGENTS.md" ] || { echo "no $ws/AGENTS.md" >&2; exit 1; }
+
+install -o openclaw -g openclaw -m 644 -D "$src" "$ws/runbooks/cerebrate-gimp.md"
+echo "installed $ws/runbooks/cerebrate-gimp.md"
+
+if grep -qF 'runbooks/cerebrate-gimp.md' "$ws/AGENTS.md"; then
+    echo "AGENTS.md already points at it; unchanged"
+else
+    printf '\n%s\n' "$pointer" >> "$ws/AGENTS.md"
+    chown openclaw:openclaw "$ws/AGENTS.md"
+    echo "appended to AGENTS.md:"
+    tail -n 2 "$ws/AGENTS.md"
+fi

@@ -63,6 +63,8 @@ rewrites:
     # change later without clients changing URLs (Stage 5 Phase 4)
   - name: doclet.home.arpa
     target: overmind-01.home.arpa
+  - name: artifacts.home.arpa
+    target: overmind-01.home.arpa # cerebrate-mcp's signed, read-only /artifacts route via Caddy
 
   # --- Devices we don't control — direct, node-style entry. No "node"
   # abstraction for hardware we don't manage; an IP is fine here. ---

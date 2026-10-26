@@ -1,0 +1,28 @@
+#!/usr/bin/env bash
+# Install this repo's GIMP 3 plug-ins (gimp-plugins/*) into a GIMP worker's
+# profile. Runs on the worker as the GIMP user; no sudo. GIMP registers a
+# new plug-in only at start-up, so restart GIMP after the first install
+# (code changes to an installed plug-in apply on the next call).
+#
+#   install-gimp-plugins [GIMP profile dir]
+#   # default: ~/Library/Application Support/GIMP/3.2 (macOS), ~/.config/GIMP/3.2 (Linux)
+set -euo pipefail
+
+src=$(cd "$(dirname "$0")/gimp-plugins" && pwd)
+if [ $# -ge 1 ]; then
+    profile=$1
+elif [ "$(uname)" = Darwin ]; then
+    profile="$HOME/Library/Application Support/GIMP/3.2"
+else
+    profile="${XDG_CONFIG_HOME:-$HOME/.config}/GIMP/3.2"
+fi
+[ -d "$profile" ] || { echo "no GIMP profile at $profile (start GIMP 3.2 once first)" >&2; exit 1; }
+
+for dir in "$src"/*/; do
+    name=$(basename "$dir")
+    dest="$profile/plug-ins/$name"
+    mkdir -p "$dest"
+    install -m 755 "$dir/$name.py" "$dest/$name.py"
+    echo "installed $name -> $dest"
+done
+echo "Restart GIMP if any plug-in is new (it registers plug-ins at start-up)."
