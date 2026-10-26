@@ -657,6 +657,11 @@ profile <name> <slot> <declared model file> <worker config>     [min_free_mb]
   the registry; run it before every deployment of the file.
 - The READY line gains `file_profiles=N`, and LIST answers with up to 8 KB.
 
+> **Superseded on 2026-10-25** by one capacity rule for every worker, with
+> the profiles file generated from the registry. See
+> [Capacity: one rule for every worker](#capacity-one-rule-for-every-worker-one-serving-policy-2026-10-25)
+> below. The per-profile floors described next no longer exist.
+
 **Admission.** `min_free_mb` makes START refuse while `MemAvailable` is below
 it:
 
@@ -951,3 +956,159 @@ With either resident, a YOLOE request takes the phone to about 1 GB free or
 below. Adding EdgeSAM brings it to 0.3–0.7 GB, inside the low-memory killer's
 reach toward the Debian VM. This needs a co-residency policy before
 promotion; the user is to decide.
+
+
+## Capacity: one rule for every worker, one serving policy (2026-10-25)
+
+Decided with the user after the promotions: there are no per-model admission
+floors and no per-model idle windows. Instead the system has one rule and one
+policy, and every Pixel model (graph, hetero, MobileNet, SmolLM2, Granite)
+follows them through one shared lifecycle.
+
+**The rule (supervisor).** A worker starts only if:
+
+```text
+MemAvailable − committed − cost ≥ reserve_mb
+```
+
+- `cost` is the configuration's measured `load_mb`: the free-memory drop from
+  its start through its validation requests.
+- `committed` is, over running workers, the part of each one's cost it isn't
+  using yet: cost minus the RSS of the worker and its children. That covers
+  Granite, which allocates in a child process per request.
+- It applies to every START. A configuration without a recorded cost is
+  refused (fail closed).
+- Refusals read `ERROR: capacity: <key> needs N MB; M MB free, C MB committed
+  to running workers, reserve R MB`.
+- `CAPACITY` reports the reserve, free and committed memory, and each running
+  worker's cost and RSS.
+
+**The profiles file is generated.** `scripts/cerebrate-models generate` writes
+it from the registry: the `reserve_mb` line, the slots and profiles, and a
+`cost` line for every servable configuration, including the compiled-in ones.
+The validator fails when it is out of date. The old `min_free_mb` column is
+gone, and a file using it would be refused at startup.
+
+**The policy (registry).**
+
+```yaml
+serving_policy: {reserve_mb: 1000, idle_stop_s: 600, capacity_wait_s: 30}
+```
+
+It lives in `models/catalog.yaml` and is generated into the profiles file
+(`reserve_mb`) and into the adapter's `serving_policy.json`.
+
+**The lifecycle (MLServer).**
+[`cerebrate_lifecycle.py`](../mlserver/models/cerebrate-graph/cerebrate_lifecycle.py)
+does this for every adapter:
+- starts a worker on its first request;
+- stops it after the idle window;
+- retries once on a lost worker;
+- on a capacity refusal, stops the least recently used **idle** worker in the
+  process and asks again. A worker serving a request is never stopped.
+- if every other worker is busy, waits up to 30 s, then fails with the
+  supervisor's reason.
+
+**Measured costs.**
+
+| Configuration | load_mb | Configuration | load_mb |
+| --- | --- | --- | --- |
+| MobileNet (`infer`) | 23 | Depth fast / default | 221 / 300 |
+| SmolLM2 (`generate`) | 299 | MI-GAN fast / default | 125 / 234 |
+| Granite-Docling (`gguf`) | 481 | DINOv2 | 150 |
+| YOLOE-v8s fast / default | 510 / 425 | YOLOE-11s | 414 |
+| EdgeSAM fast / default | 544 / 311 | SAM 2.1 FP32 | 919 |
+| RF-DETR fast / default | 180 / 279 | EfficientSAM3 fast | 2,365 |
+| OWLv2 | 1,924 | | |
+
+The first seven were measured with
+[`measure_costs.py`](../cerebrate-hetero/tests/measure_costs.py); the rest come
+from the staging measurements.
+
+**Builds.**
+
+| Binary | sha256 | What it is |
+| --- | --- | --- |
+| [`cerebrate-supervisor`](cerebrate-supervisor), this directory | `c2ca2ac8…` | The default build. |
+| Test build | `7283e534…` | `-DCONTROL_PORT=8777 -DPORT_OFFSET=100 -DSTAGING_DIR="/data/local/tmp/cerebrate-stage"`. Every compiled-in port is shifted by 100, because production uses the real ones; the test profiles file is generated with `--port-offset 100`. |
+
+**Tested on the test stack** (the shared lifecycle, a generated test profiles
+file with the reserve, and a test MLServer of all 13 endpoints):
+
+| Test | Result |
+| --- | --- |
+| Lifecycle unit tests (fake supervisor) | 7/7 |
+| Registry tests | 38/38 |
+| [`capacity_scenarios.py`](../cerebrate-hetero/tests/capacity_scenarios.py) `wait` | 6/6 |
+| `capacity_scenarios.py` `fail` (5 s wait) | 6/6 |
+| YOLOE and EdgeSAM result-mode gate | 8/8 and 8/8 |
+| MobileNet probe | 795 |
+| The eight GPU endpoints' gates | 33/33 |
+| Idle stop (60 s test window) | every worker stopped, all 13 models READY |
+| Supervisor crash recovery with the watchdog | passed |
+
+The `wait` scenarios:
+- YOLOE fits beside a resident EfficientSAM3, so nothing is stopped.
+- An idle EfficientSAM3 is stopped to make room for OWLv2.
+- A busy EfficientSAM3 is never stopped: OWLv2 waited 22 s for it.
+- Free memory never fell below 1,115 MB.
+
+In `fail` mode, OWLv2 was refused after the wait with the reason, and
+EfficientSAM3 was unharmed.
+
+The eight endpoints' gates include EfficientSAM3 and OWLv2, each beside
+production YOLOE and MobileNet.
+
+In the crash-recovery test, the watchdog killed the orphaned MobileNet worker
+and restarted the supervisor, and the next request restarted MobileNet. Two
+watchdog fixes came out of it:
+- **TIME_WAIT bug.** Android's `netstat -l` also lists TIME_WAIT connections,
+  so a dead supervisor looked alive for a minute after any client connection.
+  The check now requires a LISTEN socket.
+- **Orphans of every worker binary.** These are now cleared, not only
+  `cerebrate-hetero`.
+
+### Deployment runbook (window 2: capacity and shared lifecycle)
+
+This window replaces the supervisor binary and the profiles file **together**:
+the old binary refuses the new `reserve_mb`/`cost` lines, and the new binary
+refuses the old `min_free_mb` column. It also replaces the adapters, so
+MLServer restarts. Expect about a minute of MLServer downtime.
+
+1. **Pre-flight.**
+   - Push the release.
+   - On the phone, stage `cerebrate-supervisor.capacity` (`c2ca2ac8`) and
+     `cerebrate-profiles.conf.capacity`, the generated file. Verify their
+     hashes.
+   - Check that the phone has ≥ 3 GB free and is below 45 °C.
+2. **Pause the watchdog** without sudo: write the current time to
+   `/run/pixel-supervisor-watchdog/last-start`, which gives a 2-minute
+   cooldown. Repeat it if the window runs longer.
+3. **Stop MLServer** with `sudo systemctl stop cerebrate-mlserver`, then STOP
+   every running worker.
+4. **Swap on the phone.**
+   1. Keep the current binary and profiles file as `*.registry1`.
+   2. Kill the supervisor (verify its exe first).
+   3. Move the `.capacity` files into place.
+   4. Relaunch the supervisor.
+
+   The READY line must read `file_profiles=11 reserve_mb=1000 costs=18`.
+5. **Update the guest** with `git pull --ff-only`. This brings the shared
+   lifecycle, the removed `graph-canary` and `example-echo`, and the policy
+   file.
+6. **Start MLServer.** 11 models are READY and **no worker runs**: every
+   worker is on demand now.
+7. **Gate.** Roll back on any failure.
+   - `mlserver_result_test.py`: YOLOE 8/8 + 8/8 and EdgeSAM 8/8 + 8/8, the
+     same as before.
+   - `mobilenet_probe.py`: 795.
+   - The six promoted endpoints: `mlserver_staged_test.py --only …`.
+   - One SmolLM2 request, and one Granite request (about 100 s).
+   - `CAPACITY` answers.
+
+**Rollback.**
+1. Stop MLServer, then STOP the workers.
+2. On the phone, move `*.registry1` back and relaunch the supervisor.
+3. In the guest, check out the previous commit and start MLServer.
+
+Model files, configs and Pillow are unchanged by this window.

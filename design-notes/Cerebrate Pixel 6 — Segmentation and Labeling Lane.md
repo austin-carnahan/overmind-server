@@ -1359,3 +1359,23 @@ conditions in Section 4.4).
     hand first. It is still to be tested in a maintenance window.
   - **Next:** the cutover window (user-scheduled), then promotions one at a
     time, starting with Depth and MI-GAN.
+- **2026-10-25** — **Cutover done; six endpoints promoted; capacity redesigned.**
+  - **Cutover.** The registry-serving cutover took ~64 s of MLServer downtime,
+    and its gate passed.
+  - **Promotions.** Depth, MI-GAN, DINOv2, YOLOE-11s, RF-DETR and SAM 2.1
+    (FP32) were promoted, each gate 5/5.
+  - **Held, then redesigned.** EfficientSAM3 and OWLv2 were held on a memory
+    question. That led to the user's design decision: one capacity rule for
+    every worker instead of per-model floors (the supervisor's reserve and
+    measured costs, generated from the registry), and one system idle window.
+  - **Shared lifecycle.** All four adapter families share one lifecycle.
+    Every Pixel model runs on demand, and idle workers are stopped to make
+    room.
+  - **Retired.** `graph-canary` and `example-echo` are gone. The health probe
+    is MobileNet through its endpoint.
+  - **Granite-Docling** is registered.
+  - **Tested on the test stack:** the capacity scenarios, all eight gates
+    (33/33), and crash recovery. Testing found and fixed a watchdog false
+    positive (TIME_WAIT).
+  - **Next:** window 2 (supervisor + profiles file + adapters), then
+    EfficientSAM3 and OWLv2.

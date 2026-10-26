@@ -188,9 +188,11 @@ reliably crashes the USB controller without it under real write load.
   WantedBy=timers.target
   ```
 
-- **`pixel-supervisor-watchdog.timer`** (prepared 2026-10-25, **not
-  installed yet** — it goes in with the registry-serving deployment, see the
-  [Pixel 6 models runbook](../../runbooks/cerebrate-pixel6-models.md))
+- **`pixel-supervisor-watchdog.timer`** (installed 2026-10-25; see the
+  [Pixel 6 models runbook](../../runbooks/cerebrate-pixel6-models.md). The
+  repo version since then fixes a TIME_WAIT false positive and clears orphans
+  of every worker binary; reinstall it with the `install` line below after
+  pulling)
   restarts `cerebrate-supervisor` on the phone when its control port (8767)
   isn't listening: after a crash or the low-memory killer. After an Android
   reboot it can act only once `adb tcpip` has been re-enabled by hand;

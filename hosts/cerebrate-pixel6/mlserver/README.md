@@ -857,8 +857,9 @@ boxes.
 The registry's eight newly served models have MLServer settings in
 [`held-models/`](held-models/). MLServer loads only `models/`, so production
 doesn't see them. Each folder holds a `model-settings.json` and two symlinks
-to the shared adapter. Every model uses on-demand residency (idle stop 600 s;
-OWLv2 300 s), a 120 s request timeout, and its own supervisor slot. Every one
+to the shared adapter. Every model has a 120 s request timeout and its own
+supervisor slot. Residency and the idle window are system-wide since
+2026-10-25 (section below). Every one
 passed the side-by-side test
 ([`mlserver_staged_test.py`](../cerebrate-hetero/tests/mlserver_staged_test.py), 18/18;
 [results](../../../experiments/pixel6/results.md#2026-10-25--registry-serving-eight-gpu-models-staged-beside-production)).
@@ -944,3 +945,41 @@ in the
    127.0.0.1:8081 127.0.0.1:8080 <gateway> <data> --only <m>`.
 
 Demotion is the reverse: unload, then move the folder back.
+
+
+## Shared lifecycle: every Pixel model on demand, one capacity rule (2026-10-25)
+
+All four adapter families now share one worker lifecycle,
+[`cerebrate_lifecycle.py`](models/cerebrate-graph/cerebrate_lifecycle.py):
+`cerebrate-graph` (graph, hetero and registry models), `cerebrate-infer`
+(MobileNet), `cerebrate-generate` (SmolLM2) and `cerebrate-gguf`
+(Granite-Docling). Each adapter keeps only its own request handling: tensors
+and hooks, the byte-line classifier, the token stream, the ~100 s document job.
+Client contracts are unchanged.
+
+- **Every worker runs on demand**, MobileNet, SmolLM2 and Granite included,
+  which used to be loaded at MLServer startup and never stopped. A model is
+  READY without a worker: its first request starts it, and it stops after the
+  system idle window, 600 s.
+- **Memory.** The supervisor refuses a start that would cross its reserve
+  (`ERROR: capacity: …`). The lifecycle then stops the least recently used
+  idle worker in this MLServer process and asks again. A worker serving a
+  request is never stopped; multi-call hooks hold theirs for the whole
+  request. If every other worker is busy, the request waits up to 30 s, then
+  fails with the supervisor's reason. Policy:
+  [`serving_policy.json`](models/cerebrate-graph/serving_policy.json), which
+  is generated; test stacks override it with `CEREBRATE_IDLE_STOP_S`,
+  `CEREBRATE_CAPACITY_WAIT_S` and `CEREBRATE_SUPERVISOR_PORT`.
+- **A lost worker** releases its slot, and the request runs once more on a
+  fresh one. Granite's timeouts are not retried: the caller stopped waiting,
+  but the worker may still be running.
+- **Removed:** `graph-canary` (the Step 1 smoke test on slot `graph3`, unused)
+  and `example-echo` (the Phase 1 placeholder). `cerebrate-graph/` is now only
+  the shared adapter's code.
+- **The health probe** is MobileNet through its endpoint,
+  [`mobilenet_probe.py`](../cerebrate-hetero/tests/mobilenet_probe.py): a
+  224×224 PNG of the i%256 input, which must return class 795. The worker's
+  raw port is no longer a probe target.
+- Tests: [`tests/test_lifecycle.py`](tests/test_lifecycle.py), standard
+  library only, against a fake supervisor with the real rule; the test-stack
+  results are in the supervisor README's capacity section.

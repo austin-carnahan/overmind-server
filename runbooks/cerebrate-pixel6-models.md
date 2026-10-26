@@ -71,9 +71,19 @@ A="adb -s 192.168.68.60:5555"
 curl -s -f localhost:8500/v2/health/ready && echo MLServer ready      # reverse tunnel to the guest's HTTP port
 curl -s -X POST -H 'Content-Type: application/json' -d '{}' localhost:8500/v2/repository/index   # every model and its state
 printf 'LIST\n\n' | timeout 5 $A shell nc -w 3 127.0.0.1 8767         # slots: RUNNING / STOPPED, pid, profile
-$A shell grep MemAvailable /proc/meminfo
+printf 'CAPACITY\n\n' | timeout 5 $A shell nc -w 3 127.0.0.1 8767     # reserve, free, committed; each running worker's cost and RSS
 $A shell dumpsys thermalservice | sed -n '/Current temperatures from HAL/,/cooling devices/p' | grep -E 'mName=(TPU|G3D|VIRTUAL-SKIN),'
 ```
+
+The model-level health probe is MobileNet through its MLServer endpoint, run
+in the guest; it expects class 795:
+
+```bash
+~/mlserver17-venv/bin/python3 hosts/cerebrate-pixel6/cerebrate-hetero/tests/mobilenet_probe.py 127.0.0.1:8081 3
+```
+
+Its worker runs on demand like every other, so probing its raw port (8765)
+doesn't work.
 
 **Healthy at rest:**
 
@@ -176,10 +186,18 @@ first.
 
 **Steps:**
 
-1. Add its slot and profile to
-   [`cerebrate-profiles.conf`](../hosts/cerebrate-pixel6/cerebrate-supervisor/cerebrate-profiles.conf):
-   - one slot per model, on the next free port above 8782;
-   - the floor = the measured drop + 1000 MB.
+1. In the registry:
+   - give the model a worker port (the catalog's `worker.port`, the next free
+     port above 8782);
+   - give the variant a `serving` block with slot and profile, and its
+     measured `resources.load_mb`.
+
+   Measure the cost with
+   [`measure_costs.py`](../hosts/cerebrate-pixel6/cerebrate-hetero/tests/measure_costs.py)
+   on the test stack. Then run `scripts/cerebrate-models generate`, which
+   writes the slot, profile and cost into
+   [`cerebrate-profiles.conf`](../hosts/cerebrate-pixel6/cerebrate-supervisor/cerebrate-profiles.conf).
+   Never edit that file by hand.
 2. Create `hosts/cerebrate-pixel6/mlserver/held-models/<endpoint>/`, copying a
    neighbour:
    - `model-settings.json`;
@@ -189,16 +207,21 @@ first.
    profile, mlserver_model}`.
 4. Run the validator.
 5. Test side by side:
-   1. Run the test supervisor build (`-DCONTROL_PORT=8777
+   1. Run the test supervisor build (`-DCONTROL_PORT=8777 -DPORT_OFFSET=100
       -DSTAGING_DIR="/data/local/tmp/cerebrate-stage"`) from
-      `/data/local/tmp/cerebrate-stage/`. That directory holds the profiles
-      file, configs, and symlinks to the staged models.
+      `/data/local/tmp/cerebrate-stage/`. That directory holds:
+      - the test profiles file
+        (`scripts/cerebrate-models generate --port-offset 100 --out …`);
+      - the configs;
+      - symlinks to the staged models, binaries and libraries.
+
+      Every port is shifted by 100, because production uses the real ones.
    2. Build the test repository from the checkout with
       [`make_test_repository.py`](../hosts/cerebrate-pixel6/cerebrate-hetero/tests/make_test_repository.py)
-      `<checkout> ~/cg-test/stage/mlserver/models <endpoint>...`. It applies
-      exactly two overrides: the supervisor port (8777), and the model path
-      moved into the test staging directory, the only place the test
-      supervisor approves. Then run a test MLServer on ports 18080–18082
+      `<checkout> <out dir> <endpoint>...`. It applies exactly two kinds of
+      override: every worker port shifted by 100, and every model path moved
+      into the test staging directory, the only place the test supervisor
+      approves. Run the test MLServer with `CEREBRATE_SUPERVISOR_PORT=8777`. Then run a test MLServer on ports 18080–18082
       from that repository.
    3. Run [`mlserver_staged_test.py`](../hosts/cerebrate-pixel6/cerebrate-hetero/tests/mlserver_staged_test.py).
 
@@ -234,8 +257,8 @@ in place.
 
 Never more than one per step. Never activate several at once: separate GPU
 processes serialize, and YOLOE's median went from 78 to 248 ms beside Depth.
-On-demand residency with idle stops keeps few workers resident, and the
-admission floors bound memory. Two configurations are `serving_blocked` and
+Every worker runs on demand and stops when idle. The supervisor's capacity
+rule bounds memory, and the adapter stops idle workers to make room. Two configurations are `serving_blocked` and
 are never promoted: EfficientSAM3 FP32 (memory) and SAM 2.1 reduced precision
 (unresolved 0.963).
 
@@ -304,15 +327,18 @@ them, or a release that replaces it.
 
 | Property | Implemented by | Check it when | How |
 | --- | --- | --- | --- |
-| Idle stop (an on-demand worker stops after its idle window; the model stays READY) | the adapter's residency code (`cerebrate_graph_runtime.py`), the supervisor's STOP | that code changes, or a new MLServer version | `IDLE_STOP_CHECK=1 mlserver_staged_test.py …` on the test stack (OWLv2, 60 s test window), or one endpoint in production after a cutover |
-| Admission refusal | the supervisor's START | the supervisor changes | the full `mlserver_staged_test.py` (OWLv2 refused while EfficientSAM3 holds memory) |
-| Lost-worker retry, supervisor watchdog | the adapter, `pixel-supervisor-watchdog` | either changes | kill a test worker or the test supervisor, as in the 2026-10-25 results |
+| Idle stop (a worker stops after the system idle window; the model stays READY) | `cerebrate_lifecycle.py`, the supervisor's STOP | that code changes, or a new MLServer version | a test MLServer with `CEREBRATE_IDLE_STOP_S=60`: every test worker stops, every model stays READY |
+| Capacity: admission, making room, waiting, the refusal message | the supervisor's START and CAPACITY, `cerebrate_lifecycle.py` | either changes, or the reserve changes | [`capacity_scenarios.py`](../hosts/cerebrate-pixel6/cerebrate-hetero/tests/capacity_scenarios.py) `wait`, then `fail` with `CEREBRATE_CAPACITY_WAIT_S=5`; `python3 -m unittest discover -s hosts/cerebrate-pixel6/mlserver/tests` |
+| Lost-worker retry, supervisor watchdog | `cerebrate_lifecycle.py`, `pixel-supervisor-watchdog` | either changes | kill a test worker, or the test supervisor (results 2026-10-25) |
 
-Idle stop was last verified on 2026-10-25, at the registry-serving cutover:
-`hetero1` and `hetero2` stopped ten minutes after the gate. The idle window
-is a per-endpoint setting (`cerebrate_graph_idle_stop_s` in
-`model-settings.json`), and the mechanism is shared by every endpoint. A new
-endpoint doesn't need its own runtime check.
+Last verified on 2026-10-25, with the shared lifecycle and the capacity rule,
+on the test stack:
+- idle stop: every worker stopped after the 60 s test window, and all 13
+  models stayed READY;
+- capacity scenarios: 6/6 in `wait` mode and 6/6 in `fail` mode.
+
+The idle window is one system setting, `serving_policy.idle_stop_s` in the
+catalog, so no endpoint needs its own check.
 
 ## Disable serving
 
@@ -418,7 +444,8 @@ The current numbers:
 
 | Symptom | Cause | Action |
 | --- | --- | --- |
-| `could not start gpu-… on demand: supervisor refused START: ERROR: profile … needs N MB free` | Admission: another model holds memory. | Expected under load; the model stays READY. Retry after the other model's idle stop, or unload it. Never lower a floor without a new measurement. |
+| `could not start <slot>: no capacity for <slot>: ERROR: capacity: <profile> needs N MB; M MB free, C MB committed …, reserve R MB (waited 30s for <models> to finish)` | Memory is full, and every other worker was busy for the whole wait. Idle workers are stopped automatically. | Expected under heavy concurrent use; the model stays READY. Retry. `CAPACITY` shows who holds memory. Never lower the reserve or a cost without a new measurement. |
+| `ERROR: capacity: no recorded cost for <key>` | The supervisor has no cost for that profile or worker. It fails closed. | Measure it, record `load_mb`, run `scripts/cerebrate-models generate`, and deploy the profiles file. |
 | `… cerebrate-supervisor unreachable` | The supervisor is down. | Check `LIST`. The watchdog restarts it within a minute; otherwise use the Deploy command. |
 | A request failed once, then works | The worker was lost (killed, or an orphan was cleared). | The adapter already retried once. A second loss fails the request. Check `supervisor.log` and `<slot>.supervisor.log` (e.g. `gpu-depth.supervisor.log`) in `/data/local/tmp`. |
 | `ERROR: port … already has an unmanaged listener` | A worker survived its supervisor. | For on-demand workers the watchdog kills it on its next restart. By hand: kill the `cerebrate-hetero` whose parent is 1. Never kill a pinned worker that is serving. |
