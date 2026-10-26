@@ -1,0 +1,38 @@
+# Cerebrate MCP (services/cerebrate-mcp/README.md): the Pixel's inference
+# endpoints for MCP clients. Loopback-only, same pattern as garmin-mcp: the
+# native OpenClaw Gateway on this host connects to 127.0.0.1:8002/mcp.
+# Reads the model registry and the adapter's mask codec from this checkout
+# (read-only); calls MLServer through the Pixel tunnel on the host
+# (127.0.0.1:8500, reached as host.docker.internal from the container).
+services:
+  cerebrate-mcp:
+    build:
+      context: .
+    container_name: cerebrate-mcp
+    mem_limit: 512m
+    environment:
+      CEREBRATE_MCP_MLSERVER_URL: http://host.docker.internal:8500
+      CEREBRATE_MCP_REGISTRY_DIR: /repo/models
+      CEREBRATE_MCP_ADAPTER_DIR: /repo/adapter
+      # Same path inside and outside the container, so artifact paths in
+      # results are valid for same-host clients too.
+      CEREBRATE_MCP_ARTIFACT_DIR: /var/lib/overmind/cerebrate-mcp/artifacts
+      CEREBRATE_MCP_ARTIFACT_TTL_H: "24"
+      CEREBRATE_MCP_HOST: "0.0.0.0"
+      CEREBRATE_MCP_PORT: "8000"
+    volumes:
+      - ./cerebrate_mcp:/app/cerebrate_mcp:ro
+      - ../../models:/repo/models:ro
+      - ../../hosts/cerebrate-pixel6/mlserver/models/cerebrate-graph:/repo/adapter:ro
+      - /var/lib/overmind/cerebrate-mcp/artifacts:/var/lib/overmind/cerebrate-mcp/artifacts
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    # Host port 8002: 8000 is cloudflare-solver's, 8001 garmin-mcp's.
+    ports:
+      - "127.0.0.1:8002:8000"
+    healthcheck:
+      test: ["CMD", "python3", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/healthz', timeout=5)"]
+      interval: 60s
+      timeout: 10s
+      retries: 3
+    restart: unless-stopped

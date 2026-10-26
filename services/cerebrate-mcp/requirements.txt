@@ -1,0 +1,7 @@
+# Pinned 2026-10-26 (each release at least two weeks old). FastMCP 4.1.0
+# (2026-10-08) brings the MCP Python SDK; pinned too for reproducibility.
+fastmcp==4.1.0
+mcp==2.3.0
+pyyaml==6.0.3
+numpy==2.5.4
+pillow==12.3.0

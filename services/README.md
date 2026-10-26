@@ -23,6 +23,7 @@ a time. Existing helper scripts are manual components, not an ingestion daemon.
 | [Paperclip](paperclip/README.md) | Bounded agent coordination |
 | [Research](research/README.md) | Capture, notes, papers, and future search |
 | [Inference](inference/README.md) | Deferred model-serving capability |
+| [Cerebrate MCP](cerebrate-mcp/README.md) | The Pixel's inference endpoints for MCP clients (OpenClaw); spike, not deployed |
 | [Pi-hole](pihole/README.md) | Optional independent DNS host |
 
 ## Before marking a service deployable
