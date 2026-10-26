@@ -30,11 +30,23 @@ else
 fi
 
 echo "== tool policy"
-agents_json=$(oc config get agents.list --json)
-mapfile -t ops < <(ALLOW="$ALLOW_AGENTS" AGENTS="$agents_json" python3 - <<'EOF'
-import json, os
+# Every openclaw call's output is shown when it fails (a captured failure
+# under set -e would otherwise exit silently).
+if ! agents_out=$(oc config get agents.list --json 2>&1); then
+  echo "openclaw config get agents.list --json failed:"; echo "$agents_out"; exit 1
+fi
+if ! ops_text=$(ALLOW="$ALLOW_AGENTS" AGENTS="$agents_out" python3 - <<'EOF'
+import json, os, sys
 allow = set(os.environ["ALLOW"].split())
-for i, a in enumerate(json.loads(os.environ["AGENTS"])):
+text = os.environ["AGENTS"]
+start = text.find("[")          # the CLI may print a banner before the JSON
+try:
+    agents, _ = json.JSONDecoder().raw_decode(text[start:]) if start >= 0 else (None, 0)
+except ValueError:
+    agents = None
+if not isinstance(agents, list):
+    sys.exit("could not read the agent list from:\n" + text[:1500])
+for i, a in enumerate(agents):
     tools = a.get("tools") or {}
     if a.get("id") in allow:
         if not tools.get("profile"):
@@ -46,21 +58,30 @@ for i, a in enumerate(json.loads(os.environ["AGENTS"])):
     if "cerebrate__*" not in cur:
         print(f"agents.list[{i}].tools.{key}\t{json.dumps(cur + ['cerebrate__*'])}\t{a.get('id')}")
 EOF
-)
+); then
+  exit 1
+fi
+ops=()
+[ -n "$ops_text" ] && mapfile -t ops <<<"$ops_text"
 if [ ${#ops[@]} -eq 0 ]; then
   echo "nothing to change"
 else
   for op in "${ops[@]}"; do
     IFS=$'\t' read -r path value id <<<"$op"
     echo "  $id: $path = $value"
-    oc config set "'$path'" "'$value'" --strict-json --dry-run >/dev/null
+    if ! out=$(oc config set "'$path'" "'$value'" --strict-json --dry-run 2>&1); then
+      echo "dry run failed for $path:"; echo "$out"; exit 1
+    fi
   done
   read -r -p "Apply these ${#ops[@]} change(s)? [y/N] " answer
   [ "$answer" = y ] || { echo "not applied"; exit 1; }
   for op in "${ops[@]}"; do
     IFS=$'\t' read -r path value id <<<"$op"
-    oc config set "'$path'" "'$value'" --strict-json
+    if ! out=$(oc config set "'$path'" "'$value'" --strict-json 2>&1); then
+      echo "config set failed for $path:"; echo "$out"; exit 1
+    fi
   done
+  echo "applied"
 fi
 
 echo "== restarting the Gateway"
