@@ -983,3 +983,8 @@ Client contracts are unchanged.
 - Tests: [`tests/test_lifecycle.py`](tests/test_lifecycle.py), standard
   library only, against a fake supervisor with the real rule; the test-stack
   results are in the supervisor README's capacity section.
+
+**MCP.** These contracts are also what
+[Cerebrate MCP](../../../services/cerebrate-mcp/README.md) exposes to agents:
+one tool per contract, with targets derived from the registry and this
+MLServer's readiness.

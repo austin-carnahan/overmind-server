@@ -1,0 +1,31 @@
+// Cerebrate MCP in OpenClaw (Gateway on overmind-01). Normally created with:
+//   openclaw mcp add cerebrate --transport streamable-http --url http://127.0.0.1:8002/mcp --timeout 330
+//   sudo systemctl restart openclaw-gateway.service
+// which saves an entry of this shape. Field names follow `openclaw mcp add`
+// (OpenClaw 2026.9.6); compare with `openclaw config get mcp.servers.cerebrate`
+// after adding, rather than hand-editing.
+{
+  mcp: {
+    servers: {
+      cerebrate: {
+        transport: "streamable-http",
+        url: "http://127.0.0.1:8002/mcp",   // loopback only; no auth, like garmin
+        timeout: 330,                         // > the server's 300 s inference timeout
+      },
+    },
+  },
+  // MCP servers are visible to every agent unless denied. Gateway-level MCP
+  // tools are named <server>__<tool>. Grant them only where needed:
+  agents: {
+    list: [
+      { id: "buckminster", tools: { allow: ["cerebrate__*"] } },   // the design agent
+      { id: "main",        tools: { deny:  ["cerebrate__*"] } },
+      { id: "soma",        tools: { deny:  ["cerebrate__*"] } },
+      { id: "kerrigan",    tools: { deny:  ["cerebrate__*"] } },
+    ],
+  },
+}
+// An agent's first call is cerebrate__list_capabilities; then, e.g.:
+//   cerebrate__detect_objects { image: <base64>, max_detections: 5 }
+//   cerebrate__segment_region { image: <base64>, boxes: [[x0, y0, x1, y1]] }
+//   cerebrate__inpaint        { image: <base64>, mask: "artifact://<run>/mask-0.png" }

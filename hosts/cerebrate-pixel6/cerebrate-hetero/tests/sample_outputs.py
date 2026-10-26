@@ -253,7 +253,7 @@ def migan():
         imgs.append(save("09_migan", f"{tag}-side-by-side.png",
                          header(np.concatenate([shown, out], axis=1), f"MI-GAN, {note}: mask (red) -> result")))
         lines.append(f"- {note}: {', '.join(sorted({d['label'] for d in chosen}))}; {100 * (mask > 0).mean():.0f} % of the photo masked; {s:.1f} s")
-    section("09_migan", "MI-GAN: object removal (inpainting)", "mi-gan-512", "the photo + a mask built from YOLOE's bag masks (dilated 7 px)",
+    section("09_migan", "MI-GAN: inpainting", "mi-gan-512", "the photo + a mask built from YOLOE's bag masks (dilated 7 px)",
             total, imgs, "\n".join(lines))
 
 

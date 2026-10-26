@@ -308,6 +308,11 @@ are never promoted: EfficientSAM3 FP32 (memory) and SAM 2.1 reduced precision
 - **Memory:** run `resource_sampler.sh <port> <stop-file>` on overmind-01
   beside the gate. The worker's peak and the free-memory drop should be close
   to the staged figures (results), and free memory must stay above 1 GB.
+- **MCP** (once [Cerebrate MCP](../services/cerebrate-mcp/README.md) is
+  deployed): `list_capabilities` lists the endpoint under its tool, and one
+  call through that tool succeeds. A model whose interface has no MCP
+  contract yet is simply not listed; extend the adapter, don't add a
+  per-model tool.
 - Record the gate's output in the lane plan's progress notes.
 
 **Rollback (demote):**

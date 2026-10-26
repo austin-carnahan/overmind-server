@@ -39,6 +39,10 @@ include:
   # overmind-health-fitness-system-v1.md). Loopback-only; the native
   # OpenClaw Gateway reaches it directly, nothing else needs to.
   - path: garmin-mcp/compose.yaml
+  # The Pixel's inference endpoints for MCP clients (cerebrate-mcp/README.md).
+  # Spike, validated with a temporary container; not deployed yet -- needs
+  # the model registry in this checkout and the artifact directory first.
+  # - path: cerebrate-mcp/compose.yaml
   # Host-local reverse proxy for readable home.arpa names (design plan:
   # 2026-09-15-home-dns-reverse-proxy-plan.md, Stage 2). Overmind proxies
   # only what Overmind hosts.

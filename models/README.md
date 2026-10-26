@@ -243,6 +243,18 @@ need no new code.
     (`mlserver_staged_test.py --only <endpoint>`). A task becomes
     `available: true` only when its `default` and `fallback` are production
     variants with serving.
+11. **MCP.** Agents reach models through
+    [Cerebrate MCP](../services/cerebrate-mcp/README.md), which derives what
+    is callable from this registry and MLServer.
+    - **Existing contract:** if the model's `serving.interface` is one the
+      adapter implements (the `photo-*-v1` contracts), the promoted endpoint
+      is callable with no MCP change.
+    - **New interface:** a new input/output contract needs one adapter entry
+      and tool ([adding a contract](../services/cerebrate-mcp/README.md#adding-models-and-contracts)),
+      and the MCP server must be restarted to pick up the new code.
+    - **Smoke check:** `list_capabilities` lists the endpoint, and one call
+      through its tool succeeds; `smoke_test.py` covers the box-refinement
+      path.
 
 **Template.** These are the minimal entries for a single-graph GPU model whose
 photo is resized and normalized like the ImageNet references. Replace every
