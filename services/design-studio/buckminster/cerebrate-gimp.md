@@ -65,10 +65,23 @@ use one of these:
   and the whole bed as "pillow". Use it as a second opinion, and check what
   comes back.
 
-**Check that each mask covers the whole object before using it.** EdgeSAM
-given a bed's box outlined the comforter and left out the pillows. Add the
-missing parts: segment their boxes too and add their rings to the selection,
-or retry with `target="box-refinement@quality"`.
+**Getting a whole object's mask (furniture with parts, like a bed with its
+pillows):**
+1. Run `cerebrate__segment_region(image, boxes=[<detector box>], target="box-refinement@quality", candidates=true)`.
+   SAM 2.1 returns three masks per box: roughly whole object, part,
+   sub-part.
+2. **Pick the candidate that covers the object you mean,** not the highest
+   score. On the bed, the top-scoring one left out the pillows; candidate 1
+   was the whole bed (99% body, 98% pillows). Check the overlay.
+3. Fill enclosed holes: select the mask, then `gimp-selection-flood`.
+4. Subtract the masks of stationary objects that touch it (a rug, a
+   nightstand) with `"operation": "subtract"`.
+5. Parts that need their own layers (pillows): segment their boxes too, and
+   cut them as separate layers in the object's group.
+6. Only if no candidate covers the object: combine two models' masks
+   (EdgeSAM plus SAM 2.1). That's the fallback, not the default.
+
+For simple objects (a lamp), EdgeSAM (`box-refinement`) is fine and faster.
 
 **Objects have parts.** Segment parts the main mask misses (pillows on a
 bed) on their own, and keep each as its own layer **inside the object's

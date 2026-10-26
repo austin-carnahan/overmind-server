@@ -21,7 +21,7 @@ these notes say otherwise.
 | --- | --- | --- |
 | Find objects, no prompt | RF-DETR (`fixed-class-segmentation`) | clean labels and masks on the hotel room. Only 80 classes: no "lamp" |
 | Find a named object | OWLv2 boxes → EdgeSAM | "a wicker lamp" → the lamp exactly (0.67), bed and pillows right; EfficientSAM3 missed or mislabelled (below) |
-| Precise mask from a box | EdgeSAM (`box-refinement`) | lamp good. Bed: the comforter and skirt, **not the pillows** (twice) |
+| Precise mask from a box | EdgeSAM (`box-refinement`) for simple objects; for whole objects with parts, **SAM 2.1 (`@quality`, `candidates=true`), the candidate that covers the object** | bed: SAM 2.1 candidate 1 = bed + pillows 99.3% / 97.8% (below); EdgeSAM: the comforter and skirt, not the pillows |
 | Remove an object | inpaint with the 512 window, grow 7 px | small objects only. Lamp: clean wall, but its base smear and cast shadow stay. A bed-sized hole fails (below) |
 | Rebuild a large hole | surfaces copied along their own geometry + `seamless_blend` | the bed's footprint: convincing (below); the geometry is manual so far |
 | Mask → GIMP | corner-traced polygons, eps 1 px | IoU 0.998 median, 0.990 min |
@@ -94,6 +94,31 @@ these notes say otherwise.
 
   **Recipe gap:** check that a mask covers the whole object, and add its parts
   (pillow boxes, or `@quality`) when it doesn't.
+
+- **2026-10-26, bedroom.jpg, Experiment 1: one model, better prompts.**
+  Scored against the accepted bed (cutout plus recovered pixels, pillows
+  separate): coverage, pinholes, and spill into the rug, the nightstand and
+  elsewhere. Stage `09`.
+
+  | Mask | Bed body | Pillows | Spill |
+  | --- | --- | --- | --- |
+  | EdgeSAM, Buckminster's box | 96.9% | 31.5% | none |
+  | EdgeSAM, RF-DETR or YOLOE box | 96.9% | 68–70% | none |
+  | **SAM 2.1, candidate 0** (highest predicted score, 0.96) | 94–97% | 13–56% | none |
+  | **SAM 2.1, candidate 1** (0.94–0.95) | **99.0–99.7%** | **97–98%** | 33–300 px into the rug; 360–1,600 px of dark under-comforter shadow by the nightstand |
+  | SAM 2.1, candidate 2 | about 53% | about 1% | |
+  | Two-model union | 99.2% | 95.7% | none, but it needed a hand-added pocket |
+
+  Candidate 0 is a sub-part (the bed without pillows), candidate 1 the whole
+  bed, candidate 2 another part.
+  - **Box choice matters less than candidate choice.** A padded box added
+    spill. With holes filled it covered the hand-added pocket fully, but
+    spilled 300 px into the rug.
+  - **Cost:** 15.9 s for three boxes with candidates; no extra model run.
+  - **Conclusion:** pick the candidate by coverage of the object, not by
+    predicted score. Fill enclosed holes, subtract stationary neighbours,
+    segment parts that need their own layers separately. The two-model union
+    becomes the fallback.
 
 ### Inpainting (MI-GAN)
 - **2026-10-26, completing a hidden part of an object** (the bed skirt behind
@@ -278,8 +303,10 @@ Run these when a test touches the step anyway.
   objects (above). Revisit only with a stronger text-segmentation model.
 - **Named objects:** OWLv2 → EdgeSAM vs. EfficientSAM3 vs. RF-DETR → EdgeSAM,
   on the same phrases, when the phone has the memory.
-- **Box → mask quality:** SAM 2.1 (`box-refinement@quality`) vs. EdgeSAM on
-  the bed with its pillows.
+- **Box → mask quality:** answered on 2026-10-26 (Experiment 1). SAM 2.1's
+  candidate 1 is the whole bed; pick candidates by coverage, not by score.
+  Check on objects without parts whether candidate 0 is right for those, so
+  the rule doesn't just favour bigger masks.
 - **YOLOE scene labels:** filter out region-sized "scene" detections ("living
   space", "home interior") by area or label before an agent sees them?
 - **Polygon tolerance:** eps relative to object size, e.g. 0.5 px under
