@@ -23,6 +23,7 @@ these notes say otherwise.
 | Find a named object | OWLv2 boxes → EdgeSAM | "a wicker lamp" → the lamp exactly (0.67), bed and pillows right; EfficientSAM3 missed or mislabelled (below) |
 | Precise mask from a box | EdgeSAM (`box-refinement`) | lamp good. Bed: the comforter and skirt, **not the pillows** (twice) |
 | Remove an object | inpaint with the 512 window, grow 7 px | small objects only. Lamp: clean wall, but its base smear and cast shadow stay. A bed-sized hole fails (below) |
+| Rebuild a large hole | surfaces copied along their own geometry + `seamless_blend` | the bed's footprint: convincing (below); the geometry is manual so far |
 | Mask → GIMP | corner-traced polygons, eps 1 px | IoU 0.998 median, 0.990 min |
 
 ## Observations
@@ -123,6 +124,55 @@ these notes say otherwise.
     the wall, which no object mask includes, so growing the mask doesn't
     help.
 
+### Large holes: surface-aware reconstruction (GIMP geometry + OpenCV blend), no model
+
+**2026-10-26, bedroom.jpg, the bed's footprint (stages in
+`~/DesignStudio/workspaces/bedroom/footprint-experiment/`).** MI-GAN's fill
+was a smear (stage 01). Rebuilding the hidden wall, baseboards and floor from
+the room's own pixels worked. Mean difference from the prototype: 1.8 levels
+(stage 07).
+
+1. **Footprint.** The bed's mask, plus both pillows (OWLv2 → EdgeSAM),
+   grown 22 px for the skirt's fringe, plus the bed's contact shadow (up to
+   30 px further down, not under the rug). The blend's edge must land on
+   clean surface, or it drags dark or light pixels in.
+2. **Geometry from the photo.**
+   - **Baseboards:** tracing each one's edges column by column (a midpoint
+     brightness threshold) gave lines with 0.4–0.5 px residuals. The two
+     baseboards' top edges met at x = 1691, the wall corner as seen.
+   - **Vanishing points:** each baseboard's top and bottom edges give one.
+     Together they give the floor's vanishing line, nearly horizontal.
+3. **Walls and baseboards: copies shifted along each surface's own line**
+   (a layer move).
+   - **Sources matter:** pick ones clear of the floor vent, and not
+     window-lit wall for low wall.
+   - **Seams:** both baseboards run into the corner without one.
+4. **Floor: a perspective-correct move on the floor plane,** one
+   `gimp-item-transform-matrix` from the affine rectification.
+   - **Board direction:** the boards run parallel to the back wall, and
+     copying along them is blocked by the wall, rug, nightstand and stool.
+   - **Two sources:** a search over moves that keep every source pixel on
+     real, visible floor found that no single move works. Two pieces did:
+     93.5% and 6.5%. The main piece covers the whole floor; the second is
+     feathered on top. Masking the main piece to its own area left the
+     original bed showing through the feather.
+5. **Blend:** Poisson, `seamless_blend` (OpenCV), with the destination the
+   original photo, not the composite.
+   - **Uniform per-piece levels** made a green-yellow cast (stage 04),
+     because light varies across each surface.
+   - **GIMP's GEGL seamless clone** takes about 100 s, single-threaded, and
+     can't run as a filter. A crash in it, from uninitialised GEGL, froze
+     GIMP twice.
+6. **Timing.** About 24 s of GIMP geometry (6 pieces) and a 12 s blend loop:
+   publish ×2 (6.7 s), blend 3.5 s (2.1 s computing), import 1.7 s.
+
+**Limits:**
+- A small light speck by the rug's left tip, probably skirt fringe left
+  inside the rug margin.
+- Anything truly hidden (an outlet behind the bed) can't come back.
+- The geometry was done by hand, as an operator. It isn't automated or in
+  Buckminster's recipe yet.
+
 ### Depth (Depth Anything V2)
 - **2026-10-26, hotel-room.jpg (sample run).** Very good. No issues seen.
 
@@ -172,9 +222,12 @@ Run these when a test touches the step anyway.
   or by segmenting "shadow of the lamp", and compare.
 - **Whole-object masks:** union the parts (bed + pillow boxes), or SAM 2.1
   `@quality`, vs. EdgeSAM's one-part answer.
-- **Large holes** (a moved bed's footprint): a large-hole inpainter (e.g.
-  LaMa) vs. MI-GAN; or several overlapping 512 windows; or leave the
-  footprint to the user and say so.
+- **Large holes:** answered for repetitive architecture by surface-aware
+  reconstruction (above). LaMa stays on the research list for irregular
+  textures; check its Fourier operations on the Pixel's GPU first.
+- **Automate the footprint geometry:** baseboard tracing, vanishing points,
+  floor-move search, as a tool or plug-in, once a second room confirms the
+  procedure generalises.
 - **Inpaint window:** a context factor of 3× instead of 2×, or a minimum of
   768 px, on small objects. Does more surrounding help or blur?
 - **EfficientSAM3 threshold:** answered on 2026-10-26: 0.3 returns wrong

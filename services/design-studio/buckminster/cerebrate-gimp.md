@@ -180,13 +180,47 @@ Inpaint one modest object at a time. The inpainting model works at 512 px,
 on small and medium holes:
 - **Lamps, clutter, marks:** fine.
 - **A furniture-sized hole** (e.g. the floor and wall behind a moved bed):
-  comes out as a colour smear. Don't present it as done; tell the user that
-  area needs another approach.
+  comes out as a colour smear. Don't present it as done.
+  - **Better:** rebuild it from the room's own surfaces, then blend (step 6).
+  - **The geometry is manual so far:** surfaces, lines and floor
+    perspective, described in `models/field-notes.md`, "Large holes". Ask the
+    user before attempting it.
 - **Cast shadows** aren't in an object's mask. Add the shadow's area to the
   mask, or report what's left.
 
 URLs expire with the artifacts (24 h). Call again rather than reusing an old
 one.
+
+## 6. Blend a reconstruction into its surroundings
+
+When you've rebuilt an area from copied pixels (layers in a group, e.g.
+"Behind the bed (rebuilt)"), their light and colour won't match the edges.
+Blend them with Cerebrate's Poisson blend, about 2 s on overmind:
+
+1. Select the rebuilt area:
+   `gimp_gimp_pdb_call(name="gimp-image-select-item", args={"image": <id>, "operation": "replace", "item": <rebuilt group>})`
+2. Publish **the reconstruction**: the surface group's own composite, not the
+   canvas, so objects in front don't get in:
+   `overmind-publish` with `{"mode": "bounds", "margin": 48, "source": <e.g. the Room group>}`.
+   It returns `[snapshot, image_url, mask_url, x, y, width, height]`.
+3. Publish **the original** over the same region:
+   `overmind-publish` with `{"mode": "region", "x":…, "y":…, "width":…, "height":…, "source": <the original layer>}`.
+   It returns `destination_url` as its second value.
+4. `gimp-selection-none`, then
+   `cerebrate__seamless_blend(image=image_url, mask=mask_url, destination=destination_url)`.
+   The destination must be the original: with the reconstruction there,
+   nothing blends.
+5. Import the patch above the raw layers, never merging them:
+   `overmind-import-artifact` with
+   `{"url": patch.url, "x": offset x, "y": offset y, "name": "… (blended)", "target": <rebuilt group>, "snapshot": <snapshot>, "op-id": "<unique>"}`.
+
+**If a call's response is lost** (a timeout or a dropped connection), don't
+re-run it. Ask `overmind-op-status` with `{"image": <id>, "op-id": "<the id>"}`:
+- *done*: use its result;
+- *started* or *failed*: report it.
+
+Re-running with the same `op-id` after *done* is safe; it returns the same
+layer.
 
 ## Gotchas
 

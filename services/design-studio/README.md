@@ -134,6 +134,11 @@ the interactive GIMP twice:
 **Test new pixel-processing plug-in code headless first,** never in the
 session someone is working in.
 
+**The bridge's `close_image` (`gimp_close_image`) doesn't close an image that
+has a window.** It calls `image.delete()`, which GIMP declines while a
+display exists, and reports "closed" anyway. libgimp can't list an image's
+displays, so close such windows by hand. Not patched.
+
 ## Object groups and alignment (open decision)
 
 Agent edits keep each object in a layer group, holding its original pixels
