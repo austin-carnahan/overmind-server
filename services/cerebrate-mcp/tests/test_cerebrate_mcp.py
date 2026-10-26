@@ -160,7 +160,7 @@ class CerebrateMCP(unittest.TestCase):
                 return {t.name for t in await c.list_tools()}, [t.uri_template for t in await c.list_resource_templates()]
         tools, templates = asyncio.run(go())
         self.assertEqual(tools, {"list_capabilities", "segment_region", "detect_objects", "segment_by_text",
-                                 "detect_by_text", "estimate_depth", "remove_object", "embed_image"})
+                                 "detect_by_text", "estimate_depth", "inpaint", "embed_image"})
         self.assertEqual(templates, ["artifact://{run}/{name}"])
 
     def test_capabilities_match_registry_and_readiness(self):
@@ -185,7 +185,7 @@ class CerebrateMCP(unittest.TestCase):
         self.assertNotIn("owlv2-b16", listed)
         self.assertNotIn("mi-gan-512", listed)
         self.assertFalse(caps["tools"]["detect_by_text"]["available"])
-        self.assertFalse(caps["tools"]["remove_object"]["available"])
+        self.assertFalse(caps["tools"]["inpaint"]["available"])
         with self.assertRaisesRegex(ToolError, "not loaded"):
             self.call("detect_by_text", image=base64.b64encode(PHOTO).decode(), queries=["a bed"])
 
@@ -231,7 +231,7 @@ class CerebrateMCP(unittest.TestCase):
                 return await c.read_resource(out["masks"][0]["mask_png"]["uri"])
         blob = asyncio.run(read())[0].blob
         self.assertEqual(base64.b64decode(blob), Path(out["masks"][0]["mask_png"]["path"]).read_bytes())
-        res = self.call("remove_object", image=base64.b64encode(PHOTO).decode(), mask=out["masks"][0]["mask_png"]["uri"])
+        res = self.call("inpaint", image=base64.b64encode(PHOTO).decode(), mask=out["masks"][0]["mask_png"]["uri"])
         self.assertTrue(Path(res["result_png"]["path"]).is_file())
         sent = {i["name"]: i for i in FakeMLServer.requests[-1][1]["inputs"]}
         grown = np.asarray(Image.open(io.BytesIO(base64.b64decode(sent["mask"]["data"][0])))) > 0

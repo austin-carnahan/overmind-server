@@ -126,15 +126,15 @@ def create_app() -> FastMCP:
                    lambda doc, rid, size: c.depth_result(doc, artifacts, rid))
 
     @mcp.tool
-    def remove_object(image: str, mask: str, target: str = "inpainting", grow_mask_px: int = 7) -> dict:
-        """Remove the masked region and fill it in. mask: an image of the same size, white = remove (a
-        mask_png from segment_region works directly). grow_mask_px widens the mask first (default 7; the
-        fill needs a margin around the object). Works best for one object at a time. Returns the result as
-        an artifact:// PNG."""
+    def inpaint(image: str, mask: str, target: str = "inpainting", grow_mask_px: int = 7) -> dict:
+        """Inpainting: repaint the masked region from its surroundings (e.g. to erase an object). mask: an
+        image of the same size, white = region to fill (a mask_png from segment_region works directly).
+        grow_mask_px widens the mask first (default 7; the fill needs a margin around an object). Works best
+        on one modest region at a time. Returns the result as an artifact:// PNG."""
         def request(photo, size):
             mask_bytes, mask_size = artifacts.load_image(mask, "mask")
             return c.inpaint_request(photo, size, mask_bytes, mask_size, grow_mask_px)
-        return run("remove_object", target, image, request,
+        return run("inpaint", target, image, request,
                    lambda doc, rid, size: c.inpaint_result(doc, artifacts, rid))
 
     @mcp.tool

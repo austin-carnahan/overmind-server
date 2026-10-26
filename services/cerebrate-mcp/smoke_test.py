@@ -7,7 +7,7 @@ Python SDK client (Streamable HTTP), against real MLServer and the Pixel:
      box-refinement) on the photo's top detections;
   4. the MCP masks are identical to a direct MLServer call with the same
      inputs, the mask artifacts read back as MCP resources, and a mask feeds
-     remove_object (the editing workflow's next step).
+     inpaint (the editing workflow's next step).
 usage: smoke_test.py <photo> [--mcp http://127.0.0.1:8002/mcp] [--mlserver http://127.0.0.1:8500] [--registry <repo>/models]
 Exit 0 when every check passes."""
 import argparse
@@ -109,8 +109,8 @@ async def main():
             check("mask artifact readable as an MCP resource", png[:8] == b"\x89PNG\r\n\x1a\n",
                   f"{ref['uri']} ({len(png)} bytes)" + (" = local file" if Path(ref["path"]).exists() and Path(ref["path"]).read_bytes() == png else ""))
 
-            inp = await call("remove_object", image=image, mask=ref["uri"])
-            check("the mask feeds remove_object (MI-GAN)", inp["result_png"]["uri"].startswith("artifact://"),
+            inp = await call("inpaint", image=image, mask=ref["uri"])
+            check("the mask feeds inpaint (MI-GAN)", inp["result_png"]["uri"].startswith("artifact://"),
                   f"{inp['result_png']['uri']}; {inp['elapsed_s']} s")
     print(f"{sum(results)}/{len(results)} checks passed")
     return all(results)

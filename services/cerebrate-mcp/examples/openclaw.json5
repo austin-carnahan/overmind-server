@@ -28,4 +28,4 @@
 // An agent's first call is cerebrate__list_capabilities; then, e.g.:
 //   cerebrate__detect_objects { image: <base64>, max_detections: 5 }
 //   cerebrate__segment_region { image: <base64>, boxes: [[x0, y0, x1, y1]] }
-//   cerebrate__remove_object  { image: <base64>, mask: "artifact://<run>/mask-0.png" }
+//   cerebrate__inpaint        { image: <base64>, mask: "artifact://<run>/mask-0.png" }

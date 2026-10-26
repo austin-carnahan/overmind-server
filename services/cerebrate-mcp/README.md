@@ -27,7 +27,7 @@ not per model, plus discovery:
 | `segment_by_text` | `photo-text-segmentation-v1` | `text-prompted-segmentation` (EfficientSAM3) | image, phrases → per phrase: presence, instances, mask PNGs |
 | `detect_by_text` | `photo-text-detection-v1` | `open-vocabulary-detection` (OWLv2) | image, queries → boxes per query |
 | `estimate_depth` | `photo-depth-v1` | `relative-depth` (Depth Anything) | image → range, 16-bit depth PNG |
-| `remove_object` | `photo-inpaint-v1` | `inpainting` (MI-GAN) | image, mask (grown 7 px by default) → inpainted PNG |
+| `inpaint` | `photo-inpaint-v1` | `inpainting` (MI-GAN) | image, mask (grown 7 px by default) → PNG with the masked region repainted |
 | `embed_image` | `photo-embedding-v1` | `image-embedding` (DINOv2) | image → 384 float32 (base64) |
 
 **Targets.** A target can be any of:
@@ -135,7 +135,7 @@ The unit tests cover:
 - a newly registered model appearing, and callable, with no code change;
 - target resolution;
 - the `segment_region` request mapping and its decoded masks;
-- artifacts as resources, and chaining a mask into `remove_object`;
+- artifacts as resources, and chaining a mask into `inpaint`;
 - JPEG base64 not mistaken for a path;
 - error reporting.
 
@@ -156,7 +156,7 @@ The live run:
   EdgeSAM (`edgesam-3x/tpu-fp16r-gpu-neck-fp32`) with scores 1.01, 0.98 and
   0.98. The masks are **identical to a direct MLServer request**.
 - **Artifacts.** The mask PNG reads back as an MCP resource and feeds
-  `remove_object`: MI-GAN removed the suitcase cleanly with the 7 px margin.
+  `inpaint`: with the suitcase's mask grown 7 px, MI-GAN repainted it as wall cleanly.
 - **No restart needed.** Staging OWLv2 in the registry copy removed it, and
   `detect_by_text`, from discovery without a restart; reverting restored them.
 
