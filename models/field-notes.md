@@ -307,6 +307,60 @@ learn why", not a perfect plate. Lessons, in the order they bit:
   meets a moving one, the protected mask's edge needs a trim, and the
   uncertain band is exactly where to look.
 
+**2026-10-26, Experiment 3: moving objects (bedroom-v1; scripts `exp3_a/b/b2/c.py`;
+stages 05–07).**
+- **Seam between a protected object and a moving one.** The rug's mask held
+  1,087 px of the bed skirt. They were dark (V < 140), while the fleece's
+  core is V ≥ 164, so one threshold near the bed found them.
+  - **Fix:** trim them from the rug (`gimp-drawable-edit-clear`), add the
+    main floor move under them, and re-run the blend loop with the footprint
+    extended by the trim (18.6 s).
+  - **Check:** nothing outside the new footprint changed (0 px beyond the
+    2 px edge).
+- **Single move.** One `layer move` on the Bed group, 0.1 s. It carries the
+  body, both pillows, two continued-skirt layers and the shadow.
+- **Hidden parts of the moving object** are continued along the object's own
+  edge (copy, shift, mask), as in the experiment document:
+  - behind the rug: offset (−120, +24);
+  - under the comforter's right end, where the nightstand sat in the photo:
+    (−110, +33).
+  - **Choose the offset by match, not coverage.** Full source coverage
+    allowed many offsets. The first choice pulled comforter fabric into the
+    recess. Ranking by the mean difference on the 5 px overlap with the real
+    bed fixed it: 54 vs 71 levels.
+- **Contact shadow: recovered from the photo, not painted.** On the floor
+  around the bed (footprint − bed, floor surface only):
+  1. photo ÷ clean plate, as a group with the clean plate in Divide mode
+     over the photo copy, merged (`gimp-group-layer-merge`);
+  2. `gimp-drawable-desaturate` (luminance);
+  3. `gegl:gaussian-blur` (6 px);
+  4. set to Multiply, at the bottom of the Bed group.
+
+  It takes 8 s, all native GIMP operations. With the bed in place it
+  reproduces the photo (mean difference −0.7, |diff| 7.4 from the blur).
+  - **Luminance only.** Per-channel ratios gave a yellow cast, because the
+    blend brightened the clean plate's blue more.
+  - **The group must be pass-through.** `overmind-make-object-group` made a
+    Normal group, which keeps a Multiply child from reaching the room; it
+    was switched by hand.
+  - **Limit:** the shadow is the one from the bed's old spot. It grounds the
+    skirt, but carries a dark patch from the nightstand's shadow at the right
+    end.
+- **Multi-object move.** One `gimp_edit_batch` of four `layer move` steps
+  (Bed, Rug, Nightstand, Lamp), each moved exactly (−120, +40), with one undo
+  group.
+  - **The lamp is its own object** (SAM 2.1 candidate 0, again coverage
+    without spill). A supported object must be in the batch, or it stays
+    behind.
+  - **A stationary object can't move until its own footprint is rebuilt.**
+    The nightstand, lamp and rug left copies of themselves behind (stage 07).
+    The skill must tell movable objects (footprint rebuilt) from fixed ones.
+    Seen in GIMP, it looks like "the originals weren't removed and the moved
+    copies sit on top of them". That's right: an object group is a copy, and
+    only the bed's original was replaced by rebuilt surfaces.
+  - **Undo:** one Ctrl+Z in GIMP reverted all four moves (checked by the
+    user).
+
 ### Depth (Depth Anything V2)
 - **2026-10-26, hotel-room.jpg (sample run).** Very good. No issues seen.
 
