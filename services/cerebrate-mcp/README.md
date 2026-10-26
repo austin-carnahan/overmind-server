@@ -121,6 +121,39 @@ With `CEREBRATE_MCP_PUBLIC_URL` set, every output file also has a `url`:
 - **Mask growing.** Growing the mask with PIL's MaxFilter took 15 s on a 12 MP
   mask on the Pi; `cv2.dilate` gives identical output in 0.7 s.
 
+### Image operations (CPU on overmind)
+
+Not every useful tool is a model. These run in this container, on overmind's
+CPU: no registry entry, no MLServer, nothing on the Pixel.
+`list_capabilities` lists them under `image_operations`.
+
+- **`seamless_blend(image, mask, destination, mode)`** is a Poisson blend,
+  OpenCV's `seamlessClone`.
+  - **What it does:** inside the mask it keeps `image`'s texture (the
+    reconstruction). At the mask's edge it takes on `destination`'s light
+    and colour.
+  - **What it returns:** an RGBA patch over the mask, with its offset.
+  - **`destination` must be the scene *without* the reconstruction,** for
+    example the original photo layer. OpenCV erodes the mask by 3 px and
+    takes the destination's gradients in that ring. A destination that
+    already contains the reconstruction keeps its hard edge, and nothing
+    blends; the unit test shows both cases.
+  - **Speed:** about 2 s for a 1,100×700 region on the Pi. GIMP's GEGL
+    seamless clone took about 100 s for the same region; it's
+    single-threaded, and GIMP won't run it as a filter.
+
+  From GIMP, publish the reconstruction and the original over the same
+  region:
+
+  ```
+  overmind-publish(mode="bounds", source=<group with the reconstruction>)
+  overmind-publish(mode="region", source=<the original layer>, x, y, w, h)
+  ```
+
+  The first call uses the footprint selection, which yields the mask. Then
+  call `seamless_blend`, and import the patch with
+  `snapshot=<the first snapshot>`.
+
 ### Uploads
 
 `POST /artifacts/upload?name=<stem>` creates one artifact from the request

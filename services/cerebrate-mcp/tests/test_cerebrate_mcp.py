@@ -4,8 +4,8 @@ FastMCP's in-memory client: tool discovery, capability derivation (registry
 x readiness x contracts), staged/unready exclusion, a newly registered model
 appearing with no code change, target resolution, request/response mapping
 for segment_region, artifacts, polygons, signed artifact URLs, the inpaint
-window and patch, text segmentation's threshold, token-gated uploads, and
-error reporting.
+window and patch, text segmentation's threshold, token-gated uploads, the
+seamless_blend image operation, and error reporting.
   cd services/cerebrate-mcp && python -m unittest discover -s tests -v"""
 import asyncio
 import base64
@@ -180,7 +180,7 @@ class CerebrateMCP(unittest.TestCase):
                 return {t.name for t in await c.list_tools()}, [t.uri_template for t in await c.list_resource_templates()]
         tools, templates = asyncio.run(go())
         self.assertEqual(tools, {"list_capabilities", "segment_region", "detect_objects", "segment_by_text",
-                                 "detect_by_text", "estimate_depth", "inpaint", "embed_image"})
+                                 "detect_by_text", "estimate_depth", "inpaint", "embed_image", "seamless_blend"})
         self.assertEqual(templates, ["artifact://{run}/{name}"])
 
     def test_capabilities_match_registry_and_readiness(self):
@@ -393,6 +393,43 @@ class CerebrateMCP(unittest.TestCase):
         sent = {i["name"]: i for i in FakeMLServer.requests[-1][1]["inputs"]}
         self.assertEqual(base64.b64decode(sent["photo"]["data"][0]), PHOTO)
         self.assertEqual(len(out["masks"]), 1)
+
+    def test_seamless_blend(self):
+        """A reconstruction 40 levels too bright, with stripes, inside a mask: blended, it takes the
+        surroundings' level at the edge and keeps its stripes; the patch is the mask, at its offset."""
+        rng = np.random.default_rng(7)
+        h, w = 120, 160
+        bg = np.clip(100 + rng.normal(0, 2, (h, w, 3)), 0, 255)
+        src = bg.copy()
+        m = np.zeros((h, w), np.uint8)
+        m[30:90, 40:120] = 255
+        stripes = 15 * np.sin(np.arange(w) / 3.0)[None, :, None]
+        src[30:90, 40:120] = (bg + 40 + stripes)[30:90, 40:120]
+        b64 = lambda a: base64.b64encode(png(np.clip(a, 0, 255).astype(np.uint8))).decode()
+        out = self.call("seamless_blend", image=b64(src), mask=b64(m), destination=b64(bg))
+        self.assertEqual((out["offset"], out["size"]), ([40, 30], [80, 60]))
+        patch = np.asarray(Image.open(out["patch"]["path"])).astype(float)
+        self.assertTrue(np.array_equal(patch[..., 3] > 0, m[30:90, 40:120] > 0))
+        inner = patch[5:-5, 5:-5, :3]
+        self.assertLess(abs(inner.mean() - bg.mean()), 8)               # the +40 is gone (the edge's level)
+        self.assertGreater(inner.mean(0).std(), 6)                      # the stripes are still there
+        self.assertLess(np.abs(patch[0, :, :3] - bg[30, 40:120]).mean(), 6)   # continuous at the edge
+        # the destination must not contain the reconstruction: with it, the hard edge survives
+        same = self.call("seamless_blend", image=b64(src), mask=b64(m), destination=b64(src))
+        self.assertGreater(abs(np.asarray(Image.open(same["patch"]["path"]))[5:-5, 5:-5, :3].astype(float).mean() - bg.mean()), 30)
+        # another destination level, and a mask touching the image's edge
+        m2 = np.zeros((h, w), np.uint8)
+        m2[0:50, 0:60] = 255
+        dst = np.full((h, w, 3), 60.0)
+        out = self.call("seamless_blend", image=b64(src), mask=b64(m2), destination=b64(dst))
+        self.assertEqual(out["offset"], [0, 0])
+        self.assertLess(abs(np.asarray(Image.open(out["patch"]["path"]))[40:48, 50:58, :3].mean() - 60), 15)
+        with self.assertRaisesRegex(ToolError, "empty"):
+            self.call("seamless_blend", image=b64(src), mask=b64(np.zeros((h, w), np.uint8)), destination=b64(bg))
+        with self.assertRaisesRegex(ToolError, "sizes differ"):
+            self.call("seamless_blend", image=b64(src), mask=b64(np.zeros((10, 10), np.uint8)), destination=b64(bg))
+        caps = self.call("list_capabilities")
+        self.assertIn("seamless_blend", caps["image_operations"])
 
     def test_target_resolution(self):
         img = base64.b64encode(PHOTO).decode()

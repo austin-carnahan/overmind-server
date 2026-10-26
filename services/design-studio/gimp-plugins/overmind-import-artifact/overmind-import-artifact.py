@@ -6,13 +6,16 @@ the object's own layer group.
 
 Five PDB procedures, called by agents through the GIMP MCP's gimp_pdb_call:
 
-  overmind-publish(image, mode, x, y, width, height, format, name)
+  overmind-publish(image, mode, x, y, width, height, format, name, source, margin)
       -> snapshot, image-url, mask-url, x, y, width, height
       Upload the visible composite (what the canvas shows; hidden layers
-      excluded) of a region, and the selection over it as a mask, to the
-      artifact service; Cerebrate tools take the URLs as inputs.
+      excluded) of a region -- or, with source, that layer's or group's own
+      composite (e.g. a surface group without the objects in front of it) --
+      and the selection over it as a mask, to the artifact service; Cerebrate
+      tools take the URLs as inputs.
       - mode "selection": the window an inpainting model needs around the
         selection (>= 512 px, twice its extent; photo_postprocess.inpaint_window)
+      - mode "bounds": the selection's bounding box plus margin (e.g. blending)
       - mode "image": the whole canvas (results then use document coordinates)
       - mode "region": x, y, width, height
       The snapshot's provenance (its region and a hash of its pixels) stays in
@@ -308,8 +311,16 @@ def remember(image, snap_id, entry):
     image.attach_parasite(Gimp.Parasite.new(SNAPSHOTS, Gimp.PARASITE_PERSISTENT, list(json.dumps(d).encode())))
 
 
-def snapshot_hash(image, x, y, w, h):
-    return hashlib.sha256(visible_rgba(image, x, y, w, h)).hexdigest()
+def snapshot_pixels(image, source, x, y, w, h):
+    """What a snapshot shows: the visible composite, or one layer's/group's own composite."""
+    return bytes(rgba(source, x, y, w, h)) if source is not None else visible_rgba(image, x, y, w, h)
+
+
+def snapshot_hash(image, snap):
+    source = image.get_layer_by_tattoo(snap["source"]) if snap.get("source") else None
+    if snap.get("source") and source is None:
+        raise Refused("the snapshot's source layer is gone")
+    return hashlib.sha256(snapshot_pixels(image, source, snap["x"], snap["y"], snap["w"], snap["h"])).hexdigest()
 
 
 # ---- operation journal ----------------------------------------------------------------
@@ -450,6 +461,7 @@ def run_group(procedure, config_, data):
 def run_publish(procedure, config_, data):
     get = config_.get_property
     image, mode, fmt = get("image"), (get("mode") or "selection").lower(), (get("format") or "png").lower()
+    source = get("source")
     cfg, tmps = config(), []
     try:
         W, H = image.get_width(), image.get_height()
@@ -458,6 +470,12 @@ def run_publish(procedure, config_, data):
             if not nonempty:
                 raise Refused("mode selection: the selection is empty")
             x, y, w, h = inpaint_window((W, H), (sx0, sy0, sx1, sy1))
+        elif mode == "bounds":
+            if not nonempty:
+                raise Refused("mode bounds: the selection is empty")
+            mg = get("margin")
+            x, y = max(sx0 - mg, 0), max(sy0 - mg, 0)
+            w, h = min(sx1 + mg, W) - x, min(sy1 + mg, H) - y
         elif mode == "image":
             x, y, w, h = 0, 0, W, H
         elif mode == "region":
@@ -465,10 +483,10 @@ def run_publish(procedure, config_, data):
             if w <= 0 or h <= 0 or x < 0 or y < 0 or x + w > W or y + h > H:
                 raise Refused(f"region {x},{y} {w}x{h} isn't inside the {W}x{H} canvas")
         else:
-            raise Refused("mode: selection, image or region")
+            raise Refused("mode: selection, bounds, image or region")
         if fmt not in ("png", "jpeg"):
             raise Refused("format: png or jpeg")
-        pixels = visible_rgba(image, x, y, w, h)
+        pixels = snapshot_pixels(image, source, x, y, w, h)
         name = (get("name") or "snapshot").lower()
         img_ref = upload(encode(pixels, w, h, False, fmt, tmps), name, cfg)
         mask_url = ""
@@ -476,6 +494,7 @@ def run_publish(procedure, config_, data):
             mask_url = upload(encode(selection_gray(image, x, y, w, h), w, h, True, "png", tmps), name + "-mask", cfg)["url"]
         snap_id = img_ref["uri"].split("/")[2]                     # its upload run: unique
         remember(image, snap_id, {"x": x, "y": y, "w": w, "h": h, "sha256": hashlib.sha256(pixels).hexdigest(),
+                                  "source": source.get_tattoo() if source is not None else None,
                                   "t": __import__("time").time()})
     except Exception as exc:
         return _error(procedure, PUBLISH, exc)
@@ -543,7 +562,7 @@ def run_import(procedure, config_, data):
             if snap is None:
                 raise Refused(f"snapshot {snap_id} isn't one of this document's (publish it from this image)")
             dx, dy = snap["x"], snap["y"]                           # snapshot coordinates -> document
-            if not force and snapshot_hash(image, snap["x"], snap["y"], snap["w"], snap["h"]) != snap["sha256"]:
+            if not force and snapshot_hash(image, snap) != snap["sha256"]:
                 raise Refused(f"the document changed in snapshot {snap_id}'s region since it was published; "
                               "publish a new snapshot and run again (or force)")
         elif group is not None:
@@ -610,8 +629,9 @@ class OvermindArtifacts(Gimp.PlugIn):
             procedure = Gimp.Procedure.new(self, name, Gimp.PDBProcType.PLUGIN, run_publish, None)
             procedure.set_documentation(
                 "Publish what the canvas shows (a region, and the selection as a mask) to Overmind's artifact service",
-                "Uploads the visible composite of the selection's inpainting window (mode selection), the whole canvas "
-                "(image) or x/y/width/height (region), and the selection over it as a mask, with this host's upload "
+                "Uploads the visible composite -- or source's own composite -- of the selection's inpainting window "
+                "(mode selection), its bounds plus margin (bounds), the whole canvas (image) or x/y/width/height "
+                "(region), and the selection over it as a mask, with this host's upload "
                 "token. Returns the snapshot id, the image and mask URLs (for Cerebrate) and the region. The snapshot's "
                 "provenance stays in the document, for importing results with snapshot=.", name)
         elif name == BLEND:
@@ -658,6 +678,8 @@ class OvermindArtifacts(Gimp.PlugIn):
             procedure.add_int_argument("height", "Height", "Region height (mode region)", 0, GLib.MAXINT, 0, rw)
             procedure.add_string_argument("format", "Format", "png or jpeg (the mask is always png)", "png", rw)
             procedure.add_string_argument("name", "Name", "File name stem", "snapshot", rw)
+            procedure.add_layer_argument("source", "Source", "Publish this layer's/group's own composite (default: the canvas)", True, rw)
+            procedure.add_int_argument("margin", "Margin", "Pixels around the selection (mode bounds)", 0, 1024, 48, rw)
             for rv, nick in (("snapshot", "Snapshot id"), ("image-url", "Image URL"), ("mask-url", "Mask URL (empty without a selection)")):
                 procedure.add_string_return_value(rv, nick, nick, "", rw)
             for rv in ("x", "y", "width", "height"):

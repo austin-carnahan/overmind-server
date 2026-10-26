@@ -22,6 +22,7 @@ Environment (defaults for a same-host run on overmind-01):
                                  (the artifact directory is always allowed)
   CEREBRATE_MCP_TIMEOUT_S        per inference (300: a cold model start plus a capacity wait)
   CEREBRATE_MCP_HOST, _PORT      bind address (127.0.0.1:8002; private by default)"""
+import io
 import os
 import sys
 import time
@@ -33,6 +34,7 @@ from starlette.requests import Request
 from starlette.responses import FileResponse, JSONResponse, PlainTextResponse
 
 from . import contracts as c
+from . import imageops
 from .artifacts import Artifacts, InputError
 from .uploads import Tokens, UploadError, accept
 from .discovery import Discovery, TargetError
@@ -71,7 +73,7 @@ def create_app() -> FastMCP:
         "an editor's polygon select: first ring replace, later outer rings add, holes subtract). Output files "
         "(mask PNGs, depth maps, inpaint patches) are artifact:// resources and, where configured, signed "
         "http URLs another tool (e.g. GIMP's overmind-import-artifact) can fetch directly -- pass the URL, "
-        "not the bytes."))
+        "not the bytes. seamless_blend is an image operation on overmind's CPU, not a model."))
 
     def run(tool: str, target: str, image: str, request, shape) -> dict:
         interface = c.TOOL_CONTRACT[tool]
@@ -92,8 +94,10 @@ def create_app() -> FastMCP:
     def list_capabilities() -> dict:
         """What can be called right now: each inference tool with its inputs and the endpoints it reaches,
         the tasks (with their default/quality/fallback selections) and the models behind them. Derived
-        from the model registry and MLServer's live state."""
-        return discovery.capabilities()
+        from the model registry and MLServer's live state; plus the image operations that run on overmind."""
+        return {**discovery.capabilities(), "image_operations": {
+            "seamless_blend": "Poisson blend (OpenCV seamlessClone) of a reconstruction into its surroundings; "
+                              "CPU on overmind, about 2 s for a 1,100x700 region"}}
 
     @mcp.tool
     def segment_region(image: str, boxes: list[list[float]], target: str = "box-refinement") -> dict:
@@ -172,6 +176,30 @@ def create_app() -> FastMCP:
         return run("embed_image", target, image,
                    lambda photo, size: c.photo_request(photo),
                    lambda doc, rid, size: doc)
+
+    @mcp.tool
+    def seamless_blend(image: str, mask: str, destination: str, mode: str = "normal") -> dict:
+        """Blend a reconstruction into its surroundings (Poisson blending, OpenCV seamlessClone): inside the
+        mask it keeps image's texture (the reconstruction), at the mask's edge it takes on the light and colour
+        of destination -- the same region WITHOUT the reconstruction (e.g. the original photo layer; one that
+        already contains the reconstruction keeps its hard edge). mask: same size, white = the region to
+        blend (cover the hole plus a margin of clean surroundings). All three the same size. Returns a patch: an
+        RGBA PNG covering the mask (artifact + url), its offset [x, y] and size in image -- import it with GIMP's
+        overmind-import-artifact (snapshot=...) as a layer above the raw reconstruction. mode "mixed" keeps the
+        stronger of the two images' gradients. An image operation on overmind's CPU, not a model."""
+        t0 = time.perf_counter()
+        try:
+            src, _ = artifacts.load_image(image)
+            m, _ = artifacts.load_image(mask, "mask")
+            dst, _ = artifacts.load_image(destination, "destination")
+            res = imageops.seamless_blend(src, m, dst, mode)
+            run_id = artifacts.new_run()
+            buf = io.BytesIO()
+            res.pop("patch").save(buf, format="PNG")
+            patch = artifacts.save_bytes(run_id, "blend-patch.png", buf.getvalue())
+        except InputError as exc:
+            raise ToolError(str(exc)) from exc
+        return {"operation": "seamless_blend", "elapsed_s": round(time.perf_counter() - t0, 2), "patch": patch, **res}
 
     @mcp.resource("artifact://{run}/{name}", mime_type="image/png",
                   description="An output file of an earlier call (masks, depth maps, inpainted images).")
