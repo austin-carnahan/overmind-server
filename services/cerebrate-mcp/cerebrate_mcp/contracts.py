@@ -23,7 +23,7 @@ from dataclasses import dataclass
 
 import cv2
 import numpy as np
-from PIL import Image, ImageFilter
+from PIL import Image
 
 from .artifacts import Artifacts, InputError, b64
 from .mlserver import bytes_input, tensor_input
@@ -165,11 +165,11 @@ def text_detection_request(photo: bytes, queries: list[str], threshold: float | 
 def grow_mask(mask: bytes, px: int) -> bytes:
     """White (remove) = >= 128, grown by px pixels: inpainting needs a margin
     beyond a tight object mask, or the fill picks up the object's edges."""
-    m = Image.open(io.BytesIO(mask)).convert("L").point(lambda v: 255 if v >= 128 else 0)
-    if px > 0:
-        m = m.filter(ImageFilter.MaxFilter(2 * px + 1))
+    m = np.where(np.asarray(Image.open(io.BytesIO(mask)).convert("L")) >= 128, 255, 0).astype(np.uint8)
+    if px > 0:   # a square max filter; PIL's MaxFilter took 15 s on a 12 MP mask on the Pi, this ~0.1 s
+        m = cv2.dilate(m, np.ones((2 * px + 1, 2 * px + 1), np.uint8))
     buf = io.BytesIO()
-    m.save(buf, format="PNG")
+    Image.fromarray(m).save(buf, format="PNG")
     return buf.getvalue()
 
 
