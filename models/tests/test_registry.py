@@ -32,8 +32,10 @@ GOLDEN = {
     ("fixed-class-segmentation", "default"): ("rf-detr-seg-nano/gpu-fp16acc32", "gpu-rfdetr", "rf-detr-seg-nano-fast", "rf-detr-seg-nano"),
     ("fixed-class-segmentation", "quality"): ("rf-detr-seg-nano/gpu-fp32", "gpu-rfdetr", "rf-detr-seg-nano-default", None),
     # sam2.1-hiera-tiny/gpu-fp32: box-refinement quality (above); reduced precision stays serving_blocked
+    ("text-prompted-segmentation", "default"): ("efficientsam3-rvm/gpu-trunk-fp32-neck-fp16acc32-grounding-fp16acc32", "gpu-esam3", "efficientsam3-rvm-fast", "efficientsam3-rvm"),
+    ("text-prompted-segmentation", "quality"): ("efficientsam3-rvm/gpu-fp32", None, None, None),   # serving_blocked (memory)
 }
-AVAILABLE = {"prompt-free-segmentation", "box-refinement", "relative-depth", "inpainting", "image-embedding", "fixed-class-segmentation"}
+AVAILABLE = {"prompt-free-segmentation", "box-refinement", "relative-depth", "inpainting", "image-embedding", "fixed-class-segmentation", "text-prompted-segmentation"}
 
 
 class RealRegistry(unittest.TestCase):

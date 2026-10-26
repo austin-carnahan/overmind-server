@@ -336,7 +336,7 @@ variants:
     resources: {ram_mb: null, notes: "load peak > 2.5 GB (free-memory drop); stopped by the test guard before requests"}
 
   efficientsam3-rvm/gpu-trunk-fp32-neck-fp16acc32-grounding-fp16acc32:
-    status: staged
+    status: production
     stages:
       - {name: vision trunk, artifact: tflite_gpu_vision_trunk, accelerator: gpu, precision: fp32, runtime: litert-2.3.0, phase: image}
       - {name: vision neck, artifact: tflite_gpu_vision_neck, accelerator: gpu, precision: fp16acc32, runtime: litert-2.3.0, phase: image, notes: "trunk output buffer passed straight to the neck"}

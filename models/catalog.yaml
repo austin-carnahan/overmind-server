@@ -760,7 +760,7 @@ tasks:
   text-prompted-segmentation:
     default: efficientsam3-rvm/gpu-trunk-fp32-neck-fp16acc32-grounding-fp16acc32
     quality: efficientsam3-rvm/gpu-fp32
-    available: false
+    available: true
   relative-depth:
     default: depth-anything-v2-small/gpu-fp16acc32
     quality: depth-anything-v2-small/gpu-fp32
