@@ -1,4 +1,5 @@
-"""Sample outputs from every Pixel model for one photo, for people to look at:
+"""Sample outputs from the Pixel's vision and text models for one photo, for
+people to look at (Granite-Docling, a document converter, is left out):
 each model's request through MLServer (gRPC), its JSON result, a rendered
 overlay, timings (the first request to a model includes its on-demand start),
 summary.md and an index.html contact sheet. Prompts are deliberately basic.
@@ -288,16 +289,7 @@ def smollm2():
     section("12_smollm2", "SmolLM2-135M: text generation", "cerebrate-generate", f"prompt: \"{prompt}\" (text only)", s, [], f"> {text}")
 
 
-def granite():
-    prompt = "Convert this page to docling."
-    r, s = infer("cerebrate-gguf", image=[base64.b64encode(photo_bytes)], prompt=[prompt.encode()])
-    text = bytes_output(r, "text").strip()
-    save("13_granite-docling", "doctags.txt", text)
-    section("13_granite-docling", "Granite-Docling 258M: document conversion", "cerebrate-gguf", f"the photo + \"{prompt}\"", s, [],
-            "DocTags (a document model, so a photo comes back as a picture element):\n\n```\n" + text[:1500] + "\n```")
-
-
-for step in (yoloe_v8s, yoloe_11s, rfdetr, owlv2, esam3, edgesam, sam2, depth, migan, dinov2, mobilenet, smollm2, granite):
+for step in (yoloe_v8s, yoloe_11s, rfdetr, owlv2, esam3, edgesam, sam2, depth, migan, dinov2, mobilenet, smollm2):
     run(step)
 
 with open(os.path.join(OUT, "summary.md"), "w") as f:
