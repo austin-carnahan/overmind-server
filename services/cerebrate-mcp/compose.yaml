@@ -9,6 +9,9 @@ services:
     build:
       context: .
     container_name: cerebrate-mcp
+    # Runs as austin, who owns /var/lib/overmind (same as maintainerr), so the
+    # artifact directory needs no root-owned setup.
+    user: "1000:1000"
     mem_limit: 512m
     environment:
       CEREBRATE_MCP_MLSERVER_URL: http://host.docker.internal:8500

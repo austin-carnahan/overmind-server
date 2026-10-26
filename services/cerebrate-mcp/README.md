@@ -86,8 +86,8 @@ include the MCP check.
 1. **The checkout.** `/opt/overmind` must carry the model registry this service
    reads (`models/registry.py`, `variants.yaml`). Today that is on the
    `feat/segmentation-lane-graph-worker` line, which isn't merged into `main`.
-2. **Artifact directory.** Create it for the container's user:
-   `sudo install -d -o 10010 -g 10010 /var/lib/overmind/cerebrate-mcp/artifacts`.
+2. **Artifact directory.** As austin, who owns `/var/lib/overmind` and is the
+   container's user: `install -d /var/lib/overmind/cerebrate-mcp/artifacts`.
 3. **Start it.** Uncomment `cerebrate-mcp/compose.yaml` in
    [`services/compose.yaml`](../compose.yaml), then run `docker compose -f
    compose.yaml up -d cerebrate-mcp` from `services/`.
