@@ -20,7 +20,7 @@ these notes say otherwise.
 | Step | Recipe today | Evidence |
 | --- | --- | --- |
 | Find objects, no prompt | RF-DETR (`fixed-class-segmentation`) | clean labels and masks on the hotel room. Only 80 classes: no "lamp" |
-| Find a named object | OWLv2 boxes → EdgeSAM | untested on real work; EfficientSAM3 missed the bedroom lamp (below) |
+| Find a named object | OWLv2 boxes → EdgeSAM | "a wicker lamp" → the lamp exactly (0.67), bed and pillows right; EfficientSAM3 missed or mislabelled (below) |
 | Precise mask from a box | EdgeSAM (`box-refinement`) | lamp good. Bed: the comforter and skirt, **not the pillows** (twice) |
 | Remove an object | inpaint with the 512 window, grow 7 px | small objects only. Lamp: clean wall, but its base smear and cast shadow stay. A bed-sized hole fails (below) |
 | Mask → GIMP | corner-traced polygons, eps 1 px | IoU 0.998 median, 0.990 min |
@@ -57,6 +57,21 @@ these notes say otherwise.
   - **The fix is in the hooks:** about 240 MB for the whole EfficientSAM3
     hook, with bit-identical outputs. The MCP's scaling was removed. See
     `hosts/cerebrate-pixel6/mlserver/README.md`, "Phone photos".
+- **2026-10-26, bedroom.jpg at full 12 MP, after the hook fix: the threshold
+  experiment.**
+
+  | Prompt | Default 0.5 | Threshold 0.3 |
+  | --- | --- | --- |
+  | "lamp" (presence 0.74) | nothing | 0.38 and 0.41, both the **ceiling fan** |
+  | "pillow" (presence 0.92) | nothing | one pillow (0.45), plus **the whole bed** twice (0.45, 0.32) |
+  | "wicker lamp" (presence 0.19) | nothing | nothing |
+
+  Same photo, **OWLv2**: "a wicker lamp" 0.67 with exactly the lamp's box;
+  "a bed" 0.58; two pillows at 0.40.
+
+  **Conclusion:** lowering EfficientSAM3's threshold finds the wrong things.
+  OWLv2 → EdgeSAM is the named-object recipe. Each EfficientSAM3 run took
+  about 21 s for 3 prompts; OWLv2 took 14 s at 12 MP.
 - **2026-10-26, bedroom.jpg at 2048, prompts "wicker lamp", "lamp", "table
   lamp", "vase".** No instances returned. The presence scores were 0.18,
   **0.73**, 0.19 and 0.11, so it believed a lamp was there but no instance
@@ -162,9 +177,8 @@ Run these when a test touches the step anyway.
   footprint to the user and say so.
 - **Inpaint window:** a context factor of 3× instead of 2×, or a minimum of
   768 px, on small objects. Does more surrounding help or blur?
-- **EfficientSAM3 threshold:** now exposed on `segment_by_text` (from the next
-  deploy). Does 0.3 recover the lamp, and at what false-positive cost? The
-  recipe already says to retry at 0.3 when presence is high.
+- **EfficientSAM3 threshold:** answered on 2026-10-26: 0.3 returns wrong
+  objects (above). Revisit only with a stronger text-segmentation model.
 - **Named objects:** OWLv2 → EdgeSAM vs. EfficientSAM3 vs. RF-DETR → EdgeSAM,
   on the same phrases, when the phone has the memory.
 - **Box → mask quality:** SAM 2.1 (`box-refinement@quality`) vs. EdgeSAM on

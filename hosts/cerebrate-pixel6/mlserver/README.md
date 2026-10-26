@@ -991,7 +991,15 @@ MLServer's readiness.
 
 ## Phone photos: host steps in bounded memory (prepared 2026-10-26)
 
-**Status:** tested; to deploy with the GIMP snapshot work. Deploying it needs one MLServer restart.
+**Status:** deployed on 2026-10-26 (`d7840dc`). The guest checkout
+`/home/droid/code/overmind-server` moved from
+`feat/segmentation-lane-graph-worker` to `main` at the same time; both
+checkouts now follow `main`.
+
+Checks after the restart:
+- 13/13 models READY, and the MobileNet probe passed 3/3;
+- on the full 4000×3000 bedroom photo: text segmentation twice (3 prompts
+  each) and OWLv2 once, MLServer peaking at 577 MB with no restart.
 
 **Background.** On 2026-10-26 a 4000×3000 phone photo sent to `efficientsam3-rvm`
 got MLServer OOM-killed: the guest has 959 MB, with about 400–540 MB free.
@@ -1032,3 +1040,19 @@ the models:
 
 On the guest's own numpy (2.5.3) the same comparisons were bit-identical, on
 small images, without touching the running MLServer.
+
+**Follow-up: guest headroom (noted 2026-10-26, not urgent).**
+
+| Guest memory | MB |
+| --- | --- |
+| Fixed size of the Debian guest | 959, plus 239 swap |
+| MLServer at rest | about 275 |
+| MLServer peak on a 12 MP request, after these fixes | 577 |
+| Available with MLServer running | about 350–400 |
+
+Two directions to look into:
+- give the virtual machine more of the phone's 8 GB;
+- slim what runs inside the guest.
+
+The models themselves run on the Android side under the capacity rule. This
+pool is only MLServer and its host steps.

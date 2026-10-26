@@ -55,12 +55,15 @@ use one of these:
 - **`cerebrate__detect_objects`**: no prompt. The default model has 80 common
   categories and reliable labels. `target="prompt-free-segmentation"` finds
   more objects, but its labels are odd.
-- **`cerebrate__segment_by_text`**: phrases, e.g. `["wicker lamp", "rug"]`.
-  Use this when you know what you want. If a phrase's `presence` is high
-  (say above 0.5) but no instances come back, retry with `threshold: 0.3`.
-  It missed the bedroom lamp at 0.73 presence with the default 0.5.
-- **`cerebrate__detect_by_text`** then **`cerebrate__segment_region`**: boxes
-  from phrases, then precise masks for those boxes.
+- **Named things: `cerebrate__detect_by_text`, then
+  `cerebrate__segment_region`.** Boxes from phrases (OWLv2), then precise masks
+  for those boxes (EdgeSAM). This is the default when you know what you want:
+  "a wicker lamp" found the bedroom lamp exactly (0.67).
+- **`cerebrate__segment_by_text`**: masks straight from phrases
+  (EfficientSAM3). It missed the lamp: presence 0.74, but no instance at the
+  default threshold. At `threshold: 0.3` it returned the ceiling fan as "lamp"
+  and the whole bed as "pillow". Use it as a second opinion, and check what
+  comes back.
 
 **Check that each mask covers the whole object before using it.** EdgeSAM
 given a bed's box outlined the comforter and left out the pillows. Add the

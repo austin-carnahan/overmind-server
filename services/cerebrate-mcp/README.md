@@ -228,6 +228,22 @@ End to end on bedroom.jpg (4000×3000), photo passed by path:
 - Another host's URL and a tampered signature were refused.
 - Through Caddy, every path but `/artifacts/*` is 404.
 
+**Deploy record (2026-10-26, snapshots and uploads, `d7840dc`).**
+1. `/opt/overmind` was pulled. `docker restart cerebrate-mcp` was needed:
+   compose leaves the container running when only the mounted code changed.
+2. `macbook-m1` was issued an upload token, written to the Mac plug-in's
+   settings.
+3. The Pixel guest was moved to `main`, and MLServer restarted with the hook
+   fixes.
+
+Live, through the agent path (`gimp_pdb_call`):
+- the code evaluators were refused;
+- publish → `inpaint` on the snapshot → import with `snapshot=` placed the
+  lamp patch at (2167, 1386), in the Room group;
+- a spent snapshot was refused;
+- a whole-canvas snapshot gave OWLv2 boxes in document coordinates;
+- the object-group test passed 17/17 against the new plug-in.
+
 ## OpenClaw
 
 Run on the Gateway host (overmind-01), as a sudoer:
