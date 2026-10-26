@@ -1112,3 +1112,63 @@ MLServer restarts. Expect about a minute of MLServer downtime.
 3. In the guest, check out the previous commit and start MLServer.
 
 Model files, configs and Pillow are unchanged by this window.
+
+### Deploy record: window 2 (2026-10-26, 00:02–00:03 UTC)
+
+Authorized by the user's go-ahead for the plan.
+
+1. **Pre-flight.**
+   - The test stack was torn down.
+   - `cerebrate-supervisor.capacity` (`c2ca2ac8`) and
+     `cerebrate-profiles.conf.capacity` (`308910ce`) were staged, hashes
+     verified.
+   - 4.15 GB free; TPU 25 °C.
+2. The watchdog was paused through its cooldown file.
+3. **00:02:20.** MLServer stopped. `infer`, `generate`, `gguf` and `graph3`
+   were STOPPED.
+4. **Phone.**
+   - `*.registry1` copies kept (`05ad7e0d`, `31bd257a`).
+   - Supervisor 10126 killed, the new files moved into place, the supervisor
+     relaunched.
+   - READY: `file_profiles=11 reserve_mb=1000 costs=18`.
+5. **Guest.** `git pull` → `21ec795`.
+6. **00:03:09.** MLServer active with 11 models READY and **no worker
+   running**: every worker is on demand now. **Downtime 49 s.**
+7. **Gate: PASS.**
+
+   | Check | Result |
+   | --- | --- |
+   | YOLOE | result 8/8, raw 8/8 bit-identical, 272 ms |
+   | EdgeSAM | 8/8, cached 8/8 |
+   | MobileNet (endpoint probe) | 795; the first request 1.8 s is the on-demand start |
+   | The six promoted endpoints | 25/25: fidelity, unload/reload, contention |
+   | SmolLM2 | coherent, 5.9 s |
+   | Granite | the expected DocTags (`<line_chart>`), 105 s |
+
+   `CAPACITY` afterwards: 1,731 MB free and 478 MB committed (the idle
+   Granite worker's reserved budget). TPU 52 °C and GPU 50 °C after the gate.
+
+The leftover `example-echo/` directory in the guest checkout holds only
+untracked files; MLServer ignores a folder without `model-settings.json`.
+
+### Promotion record: EfficientSAM3 and OWLv2 (2026-10-26, after window 2)
+
+The co-residency question that held them is answered by the capacity rule.
+Each was promoted with its gate in production.
+
+| Endpoint | Gate | Result | YOLOE median alone → beside it | Free min |
+| --- | --- | --- | --- | --- |
+| `efficientsam3-rvm` (fast) | 5/5 | 20/20 detections | 305 → 542 ms | 1,268 MB |
+| `owlv2-b16` | 5/5 | 75/75 detections | 321 → 551 ms | 1,270 MB |
+
+- Every gate also checked unload then reload.
+- MobileNet returned 795 on every probe.
+- EfficientSAM3's start stopped five idle workers to make room, in
+  least-recently-used order: YOLOE-11s, RF-DETR, SAM 2.1, MobileNet, YOLOE.
+- OWLv2's start stopped the idle EfficientSAM3.
+- No busy worker was stopped.
+- MLServer never restarted (MainPID 16188, NRestarts 0).
+- The phone peaked at 55 °C after the OWLv2 gate.
+
+All eight registry endpoints are now in production, and all eight tasks are
+available.
