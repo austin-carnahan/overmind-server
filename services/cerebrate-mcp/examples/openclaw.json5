@@ -15,14 +15,16 @@
     },
   },
   // MCP servers are visible to every agent unless denied. Gateway-level MCP
-  // tools are named <server>__<tool>. Grant them only where needed:
+  // tools are named <server>__<tool>. Grant them only where needed (append to
+  // each agent's existing lists -- openclaw-connect.sh does):
   agents: {
-    list: [
-      { id: "buckminster", tools: { allow: ["cerebrate__*"] } },   // the design agent
-      { id: "main",        tools: { deny:  ["cerebrate__*"] } },
-      { id: "soma",        tools: { deny:  ["cerebrate__*"] } },
-      { id: "kerrigan",    tools: { deny:  ["cerebrate__*"] } },
-    ],
+    entries: {                                                     // keyed by agent id
+      buckminster: { tools: { alsoAllow: ["cerebrate__*"] } },    // the design agent (tools.profile allowlist)
+      main: { tools: { deny: ["cerebrate__*"] } },                // Kerrigan
+      soma: { tools: { deny: ["cerebrate__*"] } },
+      "kerrigan-worker": { tools: { deny: ["cerebrate__*"] } },
+      "soma-worker": { tools: { deny: ["cerebrate__*"] } },
+    },
   },
 }
 // An agent's first call is cerebrate__list_capabilities; then, e.g.:

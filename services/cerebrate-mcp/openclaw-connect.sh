@@ -32,23 +32,24 @@ fi
 echo "== tool policy"
 # Every openclaw call's output is shown when it fails (a captured failure
 # under set -e would otherwise exit silently).
-if ! agents_out=$(oc config get agents.list --json 2>&1); then
-  echo "openclaw config get agents.list --json failed:"; echo "$agents_out"; exit 1
+# Agents are a map keyed by id: agents.entries.<id>.tools (OpenClaw 2026.9.6 schema).
+if ! agents_out=$(oc config get agents.entries --json 2>&1); then
+  echo "openclaw config get agents.entries --json failed:"; echo "$agents_out"; exit 1
 fi
 if ! ops_text=$(ALLOW="$ALLOW_AGENTS" AGENTS="$agents_out" python3 - <<'EOF'
 import json, os, sys
 allow = set(os.environ["ALLOW"].split())
 text = os.environ["AGENTS"]
-start = text.find("[")          # the CLI may print a banner before the JSON
+start = text.find("{")          # the CLI may print a banner before the JSON
 try:
     agents, _ = json.JSONDecoder().raw_decode(text[start:]) if start >= 0 else (None, 0)
 except ValueError:
     agents = None
-if not isinstance(agents, list):
-    sys.exit("could not read the agent list from:\n" + text[:1500])
-for i, a in enumerate(agents):
-    tools = a.get("tools") or {}
-    if a.get("id") in allow:
+if not isinstance(agents, dict) or not agents:
+    sys.exit("could not read the agents from:\n" + text[:1500])
+for agent_id, a in sorted(agents.items()):
+    tools = (a or {}).get("tools") or {}
+    if agent_id in allow:
         if not tools.get("profile"):
             continue  # no allowlist profile: MCP tools are already visible to it
         key = "alsoAllow"
@@ -56,7 +57,7 @@ for i, a in enumerate(agents):
         key = "deny"
     cur = list(tools.get(key) or [])
     if "cerebrate__*" not in cur:
-        print(f"agents.list[{i}].tools.{key}\t{json.dumps(cur + ['cerebrate__*'])}\t{a.get('id')}")
+        print(f"agents.entries.{agent_id}.tools.{key}\t{json.dumps(cur + ['cerebrate__*'])}\t{agent_id}")
 EOF
 ); then
   exit 1
