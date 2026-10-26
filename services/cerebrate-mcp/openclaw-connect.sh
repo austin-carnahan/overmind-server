@@ -94,4 +94,11 @@ echo "Gateway PID $old_pid -> $new_pid ($(systemctl is-active openclaw-gateway.s
 [ "$new_pid" != "$old_pid" ] && [ "$new_pid" != 0 ] || { echo "the Gateway did not restart cleanly"; exit 1; }
 
 echo "== probe"
-oc mcp probe cerebrate --json
+# Right after a restart the Gateway holds its state lock while it starts
+# ("another OpenClaw process owns state-lifecycle"); retry for up to 2 minutes.
+for attempt in $(seq 1 12); do
+  if out=$(oc mcp probe cerebrate --json 2>&1); then echo "$out"; exit 0; fi
+  echo "$out" | grep -q "state-lifecycle" || { echo "$out"; exit 1; }
+  sleep 10
+done
+echo "$out"; exit 1
