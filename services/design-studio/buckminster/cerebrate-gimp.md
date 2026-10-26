@@ -150,6 +150,9 @@ one.
 
 - Previews you `file_fetch` must be under 8 MB: export a JPEG. A full-size PNG
   is about 10 MB.
+- Don't `file_fetch` the source photo. Cerebrate reads it from the project
+  store by path, and `file_fetch` refused it anyway (read policy). Look at
+  your own exported JPEG preview instead.
 
 - Omit optional `gimp_gimp_pdb_call` arguments instead of passing `null`. For
   example, `parent=null` fails on `gimp-image-insert-layer`.

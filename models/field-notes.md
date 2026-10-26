@@ -131,7 +131,15 @@ these notes say otherwise.
       `~/DesignStudio/workspaces`);
     - `file_fetch` refused a 10.5 MB PNG preview (8 MB cap); a JPEG preview
       worked;
-    - 4 commands failed (not yet inspected).
+    - The "4 failed" are those two `file_fetch` refusals, each counted again
+      for the code-mode block around it. The source refusal was
+      `POLICY_DENIED: path does not match any allowReadPaths pattern`, on
+      `…/workspaces/spike-a/bedroom.jpg`. Not needed: Cerebrate reads the
+      store path.
+    - How to inspect a run: `sudo python3 ~/buck-failures.py` on overmind
+      reads a copy of `agents/buckminster/agent/openclaw-agent.sqlite`. The
+      relevant tables are `transcript_events` and
+      `trajectory_runtime_events`.
 
 ## Try next
 
