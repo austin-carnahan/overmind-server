@@ -94,7 +94,8 @@ status() {
     else
         echo "no temporary grant"
     fi
-    echo "recent sudo calls:"; journalctl -t sudo -n 10 --no-pager 2>/dev/null | grep -F COMMAND || true
+    echo "recent sudo calls:"                               # 3 journal lines per call: open, command, close
+    journalctl -t sudo -n 90 --no-pager 2>/dev/null | grep -F COMMAND | tail -n 15 || true
 }
 
 case ${1:-} in
