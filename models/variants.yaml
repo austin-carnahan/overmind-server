@@ -33,7 +33,7 @@ variants:
     benchmarks:
       - {measure: worker, ms: 0.9, statistic: p50, covers: "cerebrate-infer inference, alone", record: experiments/pixel6/results.md#2026-10-24--cerebrate-hetero-as-the-common-serving-worker-edgesam--yoloe}
       - {measure: round-trip, ms: 2.3, statistic: p50, covers: "direct TCP client to cerebrate-infer, alone; p99 37 ms with YOLOE + EdgeSAM running", record: experiments/pixel6/results.md#2026-10-24--cerebrate-hetero-as-the-common-serving-worker-edgesam--yoloe}
-    resources: {ram_mb: null}
+    resources: {load_mb: 23, ram_mb: 47, notes: "measured 2026-10-25 (measure_costs.py): free-memory drop 23 MB, peak RSS 47 MB"}
     serving: {slot: infer, mlserver_model: cerebrate-infer}
     notes: Served by cerebrate-infer (a direct worker slot, no profiles); predates the hetero worker.
 
@@ -46,9 +46,25 @@ variants:
       reference: coherent output in the feasibility spike
       metrics: {output: coherent}
       verdict: correct
-    resources: {ram_mb: null}
+    resources: {load_mb: 299, ram_mb: 491, notes: "measured 2026-10-25 (measure_costs.py): free-memory drop 299 MB, peak RSS 491 MB"}
     serving: {slot: generate, mlserver_model: cerebrate-generate}
     notes: Served by cerebrate-generate (a direct worker slot, backend cpu).
+
+  # ---- Granite-Docling (Doclet) --------------------------------------------
+  granite-docling-258m/cpu-bf16:
+    status: production
+    stages:
+      - {name: vlm, artifact: gguf, accelerator: cpu, precision: bf16, weights: bf16, runtime: llama.cpp}
+    validation:
+      reference: llama-mtmd-cli's DocTags for experiments/docling's test-figure.png (the proven CLI result)
+      metrics: {doctags: identical}
+      verdict: exact
+      record: hosts/cerebrate-pixel6/cerebrate-gguf/README.md#acceptance-test-reproduced-the-proven-cli-output-through-the-supervisor
+    benchmarks:
+      - {measure: worker, ms: 103000, statistic: mean, covers: "one image through the supervisor (102.4 s, 103.5 s)", record: hosts/cerebrate-pixel6/cerebrate-gguf/README.md#acceptance-test-reproduced-the-proven-cli-output-through-the-supervisor}
+    resources: {load_mb: 481, ram_mb: 798, notes: "the model loads in a child process per request; load_mb covers the child's peak"}
+    serving: {slot: gguf, mlserver_model: cerebrate-gguf}
+    notes: Served by cerebrate-gguf (a direct worker slot with an mmproj field); predates the hetero worker.
 
   # ---- YOLOE-v8s prompt-free -----------------------------------------------
   yoloe-v8s-pf/tpu-fp16r-gpu-head-fp16acc32:
@@ -69,7 +85,7 @@ variants:
     benchmarks:
       - {measure: worker, ms: 78, statistic: p50, covers: "inference in the worker, uint8 photo input 640x640 (TPU ~13 ms + GPU)", record: experiments/pixel6/results.md#2026-10-24--combined-yoloe--edgesam-deployment-integration-tests-staged-not-live}
       - {measure: round-trip, ms: 280, statistic: p50, covers: "photo in, JSON detections out, production gRPC", record: experiments/pixel6/results.md#2026-10-25--deployed-image-transport-both-steps-and-edgesam}
-    resources: {ram_mb: 713, startup_ms: 2200, thermal: "TPU <= 55 C, GPU <= 56 C over a 3-minute sustained run", notes: "startup from the NNAPI compilation cache; ~3.8 s TPU compile on an empty cache"}
+    resources: {load_mb: 510, ram_mb: 713, startup_ms: 2200, thermal: "TPU <= 55 C, GPU <= 56 C over a 3-minute sustained run", notes: "startup from the NNAPI compilation cache; ~3.8 s TPU compile on an empty cache"}
     serving:
       slot: hetero1
       profile: yoloe-v8s-fast
@@ -90,7 +106,7 @@ variants:
     benchmarks:
       - {measure: device, ms: 186, statistic: median, covers: "whole model, litert_e2e", record: experiments/pixel6/results.md#2026-10-24--yoloe-prompt-free-on-the-gpu-int8-backbone-partition-desktop}
       - {measure: worker, ms: 202, statistic: p50, covers: "inference in the worker", record: experiments/pixel6/results.md#2026-10-24--cerebrate-hetero-deployment-prepared-supervisor-slot-on-demand-mlserver-model-catalog}
-    resources: {ram_mb: null}
+    resources: {load_mb: 425, ram_mb: 597, notes: "measured 2026-10-25 (measure_costs.py): free-memory drop 425 MB, peak RSS 597 MB"}
     serving:
       slot: hetero1
       profile: yoloe-v8s-default
@@ -150,7 +166,7 @@ variants:
       - {measure: device, ms: 179, statistic: median, covers: "whole model, litert_e2e", record: experiments/pixel6/results.md#2026-10-24--yoloe-prompt-free-on-the-gpu-int8-backbone-partition-desktop}
       - {measure: worker, ms: 178, statistic: median, covers: "worker inference", record: experiments/pixel6/results.md#2026-10-25--registry-serving-eight-gpu-models-staged-beside-production}
       - {measure: round-trip, ms: 561, statistic: median, covers: "photo in through the test MLServer, warm", record: experiments/pixel6/results.md#2026-10-25--registry-serving-eight-gpu-models-staged-beside-production}
-    resources: {ram_mb: 619, startup_ms: 2316, notes: "peak RSS; free-memory drop 414 MB"}
+    resources: {load_mb: 414, ram_mb: 619, startup_ms: 2316, notes: "peak RSS; free-memory drop 414 MB"}
     serving:
       slot: gpu-yoloe11s
       profile: yoloe-11s-pf-default
@@ -190,7 +206,7 @@ variants:
       - {measure: device, ms: 146, statistic: median, covers: "encoder: TPU stage 130 + GPU neck 16", record: experiments/pixel6/results.md#2026-10-24--edgesam-3x-image-encoder-on-the-edge-tpu-rev-e0564124}
       - {measure: worker, ms: 194, statistic: p50, covers: "image + 1 box (a further box on a cached image 52-54 ms)", record: experiments/pixel6/results.md#2026-10-24--cerebrate-hetero-as-the-common-serving-worker-edgesam--yoloe}
       - {measure: round-trip, ms: 438, statistic: p50, covers: "photo + 1 box in, JSON masks out, production gRPC (cached box 121 ms)", record: experiments/pixel6/results.md#2026-10-25--deployed-image-transport-both-steps-and-edgesam}
-    resources: {ram_mb: 593, startup_ms: 2200, thermal: "TPU <= 47 C, GPU <= 48 C over a 3-minute sustained run", notes: "45 s cold compile on an empty NNAPI cache"}
+    resources: {load_mb: 544, ram_mb: 593, startup_ms: 2200, thermal: "TPU <= 47 C, GPU <= 48 C over a 3-minute sustained run", notes: "45 s cold compile on an empty NNAPI cache"}
     serving:
       slot: hetero2
       profile: edgesam3x-fast
@@ -216,7 +232,7 @@ variants:
     benchmarks:
       - {measure: device, ms: 267, statistic: median, covers: "encoder", record: experiments/pixel6/results.md#2026-10-24--edgesam-3x-image-encoder-on-the-edge-tpu-rev-e0564124}
       - {measure: worker, ms: 313, statistic: p50, covers: "image + 1 box (a box on a cached image 57 ms)", record: experiments/pixel6/results.md#2026-10-24--cerebrate-hetero-as-the-common-serving-worker-edgesam--yoloe}
-    resources: {ram_mb: null}
+    resources: {load_mb: 311, ram_mb: 479, notes: "measured 2026-10-25 (measure_costs.py): free-memory drop 311 MB, peak RSS 479 MB"}
     serving:
       slot: hetero2
       profile: edgesam3x-default
@@ -258,7 +274,7 @@ variants:
       - {measure: summed, ms: 1460, covers: "encoder + one box"}
       - {measure: worker, ms: 1438, statistic: median, covers: "worker: encoder; + 60 ms per box (persistent buffers)", record: experiments/pixel6/results.md#2026-10-25--registry-serving-eight-gpu-models-staged-beside-production}
       - {measure: round-trip, ms: 1863, statistic: median, covers: "photo + 2 boxes through the test MLServer, warm", record: experiments/pixel6/results.md#2026-10-25--registry-serving-eight-gpu-models-staged-beside-production}
-    resources: {ram_mb: 1225, startup_ms: 4731, notes: "peak RSS; free-memory drop 919 MB"}
+    resources: {load_mb: 919, ram_mb: 1225, startup_ms: 4731, notes: "peak RSS; free-memory drop 919 MB"}
     serving:
       slot: gpu-sam2
       profile: sam2.1-hiera-tiny-default
@@ -284,7 +300,7 @@ variants:
       - {measure: worker, ms: 815, statistic: median, covers: "worker: encoder; + 38 ms per box", record: experiments/pixel6/results.md#2026-10-25--registry-serving-eight-gpu-models-staged-beside-production}
     limitations: ["the halves were validated separately (worst 0.981 / 0.978); measured together through the serving path (2026-10-25): worst mask IoU 0.963, 492 px -- below either half alone"]
     serving_blocked: "unresolved: worst mask IoU 0.963 end to end, below either half alone; not promoted, the exact FP32 configuration serves box-refinement quality (decision 2026-10-25)"
-    resources: {ram_mb: 845, startup_ms: null, notes: "peak RSS; free-memory drop 568 MB"}
+    resources: {load_mb: 568, ram_mb: 845, startup_ms: null, notes: "peak RSS; free-memory drop 568 MB"}
   sam2.1-hiera-tiny/gpu-fp16:
     status: rejected
     stages:
@@ -339,7 +355,7 @@ variants:
       - {measure: worker, ms: 570, statistic: median, covers: "worker: vision (cached per image_id); + 1,734 ms per prompt", record: experiments/pixel6/results.md#2026-10-25--registry-serving-eight-gpu-models-staged-beside-production}
       - {measure: round-trip, ms: 3428, statistic: median, covers: "photo + 1 prompt through the test MLServer, warm (a cached image + 2 prompts: 4,483 ms)", record: experiments/pixel6/results.md#2026-10-25--registry-serving-eight-gpu-models-staged-beside-production}
     limitations: ["reduced precision is confined to the neck: over the whole vision graph it drops the 0.510 detection"]
-    resources: {ram_mb: 2848, startup_ms: 8263, notes: "peak RSS; free-memory drop 2,365 MB -- admission floor 3,400 MB: starts only on a nearly idle phone"}
+    resources: {load_mb: 2365, ram_mb: 2848, startup_ms: 8263, notes: "peak RSS; free-memory drop 2,365 MB: with the 1,000 MB reserve it starts only when most other workers are stopped or stoppable"}
     serving:
       slot: gpu-esam3
       profile: efficientsam3-rvm-fast
@@ -390,7 +406,7 @@ variants:
       - {measure: summed, ms: 354, covers: "A + B (host step a few ms)"}
       - {measure: worker, ms: 374, statistic: median, covers: "worker: graph A + graph B", record: experiments/pixel6/results.md#2026-10-25--registry-serving-eight-gpu-models-staged-beside-production}
     limitations: ["fp16 weights: the remaining error vs the original is the published weights' (same on CPU)"]
-    resources: {ram_mb: 499, startup_ms: null, notes: "peak RSS; free-memory drop 279 MB"}
+    resources: {load_mb: 279, ram_mb: 499, startup_ms: null, notes: "peak RSS; free-memory drop 279 MB"}
     serving:
       slot: gpu-rfdetr
       profile: rf-detr-seg-nano-default
@@ -412,7 +428,7 @@ variants:
       - {measure: summed, ms: 205, covers: "A + B", record: experiments/pixel6/results.md#2026-10-24--published-rf-detr-seg-nano-litert-communityrf-detr-seg-nano-litert-rev-8fee237c}
       - {measure: worker, ms: 222, statistic: median, covers: "worker: graph A + graph B (two calls; host step in the adapter)", record: experiments/pixel6/results.md#2026-10-25--registry-serving-eight-gpu-models-staged-beside-production}
       - {measure: round-trip, ms: 523, statistic: median, covers: "photo in, detections out through the test MLServer, warm", record: experiments/pixel6/results.md#2026-10-25--registry-serving-eight-gpu-models-staged-beside-production}
-    resources: {ram_mb: 399, startup_ms: 3224, notes: "peak RSS; free-memory drop 180 MB"}
+    resources: {load_mb: 180, ram_mb: 399, startup_ms: 3224, notes: "peak RSS; free-memory drop 180 MB"}
     serving:
       slot: gpu-rfdetr
       profile: rf-detr-seg-nano-fast
@@ -443,7 +459,7 @@ variants:
     benchmarks:
       - {measure: device, ms: 661, statistic: median, covers: "whole model", record: experiments/pixel6/results.md#2026-10-24--published-depth-anything-v2-small-litert-communitydepth-anything-v2-small-rev-178427e4}
       - {measure: worker, ms: 674, statistic: median, covers: "worker inference, the validated float inputs", record: experiments/pixel6/results.md#2026-10-25--registry-serving-eight-gpu-models-staged-beside-production}
-    resources: {ram_mb: 619, startup_ms: null, notes: "peak RSS; free-memory drop 300 MB"}
+    resources: {load_mb: 300, ram_mb: 619, startup_ms: null, notes: "peak RSS; free-memory drop 300 MB"}
     serving:
       slot: gpu-depth
       profile: depth-anything-v2-small-default
@@ -461,7 +477,7 @@ variants:
       - {measure: device, ms: 340, statistic: median, covers: "whole model", record: experiments/pixel6/results.md#2026-10-24--published-depth-anything-v2-small-litert-communitydepth-anything-v2-small-rev-178427e4}
       - {measure: worker, ms: 334, statistic: median, covers: "worker inference, the validated float inputs", record: experiments/pixel6/results.md#2026-10-25--registry-serving-eight-gpu-models-staged-beside-production}
       - {measure: round-trip, ms: 595, statistic: median, covers: "photo in, depth out through the test MLServer (gRPC), warm", record: experiments/pixel6/results.md#2026-10-25--registry-serving-eight-gpu-models-staged-beside-production}
-    resources: {ram_mb: 474, startup_ms: 2017, notes: "peak RSS; free-memory drop 221 MB; startup = first request through MLServer incl. worker start; G3D 53 C after 2 min of contention + 60 s sustained"}
+    resources: {load_mb: 221, ram_mb: 474, startup_ms: 2017, notes: "peak RSS; free-memory drop 221 MB; startup = first request through MLServer incl. worker start; G3D 53 C after 2 min of contention + 60 s sustained"}
     serving:
       slot: gpu-depth
       profile: depth-anything-v2-small-fast
@@ -493,7 +509,7 @@ variants:
       - {measure: device, ms: 147, statistic: median, covers: "generator", record: experiments/pixel6/results.md#2026-10-24--published-mi-gan-512-places2-litert-communitymi-gan-512-places2-litert-rev-179a35d8}
       - {measure: worker, ms: 157, statistic: median, covers: "worker inference", record: experiments/pixel6/results.md#2026-10-25--registry-serving-eight-gpu-models-staged-beside-production}
     limitations: ["fp16 weights: the remaining error vs the original is the published weights'"]
-    resources: {ram_mb: 406, startup_ms: null, notes: "peak RSS; free-memory drop 234 MB. Served pipeline vs migan.onnx >= 57.0 dB"}
+    resources: {load_mb: 234, ram_mb: 406, startup_ms: null, notes: "peak RSS; free-memory drop 234 MB. Served pipeline vs migan.onnx >= 57.0 dB"}
     serving:
       slot: gpu-migan
       profile: mi-gan-512-default
@@ -511,7 +527,7 @@ variants:
       - {measure: device, ms: 79, statistic: median, covers: "generator", record: experiments/pixel6/results.md#2026-10-24--published-mi-gan-512-places2-litert-communitymi-gan-512-places2-litert-rev-179a35d8}
       - {measure: worker, ms: 84, statistic: median, covers: "worker inference", record: experiments/pixel6/results.md#2026-10-25--registry-serving-eight-gpu-models-staged-beside-production}
       - {measure: round-trip, ms: 419, statistic: median, covers: "photo + mask in, composited PNG out through the test MLServer, warm", record: experiments/pixel6/results.md#2026-10-25--registry-serving-eight-gpu-models-staged-beside-production}
-    resources: {ram_mb: 288, startup_ms: 1442, notes: "peak RSS; free-memory drop 125 MB. Served as the author's pipeline: removed-region PSNR vs migan.onnx >= 44.6 dB"}
+    resources: {load_mb: 125, ram_mb: 288, startup_ms: 1442, notes: "peak RSS; free-memory drop 125 MB. Served as the author's pipeline: removed-region PSNR vs migan.onnx >= 44.6 dB"}
     serving:
       slot: gpu-migan
       profile: mi-gan-512-fast
@@ -550,7 +566,7 @@ variants:
       - {measure: device, ms: 229, statistic: median, covers: "text tower, 32 phrases, GPU + CPU", record: experiments/pixel6/results.md#2026-10-24--owlv2-b16-ensemble-our-conversion-rev-cfd3195b}
       - {measure: worker, ms: 4569, statistic: median, covers: "worker: image tower; text tower 211 ms per 32 phrases", record: experiments/pixel6/results.md#2026-10-25--registry-serving-eight-gpu-models-staged-beside-production}
       - {measure: round-trip, ms: 5455, statistic: median, covers: "photo + 24 queries through the test MLServer, warm", record: experiments/pixel6/results.md#2026-10-25--registry-serving-eight-gpu-models-staged-beside-production}
-    resources: {ram_mb: 2533, startup_ms: 9522, notes: "peak RSS; free-memory drop 1,924 MB -- admission floor 3,000 MB"}
+    resources: {load_mb: 1924, ram_mb: 2533, startup_ms: 9522, notes: "peak RSS; free-memory drop 1,924 MB"}
     serving:
       slot: gpu-owlv2
       profile: owlv2-b16-default
@@ -583,7 +599,7 @@ variants:
       - {measure: worker, ms: 265, statistic: median, covers: "worker inference", record: experiments/pixel6/results.md#2026-10-25--registry-serving-eight-gpu-models-staged-beside-production}
       - {measure: round-trip, ms: 485, statistic: median, covers: "photo in, embedding out through the test MLServer, warm", record: experiments/pixel6/results.md#2026-10-25--registry-serving-eight-gpu-models-staged-beside-production}
     limitations: ["fp16 weights: rel L2 0.08% vs the original, same on CPU"]
-    resources: {ram_mb: 403, startup_ms: 1501, notes: "peak RSS; free-memory drop 150 MB"}
+    resources: {load_mb: 150, ram_mb: 403, startup_ms: 1501, notes: "peak RSS; free-memory drop 150 MB"}
     serving:
       slot: gpu-dinov2
       profile: dinov2-s14-default

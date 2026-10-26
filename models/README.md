@@ -85,6 +85,20 @@ may name it. EfficientSAM3's model `default` is the blocked FP32 reference.
 The validator refuses it serving, a staged or production status, and any
 task's `default` or `fallback`: what a task serves must be servable.
 
+**One serving policy.** `serving_policy` in the catalog holds three values:
+- `reserve_mb`: free memory no start may cross;
+- `idle_stop_s`: how long a worker may sit idle before it stops;
+- `capacity_wait_s`: how long a request waits for a busy worker when memory
+  is full.
+
+They apply to every model; nothing sets them per model, and the validator
+rejects per-model idle or residency keys. What is per configuration is its
+measured cost, `resources.load_mb`. `scripts/cerebrate-models generate` turns
+the policy and the costs into the supervisor's profiles file and the adapter's
+`serving_policy.json`; the validator fails when either is out of date. Every
+worker runs on demand and is stopped when idle, or to make room for another
+request.
+
 **Benchmarks** record their measurement kind: `device` (synchronized end to
 end on the phone for the named graph(s)), `worker` (cerebrate-hetero's
 inference time), `round-trip` (guest → MLServer → worker → guest), `summed`
@@ -205,9 +219,14 @@ need no new code.
    Then prove the photo path against the original model on real photos, with
    a `tests/*_photo_check.py`. Exactness problems live here: the library
    version, resampling arithmetic, FMA contraction.
-7. **Add a profile.** Add a slot (the next free port) and profile to
-   `cerebrate-supervisor/cerebrate-profiles.conf`. The floor is the measured
-   free-memory drop plus 1000 MB.
+7. **Record the cost; generate the profile.** Measure the configuration's
+   capacity cost on the test stack with `tests/measure_costs.py`, and record
+   it as `resources.load_mb`. Give the model its worker port in the catalog
+   (the next free one) and the variant its `serving` slot and profile. Then
+   `scripts/cerebrate-models generate` writes the slot, profile and cost into
+   `cerebrate-supervisor/cerebrate-profiles.conf`; never edit that file by
+   hand. There is no per-model floor or idle window: the reserve, the idle
+   window and the capacity wait are the catalog's one `serving_policy`.
 8. **Hold the endpoint.** Create `mlserver/held-models/<endpoint>/` (template
    below, plus the two symlinks), and set the variant to `status: staged` with
    its `serving` block. The validator now checks the whole chain:
@@ -260,7 +279,7 @@ photo is resized and normalized like the ImageNet references. Replace every
       record: experiments/pixel6/results.md#<heading-anchor>
     benchmarks:
       - {measure: worker, ms: <ms>, statistic: median, covers: "<what>", record: experiments/pixel6/results.md#<heading-anchor>}
-    resources: {ram_mb: null, startup_ms: null}    # measured values only
+    resources: {load_mb: <measure_costs.py>, ram_mb: null, startup_ms: null}    # measured values only
     # added at step 8:
     serving:
       slot: gpu-<short>
@@ -282,10 +301,10 @@ graph.main.outputs=<output>
 outputs=main.<output>
 ```
 
-```text
-# hosts/cerebrate-pixel6/cerebrate-supervisor/cerebrate-profiles.conf
-slot    gpu-<short>  <port>  cerebrate-hetero
-profile <model-id>-default  gpu-<short>  <device-file>.tflite  <model-id>-default.conf  <drop + 1000>
+```yaml
+# models/catalog.yaml, the model's worker (the profile, slot and cost lines of
+# cerebrate-profiles.conf are generated from this and the variant's serving)
+    worker: {binary: cerebrate-hetero, port: <next free port>}
 ```
 
 ```json
@@ -301,8 +320,6 @@ profile <model-id>-default  gpu-<short>  <device-file>.tflite  <model-id>-defaul
       "cerebrate_graph_port": <port>,
       "cerebrate_graph_model_path": "/data/local/tmp/<device-file>.tflite",
       "cerebrate_graph_backend": "<model-id>-default",
-      "cerebrate_graph_residency": "on_demand",
-      "cerebrate_graph_idle_stop_s": 600,
       "cerebrate_graph_request_timeout_s": 120,
       "cerebrate_graph_photo": "<hook name>"
     }

@@ -8,8 +8,6 @@
       "cerebrate_graph_port": 8776,
       "cerebrate_graph_model_path": "/data/local/tmp/dinov2_s_erf_fp16.tflite",
       "cerebrate_graph_backend": "dinov2-s14-default",
-      "cerebrate_graph_residency": "on_demand",
-      "cerebrate_graph_idle_stop_s": 600,
       "cerebrate_graph_request_timeout_s": 120,
       "cerebrate_graph_photo": "dinov2"
     }

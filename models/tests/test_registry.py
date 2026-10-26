@@ -4,7 +4,9 @@ class of registry error is caught. Run from the repo root:
   <venv>/bin/python3 -m unittest discover -s models/tests -v
 (needs pyyaml + jsonschema, as scripts/validate-model-catalog)."""
 import copy
+import json
 import sys
+import tempfile
 import unittest
 from pathlib import Path
 
@@ -82,6 +84,16 @@ class RealRegistry(unittest.TestCase):
             if v.get("serving_blocked"):
                 self.assertNotIn(v["status"], registry.SERVED, ref)
                 self.assertNotIn("serving", v, ref)
+
+    def test_one_policy_every_served_configuration_has_a_cost(self):
+        reserve, costs = registry.parse_capacity(registry.PROFILES_FILE)
+        self.assertEqual(reserve, self.reg.catalog["serving_policy"]["reserve_mb"])
+        for ref, v in self.reg.served_configurations():
+            key = v["serving"].get("profile") or v["serving"]["slot"]
+            self.assertEqual(costs.get(key), v["resources"]["load_mb"], ref)
+        policy = json.loads(registry.POLICY_FILE.read_text())
+        self.assertEqual(policy["idle_stop_s"], self.reg.catalog["serving_policy"]["idle_stop_s"])
+        self.assertEqual(policy["capacity_wait_s"], self.reg.catalog["serving_policy"]["capacity_wait_s"])
 
     def test_validated_models_are_not_endpoints(self):
         for name, ref, status in self.reg.endpoints():
@@ -226,6 +238,33 @@ class Mutations(unittest.TestCase):
             v["variants"]["sam2.1-hiera-tiny/gpu-fp16acc32"]["status"] = "staged"
             v["variants"]["sam2.1-hiera-tiny/gpu-fp16acc32"]["serving"] = {"slot": "gpu-sam2", "profile": "sam2.1-hiera-tiny-default"}
         self.assertCaught(m, "serving_blocked (unresolved")
+
+    def test_profiles_file_out_of_date(self):
+        def m(c, v):
+            v["variants"]["mi-gan-512/gpu-fp16"]["resources"]["load_mb"] = 999
+        self.assertCaught(m, "is out of date")
+
+    def test_reserve_change_needs_regeneration(self):
+        def m(c, v):
+            c["serving_policy"]["reserve_mb"] = 1500
+        self.assertCaught(m, "is out of date")
+
+    def test_served_configuration_without_cost(self):
+        def m(c, v):
+            v["variants"]["mi-gan-512/gpu-fp16"]["resources"]["load_mb"] = None
+        self.assertCaught(m, "not measured")
+
+    def test_per_model_idle_window_rejected(self):
+        with tempfile.TemporaryDirectory() as d:
+            ms = Path(d) / "some-model" / "model-settings.json"
+            ms.parent.mkdir()
+            ms.write_text(json.dumps({"parameters": {"extra": {"cerebrate_graph_idle_stop_s": 60}}}))
+            orig, registry.HELD_MODELS_DIR = registry.HELD_MODELS_DIR, Path(d)
+            try:
+                errs = self.errors(lambda c, v: None)
+            finally:
+                registry.HELD_MODELS_DIR = orig
+        self.assertTrue(any("system-wide" in e for e in errs), errs)
 
     def test_variants_in_catalog_rejected(self):
         def m(c, v):

@@ -8,9 +8,17 @@
 #
 # Started as Stage 1 (Phase A) of the Operational Model Catalog
 # (design-notes/cerebrate_pixel6_operational_model_catalog_v4.md) with the
-# two then-production models. MobileNet and SmolLM2 still run as manually
-# launched workers (residency: manual) -- no PINNED/ON_DEMAND policy is
-# enforced for them; the lane's hetero models are on demand through MLServer.
+# two then-production models.
+
+# One serving policy for every Pixel model (2026-10-25): every worker starts on
+# demand and stops when idle or to make room; no start takes the phone below
+# reserve_mb (each configuration's capacity cost is its measured load_mb in
+# variants.yaml). Generated into the supervisor's profiles file and the
+# adapter's serving_policy.json by `scripts/cerebrate-models generate`.
+serving_policy:
+  reserve_mb: 1000
+  idle_stop_s: 600
+  capacity_wait_s: 30
 
 models:
   mobilenetv1:
@@ -70,7 +78,6 @@ models:
     execution_preferences:
       pixel6:
         - tflite_nnapi
-    residency: manual
     requirements:
       disk_mb: 4.08
       # Never measured -- MLServer's own RSS was tracked extensively
@@ -131,10 +138,38 @@ models:
       pixel6:
         - litertlm_cpu
         - litertlm_gpu
-    residency: manual
     requirements:
       disk_mb: 136.2
       # Never measured -- same gap as mobilenetv1 above.
+      ram_mb: null
+
+  granite-docling-258m:
+    description: >-
+      IBM Granite-Docling 258M, a document vision-language model (page or
+      figure image + prompt -> DocTags), as GGUF (bf16 weights, f16
+      multimodal projector). cerebrate-gguf runs llama.cpp's llama-mtmd-cli
+      in a child process per request: ~100 s per image on the CPU, almost all
+      vision encoding. Serves the Doclet service on overmind-01
+      (services/doclet).
+    capabilities:
+      - convert-document-image
+    artifacts:
+      gguf:
+        source: {repo: ibm-granite/granite-docling-258M-GGUF, revision: e1e344cb19bae46a1d5edb4f04a27ebe0c268f72}
+        files:
+          - {name: granite-docling-258M-bf16.gguf, sha256: 13fbc786212d647c540d31c90dc421775de6edde2b8b8cd061951ed86f16935c, bytes: 331641120}
+          - {name: mmproj-model-f16.gguf, sha256: 4b7b2c4ed3162bd9cb323668c188e2324838b8f8ca4f3f9767f16c4c600d43ad, bytes: 190031712}
+    worker:
+      binary: cerebrate-gguf
+      port: 8768
+    serving:
+      mlserver_model: cerebrate-gguf
+      interface: image-prompt-text-v1
+    aliases:
+      default: cpu-bf16
+      reference: cpu-bf16
+    requirements:
+      disk_mb: 497.5
       ram_mb: null
 
   yoloe-v8s-pf:
@@ -209,9 +244,6 @@ models:
         - tpu_gpu_hybrid
         - litert_gpu_fp16acc32
         - litert_gpu_fp32
-    # Worker started by the first request and stopped after 10 minutes idle
-    # (cerebrate_graph_residency: on_demand in model-settings.json).
-    residency: on_demand
     requirements:
       # The three .tflite files, MiB (the default variant alone: 51.93).
       disk_mb: 103.82
@@ -253,7 +285,6 @@ models:
     aliases:
       default: gpu-fp32
       reference: gpu-fp32
-    residency: on_demand
     requirements:
       disk_mb: 45.46
       ram_mb: null
@@ -329,7 +360,6 @@ models:
     serving:
       mlserver_model: edgesam3x-box
       interface: photo-box-masks-v1
-    residency: on_demand
     requirements:
       # The four models and five decoder constants, MiB.
       disk_mb: 64.62
@@ -394,7 +424,6 @@ models:
       reference: gpu-fp32
       quality: gpu-fp32
       fast: gpu-fp16acc32
-    residency: on_demand
     requirements:
       disk_mb: 151.9
       ram_mb: null
@@ -490,7 +519,6 @@ models:
       default: gpu-fp32
       reference: gpu-fp32
       fast: gpu-trunk-fp32-neck-fp16acc32-grounding-fp16acc32
-    residency: on_demand
     requirements:
       # The five graphs and the host constant inputs, MiB.
       disk_mb: 464.18
@@ -544,7 +572,6 @@ models:
       default: gpu-fp32
       reference: gpu-fp32
       fast: gpu-fp16acc32
-    residency: on_demand
     requirements:
       disk_mb: 60.04
       ram_mb: null
@@ -578,7 +605,6 @@ models:
       default: gpu-fp32
       reference: gpu-fp32
       fast: gpu-fp16acc32
-    residency: on_demand
     requirements:
       disk_mb: 94.92
       ram_mb: null
@@ -613,7 +639,6 @@ models:
       default: gpu-fp32
       reference: gpu-fp32
       fast: gpu-fp16
-    residency: on_demand
     requirements:
       disk_mb: 15.56
       ram_mb: null
@@ -670,7 +695,6 @@ models:
     aliases:
       default: gpu-fp32
       reference: gpu-fp32
-    residency: on_demand
     requirements:
       disk_mb: 590.18
       ram_mb: null
@@ -711,7 +735,6 @@ models:
     aliases:
       default: gpu-fp32
       reference: gpu-fp32
-    residency: on_demand
     requirements:
       # Both published files (the default variant alone: 42.79).
       disk_mb: 85.6

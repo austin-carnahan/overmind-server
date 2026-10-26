@@ -9,17 +9,17 @@
 #      up; after an Android reboot adb tcpip itself must be re-enabled first --
 #      see the supervisor README's recovery runbook); otherwise exit quietly.
 #   2. If the supervisor's control port is listening, all is well.
-#   3. Otherwise (at most once per COOLDOWN_S): stop orphaned on-demand workers
-#      (cerebrate-hetero processes from this staging directory, reparented to
-#      init -- a new supervisor can't adopt them and would refuse their ports;
-#      they restart on their next request), start the supervisor with the
-#      documented detached command, and confirm the port.
+#   3. Otherwise (at most once per COOLDOWN_S): stop orphaned workers (any
+#      worker binary from this staging directory, reparented to init -- a new
+#      supervisor can't adopt them and would refuse their ports; since
+#      2026-10-25 every worker runs on demand and restarts on its next
+#      request), start the supervisor with the documented detached command,
+#      and confirm the port.
 #   4. Right after a restart, ask MLServer (through the reverse tunnel) to load
 #      every model that isn't READY: a pinned model whose load ran while the
 #      supervisor was down stays unready until loaded again. Only then, so an
 #      operator's deliberate unload isn't undone in normal operation.
-# Never touches a running supervisor, the VM (pixel-vm-watchdog's job), or
-# cerebrate-infer/-generate/-gguf orphans (pinned; they keep serving).
+# Never touches a running supervisor or the VM (pixel-vm-watchdog's job).
 #
 # Environment (defaults are production): PIXEL_ADB_SERIAL, SUPERVISOR_DIR,
 # SUPERVISOR_PORT, MLSERVER_URL, STATE_DIR. A side-by-side test supervisor is
@@ -34,8 +34,11 @@ STATE_DIR=${STATE_DIR:-/run/pixel-supervisor-watchdog}
 COOLDOWN_S=${COOLDOWN_S:-120}
 mkdir -p "$STATE_DIR"
 
+# A LISTEN socket on the port. (Android's netstat -l also prints TIME_WAIT
+# connections, so matching the port alone mistakes a dead supervisor's recent
+# clients for the supervisor.)
 listening() {
-    $ADB shell "netstat -ltn 2>/dev/null | grep -q ':$PORT '" >/dev/null 2>&1
+    $ADB shell "netstat -ltn 2>/dev/null | awk '\$4 ~ /:$PORT\$/ && \$6 == \"LISTEN\" {found=1} END {exit !found}'" >/dev/null 2>&1
 }
 
 if [ "$($ADB get-state 2>/dev/null || true)" != "device" ]; then
@@ -54,9 +57,10 @@ if [ $((now - last)) -lt "$COOLDOWN_S" ]; then
 fi
 echo "supervisor not listening on $PORT: stopping orphaned on-demand workers, then starting it"
 
-# Orphans: cerebrate-hetero from this directory whose parent is init.
-$ADB shell "for p in \$(pidof cerebrate-hetero); do
-  if [ \"\$(readlink /proc/\$p/exe)\" = '$DIR/cerebrate-hetero' ] && [ \"\$(cut -d' ' -f4 /proc/\$p/stat)\" = 1 ]; then
+# Orphans: a worker binary from this directory whose parent is init.
+$ADB shell "for p in \$(pidof cerebrate-hetero cerebrate-infer cerebrate-generate cerebrate-gguf cerebrate-graph); do
+  case \"\$(readlink /proc/\$p/exe)\" in '$DIR'/cerebrate-hetero|'$DIR'/cerebrate-infer|'$DIR'/cerebrate-generate|'$DIR'/cerebrate-gguf|'$DIR'/cerebrate-graph) ;; *) continue ;; esac
+  if [ \"\$(cut -d' ' -f4 /proc/\$p/stat)\" = 1 ]; then
     echo \"  killing orphaned worker \$p: \$(tr '\0' ' ' < /proc/\$p/cmdline)\"; kill \$p
   fi
 done" || true

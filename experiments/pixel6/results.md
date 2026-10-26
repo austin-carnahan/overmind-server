@@ -1140,3 +1140,58 @@ production MobileNet concurrently -- every output correct; Depth worker p50
 job), MobileNet p99 5.7 → 12.8 ms (one known reconnect). Depth alone
 sustained 60 s: 338-346 ms per 10 s window; G3D 53 °C, skin 34 °C.
 Thermal across the individual runs: G3D ≤ 49 °C (OWLv2), others 29-42 °C.
+
+
+## 2026-10-25 — One capacity rule and a shared lifecycle for every Pixel model
+
+Design and code: cerebrate-supervisor README, "Capacity: one rule for every
+worker"; `cerebrate_lifecycle.py`. All runs were on the test stack, beside
+production:
+- a test supervisor on 8777 with ports offset by 100, and a generated test
+  profiles file with `reserve_mb 1000`;
+- a test MLServer of all 13 endpoints.
+
+**Capacity costs measured** (`measure_costs.py`: free-memory drop through
+representative requests, read via the supervisor's CAPACITY):
+
+| Configuration | load_mb | Peak RSS (with children) |
+| --- | --- | --- |
+| MobileNet (20 probes) | 23 | 47 MB |
+| SmolLM2 (1 prompt) | 299 | 491 MB |
+| YOLOE-v8s fast / default (8 photos) | 510 / 425 | 702 / 597 MB |
+| EdgeSAM fast / default (8 photos, 2 boxes) | 544 / 311 | 596 / 479 MB |
+| Granite-Docling (1 image, 105 s) | 481 | 798 MB (the per-request llama-mtmd-cli child included) |
+
+**Behaviour:**
+
+| Check | Result |
+| --- | --- |
+| Lifecycle unit tests | 7/7 |
+| Registry tests | 38/38 |
+| `capacity_scenarios.py` `wait` | 6/6 |
+| `capacity_scenarios.py` `fail` (5 s wait) | 6/6 |
+| YOLOE, EdgeSAM through the shared lifecycle | result 8/8 + raw 8/8 bit-identical; 8/8 + cached 8/8 |
+| MobileNet through its endpoint | 795 |
+| The eight GPU endpoints' gates | 33/33 |
+| Idle stop (60 s test window) | all workers stopped, 13 models READY |
+| Supervisor `kill -9` with the fixed watchdog | the orphaned MobileNet worker was cleared, the supervisor restarted, and the next request restarted MobileNet (795) |
+
+The `wait` scenarios in detail:
+- **Co-residency.** YOLOE fits beside a resident EfficientSAM3, so nothing is
+  stopped.
+- **Idle eviction.** An idle EfficientSAM3 is stopped for OWLv2, and OWLv2's
+  result is unchanged.
+- **Busy wait.** A busy EfficientSAM3 is not stopped: OWLv2 waited 22 s, then
+  served.
+- **Reserve.** The minimum free memory was 1,115 MB.
+
+In `fail` mode, OWLv2 was refused with the supervisor's reason after the wait,
+and EfficientSAM3 was unharmed.
+
+The eight gates ran EfficientSAM3 and OWLv2 beside YOLOE and MobileNet. The
+YOLOE median went from 299 to 626 ms beside OWLv2 and from 290 to 530 ms
+beside EfficientSAM3, with every result unchanged.
+
+The earlier estimate that EfficientSAM3 + YOLOE would leave about 1 GB or
+less was pessimistic: measured, YOLOE fits beside a resident EfficientSAM3
+within the reserve.

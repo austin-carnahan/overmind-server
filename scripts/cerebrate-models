@@ -11,11 +11,16 @@
   cerebrate-models endpoints              MLServer endpoints (staged and production only)
   cerebrate-models investigations         closed/deferred investigations
   cerebrate-models hash <file>...         sha256 + bytes, as catalog `files` entries
-  cerebrate-models check-artifacts (--store [ROOT] | --dir DIR | --device [--origin]) [model...]
+  cerebrate-models check-artifacts (--store [--store-root ROOT] | --dir DIR | --device [--origin]) [model...]
                                           verify recorded sha256s: in the artifact store
                                           (/mnt/models: HF cache, derived/, direct/), files
                                           named <name> under DIR, or on the phone in
                                           /data/local/tmp (--origin: at their origin path)
+  cerebrate-models generate [--check]     write the supervisor's profiles file and the adapter's
+                                          serving_policy.json from the registry (--check: only
+                                          compare; nonzero if out of date)
+  cerebrate-models generate --port-offset N --out FILE
+                                          a test supervisor's profiles file (ports shifted by N)
   cerebrate-models validate               the same checks as scripts/validate-model-catalog
 
 Needs pyyaml + jsonschema (models/README.md). --device needs adb (overmind-01).
@@ -223,6 +228,29 @@ def cmd_check(reg, args):
     sys.exit(1 if bad else 0)
 
 
+def cmd_generate(reg, args):
+    try:
+        profiles = reg.generate_profiles_file(args.port_offset)
+    except ValueError as exc:
+        sys.exit(f"cannot generate: {exc}")
+    if args.out:
+        Path(args.out).write_text(profiles)
+        print(f"wrote {args.out} (port offset {args.port_offset})")
+        return
+    if args.port_offset:
+        sys.exit("--port-offset needs --out (the repo's profiles file is production's)")
+    stale = [p for p, text in ((registry.PROFILES_FILE, profiles), (registry.POLICY_FILE, reg.generate_policy_json()))
+             if not p.exists() or p.read_text() != text]
+    if args.check:
+        for p in stale:
+            print(f"out of date: {p.relative_to(registry.REPO_ROOT)}", file=sys.stderr)
+        sys.exit(1 if stale else 0)
+    registry.PROFILES_FILE.write_text(profiles)
+    registry.POLICY_FILE.write_text(reg.generate_policy_json())
+    for p in (registry.PROFILES_FILE, registry.POLICY_FILE):
+        print(f"{'updated' if p in stale else 'unchanged'}: {p.relative_to(registry.REPO_ROOT)}")
+
+
 def cmd_validate(reg, args):
     errors = reg.validate()
     for e in errors:
@@ -248,12 +276,14 @@ def main():
     g.add_argument("--store", action="store_true", help="the artifact store (--store-root, default /mnt/models)")
     p.add_argument("--store-root", default=registry.STORE_ROOT)
     p.add_argument("--origin", action="store_true"); p.add_argument("models", nargs="*")
+    p = sub.add_parser("generate"); p.add_argument("--check", action="store_true")
+    p.add_argument("--port-offset", type=int, default=0); p.add_argument("--out")
     sub.add_parser("validate")
     args = ap.parse_args()
     reg = registry.Registry.load()
     {"list": cmd_list, None: cmd_list, "show": cmd_show, "variants": cmd_variants, "tasks": cmd_tasks,
      "resolve": cmd_resolve, "endpoints": cmd_endpoints, "investigations": cmd_investigations,
-     "hash": cmd_hash, "check-artifacts": cmd_check, "validate": cmd_validate}[args.cmd](reg, args)
+     "hash": cmd_hash, "check-artifacts": cmd_check, "generate": cmd_generate, "validate": cmd_validate}[args.cmd](reg, args)
 
 
 if __name__ == "__main__":

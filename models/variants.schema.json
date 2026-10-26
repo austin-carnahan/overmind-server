@@ -51,6 +51,7 @@
           "additionalProperties": false,
           "properties": {
             "ram_mb": {"type": ["number", "null"], "description": "Worker RSS; null = not measured."},
+            "load_mb": {"type": ["integer", "null"], "description": "Capacity cost: the measured drop in the phone's MemAvailable from starting the worker through its validation requests (tests/resource_sampler.sh). Required for every served configuration; null = not measured."},
             "startup_ms": {"type": ["number", "null"]},
             "thermal": {"type": ["string", "null"]},
             "notes": {"type": "string"}
@@ -70,11 +71,11 @@
         "accelerator": {"type": "string", "enum": ["tpu", "gpu", "cpu", "gpu+cpu", "host"]},
         "precision": {
           "type": "string",
-          "enum": ["fp32", "fp16acc32", "fp16", "fp16-relaxed", "int8", "n/a"],
+          "enum": ["fp32", "fp16acc32", "fp16", "bf16", "fp16-relaxed", "int8", "n/a"],
           "description": "Compute precision. fp16-relaxed = fp32 graph on the Edge TPU with NNAPI's allow_fp16; host steps use n/a."
         },
-        "weights": {"type": "string", "enum": ["fp32", "fp16", "int8"]},
-        "runtime": {"type": "string", "enum": ["litert-2.3.0", "tflite-2.16.1-nnapi", "litert-lm", "numpy"]},
+        "weights": {"type": "string", "enum": ["fp32", "fp16", "bf16", "int8"]},
+        "runtime": {"type": "string", "enum": ["litert-2.3.0", "tflite-2.16.1-nnapi", "litert-lm", "llama.cpp", "numpy"]},
         "phase": {"type": "string", "enum": ["image", "prompt"], "description": "image = once per image (cacheable); prompt = once per prompt."},
         "notes": {"type": "string"}
       }

@@ -59,6 +59,14 @@ def markdown_anchors(path):
     return anchors
 
 
+def rel(path):
+    """A path for messages: repo-relative when inside the repo."""
+    try:
+        return str(Path(path).relative_to(REPO_ROOT))
+    except ValueError:
+        return str(path)
+
+
 def sha256_file(path, chunk=1 << 20):
     h = hashlib.sha256()
     with open(path, "rb") as f:
@@ -95,8 +103,9 @@ def config_device_files(conf):
 
 
 def parse_profiles_file(path):
-    """cerebrate-supervisor's optional profiles file: 'slot <name> <port>
-    <binary> [ready_ms]' and 'profile <name> <slot> <model> <config> [min_free_mb]'."""
+    """cerebrate-supervisor's profiles file: 'slot <name> <port> <binary>
+    [ready_ms]' and 'profile <name> <slot> <model> <config>' (the capacity
+    lines: parse_capacity)."""
     slots, profiles = {}, {}
     if not Path(path).exists():
         return slots, profiles
@@ -106,10 +115,22 @@ def parse_profiles_file(path):
             continue
         if parts[0] == "slot" and len(parts) in (4, 5):
             slots[parts[1]] = {"port": int(parts[2]), "binary": parts[3]}
-        elif parts[0] == "profile" and len(parts) in (5, 6):
-            profiles[parts[1]] = {"slot": parts[2], "model": parts[3], "config": parts[4],
-                                  "min_free_mb": int(parts[5]) if len(parts) == 6 else 0}
+        elif parts[0] == "profile" and len(parts) == 5:
+            profiles[parts[1]] = {"slot": parts[2], "model": parts[3], "config": parts[4]}
     return slots, profiles
+
+
+def parse_capacity(path):
+    """The profiles file's capacity lines: (reserve_mb or None, {key: cost_mb})."""
+    reserve, costs = None, {}
+    if Path(path).exists():
+        for raw in Path(path).read_text().splitlines():
+            parts = raw.split("#", 1)[0].split()
+            if len(parts) == 2 and parts[0] == "reserve_mb":
+                reserve = int(parts[1])
+            elif len(parts) == 3 and parts[0] == "cost":
+                costs[parts[1]] = int(parts[2])
+    return reserve, costs
 
 
 SUPERVISOR_SOURCE = REPO_ROOT / "hosts/cerebrate-pixel6/cerebrate-supervisor/cerebrate-supervisor.cc"
@@ -118,17 +139,18 @@ WORKER_CONFIG_DIR = REPO_ROOT / "hosts/cerebrate-pixel6/cerebrate-hetero/configs
 MLSERVER_MODELS_DIR = REPO_ROOT / "hosts/cerebrate-pixel6/mlserver/models"
 HELD_MODELS_DIR = REPO_ROOT / "hosts/cerebrate-pixel6/mlserver/held-models"   # staged: not loaded by production MLServer
 GUEST_ASSETS_DIR = MLSERVER_MODELS_DIR / "cerebrate-graph" / "assets"
+POLICY_FILE = MLSERVER_MODELS_DIR / "cerebrate-graph" / "serving_policy.json"   # the adapter's copy of serving_policy
 
 
 def compiled_supervisor():
     """Slots and hetero profiles compiled into cerebrate-supervisor.cc."""
     src = SUPERVISOR_SOURCE.read_text()
     slots = {}
-    for m in re.finditer(r'\{"([a-z0-9]+)", STAGING_DIR "/([^"]+)", (\d+),', src):
+    for m in re.finditer(r'\{"([a-z0-9]+)", STAGING_DIR "/([^"]+)", (\d+)(?: \+ PORT_OFFSET)?,', src):
         slots[m.group(1)] = {"port": int(m.group(3)), "binary": m.group(2)}
     profiles = {}
     for m in re.finditer(r'\{"([a-z0-9.-]+)", STAGING_DIR "/([^"]+)", \{"--config", STAGING_DIR "/([^"]+)"', src):
-        profiles[m.group(1)] = {"model": m.group(2), "config": m.group(3), "slot": None, "min_free_mb": 0}
+        profiles[m.group(1)] = {"model": m.group(2), "config": m.group(3), "slot": None}
     for slot, var in (("hetero1", "kHeteroBackends"), ("hetero2", "kEdgesamBackends")):
         m = re.search(r"#define %s \"([^\"]+)\"" % var, src)
         for name in (m.group(1).split(",") if m else []):
@@ -339,13 +361,32 @@ class Registry:
                     for fl in art.get("files") or []:
                         p = GUEST_ASSETS_DIR / fl["name"]
                         if not p.exists():
-                            err(f"model {key}: guest asset {fl['name']} not in {GUEST_ASSETS_DIR.relative_to(REPO_ROOT)}")
+                            err(f"model {key}: guest asset {fl['name']} not in {rel(GUEST_ASSETS_DIR)}")
                         elif sha256_file(p) != fl["sha256"]:
                             err(f"model {key}: guest asset {fl['name']} sha256 differs from the catalog")
         # profile names must fit the supervisor's 31-character backend field
         for prof in list(compiled_supervisor()[1]) + list(parse_profiles_file(PROFILES_FILE)[1]):
             if len(prof) > 31:
                 err(f"supervisor profile name {prof} is longer than 31 characters")
+
+        # one serving policy, generated: the profiles file and the adapter's
+        # policy file match the registry; nothing sets residency or an idle
+        # window per model
+        # (generation assumes an otherwise consistent registry: checked last)
+        if not self.errors:
+            try:
+                if PROFILES_FILE.read_text() != self.generate_profiles_file():
+                    err(f"{rel(PROFILES_FILE)} is out of date: run scripts/cerebrate-models generate")
+            except (ValueError, KeyError, StopIteration, IndexError) as exc:
+                err(f"capacity: cannot generate the profiles file: {exc}")
+        if not POLICY_FILE.exists() or POLICY_FILE.read_text() != self.generate_policy_json():
+            err(f"{rel(POLICY_FILE)} is out of date: run scripts/cerebrate-models generate")
+        for folder in (MLSERVER_MODELS_DIR, HELD_MODELS_DIR):
+            for ms in sorted(folder.glob("*/model-settings.json")):
+                extra = (json.loads(ms.read_text()).get("parameters") or {}).get("extra") or {}
+                for k in extra:
+                    if k.endswith("_idle_stop_s") or k.endswith("_residency"):
+                        err(f"{rel(ms)}: {k} -- idle window and residency are system-wide (catalog serving_policy)")
 
         for inv in self.variants.get("investigations", []):
             problem = self._check_record(inv.get("record"))
@@ -437,7 +478,7 @@ class Registry:
             if other.exists():
                 problems.append(f"MLServer model {ml} also in {other.parent.parent.name}/ (a {v['status']} endpoint belongs only in {ms_path.parent.parent.name}/)")
             if not ms_path.exists():
-                problems.append(f"MLServer model {ml}: {ms_path.relative_to(REPO_ROOT)} not found")
+                problems.append(f"MLServer model {ml}: {rel(ms_path)} not found")
             else:
                 extra = (json.loads(ms_path.read_text()).get("parameters") or {}).get("extra") or {}
                 if extra.get("cerebrate_graph_worker") != s["slot"]:
@@ -449,6 +490,63 @@ class Registry:
                 if extra.get("cerebrate_graph_backend") != s["profile"]:
                     problems.append(f"MLServer model {ml} serves profile {extra.get('cerebrate_graph_backend')}, not {s['profile']}")
         return problems
+
+    # ---- generated serving configuration ---------------------------------
+    def served_configurations(self):
+        """(ref, variant) for every configuration the supervisor may start:
+        staged or production, selectable, with serving, not serving_blocked."""
+        return [(ref, v) for ref, v in sorted(self.variants.get("variants", {}).items())
+                if v.get("status") in SERVED and v.get("serving") and v.get("selectable", True)
+                and not v.get("serving_blocked")]
+
+    def generate_profiles_file(self, port_offset=0):
+        """cerebrate-supervisor's profiles file from the registry: the reserve
+        (serving_policy), the file slots and profiles of every served
+        configuration (compiled-in ones excluded), and every configuration's
+        capacity cost (resources.load_mb). Raises ValueError on missing data."""
+        policy = self.catalog["serving_policy"]
+        c_slots, c_profiles = compiled_supervisor()
+        slots, profiles, costs = {}, {}, {}
+        for ref, v in self.served_configurations():
+            model_key = ref.split("/", 1)[0]
+            m, s = self.models[model_key], v["serving"]
+            slot = s["slot"]
+            if slot not in c_slots:
+                port = m["worker"]["port"] + port_offset
+                if slots.setdefault(slot, (port, m["worker"]["binary"])) != (port, m["worker"]["binary"]):
+                    raise ValueError(f"slot {slot}: conflicting ports or binaries")
+            prof = s.get("profile")
+            if prof and prof not in c_profiles:
+                first = next(st for st in v["stages"] if st.get("artifact"))
+                declared = m["artifacts"][first["artifact"]]["files"][0]["name"]
+                profiles[prof] = (slot, declared, Path(s["worker_config"]).name)
+            key = prof or slot
+            load = (v.get("resources") or {}).get("load_mb")
+            if load is None:
+                raise ValueError(f"{ref}: resources.load_mb (capacity cost) not measured")
+            costs[key] = (load, ref)
+        port_of = {**{n: c["port"] + port_offset for n, c in c_slots.items()}, **{n: p for n, (p, _) in slots.items()}}
+        slot_of = {k: (profiles[k][0] if k in profiles else (c_profiles[k]["slot"] if k in c_profiles else k)) for k in costs}
+        out = ["# cerebrate-supervisor profiles file. GENERATED by `scripts/cerebrate-models generate`",
+               "# from models/catalog.yaml (serving_policy) and models/variants.yaml (serving,",
+               "# resources.load_mb): edit the registry and regenerate, never this file.",
+               "# Deployed as /data/local/tmp/cerebrate-profiles.conf and read once at",
+               "# supervisor startup; format and capacity rule: cerebrate-supervisor.cc.",
+               "", f"reserve_mb {policy['reserve_mb']}", ""]
+        for name, (port, binary) in sorted(slots.items(), key=lambda kv: kv[1][0]):
+            out.append(f"slot {name} {port} {binary}")
+        out.append("")
+        for name, (slot, declared, conf) in sorted(profiles.items(), key=lambda kv: (port_of[kv[1][0]], kv[0])):
+            out.append(f"profile {name} {slot} {declared} {conf}")
+        out.append("")
+        for key, (load, ref) in sorted(costs.items(), key=lambda kv: (port_of.get(slot_of[kv[0]], 0), kv[0])):
+            out.append(f"cost {key} {load}  # {ref}")
+        return "\n".join(out) + "\n"
+
+    def generate_policy_json(self):
+        p = self.catalog["serving_policy"]
+        return json.dumps({"_generated_by": "scripts/cerebrate-models generate, from models/catalog.yaml serving_policy",
+                           "idle_stop_s": p["idle_stop_s"], "capacity_wait_s": p["capacity_wait_s"]}, indent=2) + "\n"
 
     # ---- artifact store (overmind-01, models/README.md) -------------------
     def store_path(self, model, akey, f, root=STORE_ROOT):

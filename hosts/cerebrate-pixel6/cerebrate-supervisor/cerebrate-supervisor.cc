@@ -57,19 +57,31 @@
 // The model registry (2026-10-25) added an optional, deployment-owned
 // profiles file, STAGING_DIR/cerebrate-profiles.conf, read once at startup:
 //   slot <name> <port> <binary file> [ready_timeout_ms]
-//   profile <name> <slot> <declared model file> <config file> [min_free_mb]
+//   profile <name> <slot> <declared model file> <config file>
 // File names are flat files in STAGING_DIR, like every compiled-in path; a
 // file slot runs cerebrate-hetero profiles exactly like hetero1/hetero2, and
-// may not reuse a compiled-in name or port. min_free_mb is an admission
-// check: START refuses while MemAvailable is below it (the phone's
-// low-memory killer takes the Debian VM before our workers). Without the
-// file nothing changes. LIST answers with up to 8 KB (more slots).
+// may not reuse a compiled-in name or port. LIST answers with up to 8 KB.
+//
+// Capacity (2026-10-25): one rule for every START, whatever the worker. The
+// profiles file (generated from the model registry, models/) carries the
+// system reserve and each profile's or worker's measured cost:
+//   reserve_mb <mb>
+//   cost <profile or worker> <mb>
+// A worker starts only if MemAvailable - committed - cost >= reserve, where
+// "committed" is, over running workers, the part of each one's cost it isn't
+// using yet (cost - RSS of the worker and its children, if positive): a
+// cerebrate-gguf worker allocates per request in a child process, so its
+// budget stays reserved while it runs. A START without a recorded cost is
+// refused (fail closed). Refusals start with "ERROR: capacity:", so the
+// MLServer adapter can make room (stop an idle worker) and retry. CAPACITY
+// reports the numbers. Without a reserve_mb line nothing is checked.
 //
 // Deliberately NOT built: arbitrary command execution, arbitrary binary
 // paths, arbitrary ports, orphan-worker adoption after a supervisor
 // restart, or automatic respawn-on-crash (see cerebrate-supervisor's
 // README for what Stage 3 found and why auto-restart is deferred).
 #include <arpa/inet.h>
+#include <dirent.h>
 #include <errno.h>
 #include <fcntl.h>
 #include <netinet/in.h>
@@ -91,6 +103,9 @@
 #ifndef CONTROL_PORT
 #define CONTROL_PORT 8767  // overridable at build time for a side-by-side test instance
 #endif
+#ifndef PORT_OFFSET
+#define PORT_OFFSET 0      // test builds shift every compiled-in worker port (production's are in use)
+#endif
 
 enum WorkerState { STOPPED, RUNNING, EXITED };
 
@@ -105,17 +120,16 @@ struct HeteroProfile {
   const char* model;
   const char* argv[10];  // NULL-terminated
   const char* slot;      // NULL for compiled-in profiles (their slot lists them)
-  int min_free_mb;       // 0 = no admission check
 };
 static const HeteroProfile kHeteroProfiles[] = {
   // YOLOE-v8s prompt-free: fast = TPU backbone + GPU fp16acc32 head (GPU mixed
   // fallback); default = GPU fp32.
-  {"yoloe-v8s-fast", STAGING_DIR "/yoloe-v8s-pf-backbone-tpu-fp32.tflite", {"--config", STAGING_DIR "/yoloe-v8s-fast.conf", NULL}, NULL, 0},
-  {"yoloe-v8s-default", STAGING_DIR "/yoloe-v8s-pf-gpu-nhwc.tflite", {"--config", STAGING_DIR "/yoloe-v8s-default.conf", NULL}, NULL, 0},
+  {"yoloe-v8s-fast", STAGING_DIR "/yoloe-v8s-pf-backbone-tpu-fp32.tflite", {"--config", STAGING_DIR "/yoloe-v8s-fast.conf", NULL}, NULL},
+  {"yoloe-v8s-default", STAGING_DIR "/yoloe-v8s-pf-gpu-nhwc.tflite", {"--config", STAGING_DIR "/yoloe-v8s-default.conf", NULL}, NULL},
   // EdgeSAM-3x box refinement: fast = TPU trunk + GPU fp32 neck + GPU fp32 box
   // decoder (exact GPU fp32 encoder as fallback); default = GPU fp32.
-  {"edgesam3x-fast", STAGING_DIR "/edgesam3x-enc-tpu-fp32.tflite", {"--config", STAGING_DIR "/edgesam3x-fast.conf", NULL}, NULL, 0},
-  {"edgesam3x-default", STAGING_DIR "/edgesam3x-enc-gpu.tflite", {"--config", STAGING_DIR "/edgesam3x-default.conf", NULL}, NULL, 0},
+  {"edgesam3x-fast", STAGING_DIR "/edgesam3x-enc-tpu-fp32.tflite", {"--config", STAGING_DIR "/edgesam3x-fast.conf", NULL}, NULL},
+  {"edgesam3x-default", STAGING_DIR "/edgesam3x-enc-gpu.tflite", {"--config", STAGING_DIR "/edgesam3x-default.conf", NULL}, NULL},
 };
 static const int kNumHeteroProfiles = sizeof(kHeteroProfiles) / sizeof(kHeteroProfiles[0]);
 #define kHeteroBackends "yoloe-v8s-fast,yoloe-v8s-default"
@@ -145,15 +159,15 @@ struct WorkerSlot {
 
 #define kMaxSlots 24
 static WorkerSlot g_slots[kMaxSlots] = {
-  {"infer", STAGING_DIR "/cerebrate-infer", 8765, 0, 0, NULL, 15000, STOPPED, 0, "", "", "", 0, 0, NULL},
-  {"generate", STAGING_DIR "/cerebrate-generate", 8766, 1, 0, "cpu,gpu", 15000, STOPPED, 0, "", "", "", 0, 0, NULL},
-  {"gguf", STAGING_DIR "/cerebrate-gguf", 8768, 0, 1, NULL, 15000, STOPPED, 0, "", "", "", 0, 0, NULL},
-  {"graph1", STAGING_DIR "/cerebrate-graph", 8769, 1, 0, kGraphBackends, 120000, STOPPED, 0, "", "", "", 0, 0, NULL},
-  {"graph2", STAGING_DIR "/cerebrate-graph", 8770, 1, 0, kGraphBackends, 120000, STOPPED, 0, "", "", "", 0, 0, NULL},
-  {"graph3", STAGING_DIR "/cerebrate-graph", 8771, 1, 0, kGraphBackends, 120000, STOPPED, 0, "", "", "", 0, 0, NULL},
-  {"hetero1", STAGING_DIR "/cerebrate-hetero", 8772, 1, 0, kHeteroBackends, 120000, STOPPED, 0, "", "", "", 0,
+  {"infer", STAGING_DIR "/cerebrate-infer", 8765 + PORT_OFFSET, 0, 0, NULL, 15000, STOPPED, 0, "", "", "", 0, 0, NULL},
+  {"generate", STAGING_DIR "/cerebrate-generate", 8766 + PORT_OFFSET, 1, 0, "cpu,gpu", 15000, STOPPED, 0, "", "", "", 0, 0, NULL},
+  {"gguf", STAGING_DIR "/cerebrate-gguf", 8768 + PORT_OFFSET, 0, 1, NULL, 15000, STOPPED, 0, "", "", "", 0, 0, NULL},
+  {"graph1", STAGING_DIR "/cerebrate-graph", 8769 + PORT_OFFSET, 1, 0, kGraphBackends, 120000, STOPPED, 0, "", "", "", 0, 0, NULL},
+  {"graph2", STAGING_DIR "/cerebrate-graph", 8770 + PORT_OFFSET, 1, 0, kGraphBackends, 120000, STOPPED, 0, "", "", "", 0, 0, NULL},
+  {"graph3", STAGING_DIR "/cerebrate-graph", 8771 + PORT_OFFSET, 1, 0, kGraphBackends, 120000, STOPPED, 0, "", "", "", 0, 0, NULL},
+  {"hetero1", STAGING_DIR "/cerebrate-hetero", 8772 + PORT_OFFSET, 1, 0, kHeteroBackends, 120000, STOPPED, 0, "", "", "", 0,
    1, STAGING_DIR "/litert-2.3.0:" STAGING_DIR},
-  {"hetero2", STAGING_DIR "/cerebrate-hetero", 8773, 1, 0, kEdgesamBackends, 120000, STOPPED, 0, "", "", "", 0,
+  {"hetero2", STAGING_DIR "/cerebrate-hetero", 8773 + PORT_OFFSET, 1, 0, kEdgesamBackends, 120000, STOPPED, 0, "", "", "", 0,
    1, STAGING_DIR "/litert-2.3.0:" STAGING_DIR},
 };
 
@@ -169,6 +183,19 @@ static void count_compiled_slots(void) {
 #define kMaxFileProfiles 48
 static HeteroProfile g_file_profiles[kMaxFileProfiles];
 static int g_num_file_profiles = 0;
+
+// Capacity (profiles file): the reserve and each profile's or worker's cost.
+#define kMaxCosts 64
+static int g_reserve_mb = -1;  // -1: no reserve_mb line, no capacity check
+static char* g_cost_key[kMaxCosts];
+static int g_cost_mb[kMaxCosts];
+static int g_num_costs = 0;
+
+static int cost_of(const char* key) {  // -1 if not recorded
+  for (int i = 0; i < g_num_costs; i++)
+    if (strcmp(g_cost_key[i], key) == 0) return g_cost_mb[i];
+  return -1;
+}
 
 static const HeteroProfile* find_profile(const char* name) {
   for (int i = 0; i < kNumHeteroProfiles; i++)
@@ -199,6 +226,60 @@ static long mem_available_mb(void) {
     if (sscanf(line, "MemAvailable: %ld kB", &kb) == 1) break;
   fclose(f);
   return kb < 0 ? -1 : kb / 1024;
+}
+
+static int find_slot_name(const char* name) {
+  for (int i = 0; i < kNumSlots; i++) if (strcmp(g_slots[i].name, name) == 0) return 1;
+  return 0;
+}
+
+// RSS in MB of a process and all its descendants (cerebrate-gguf runs each
+// request in a child); 0 if unreadable.
+static long tree_rss_mb(pid_t root) {
+  static pid_t pids[4096], ppids[4096];
+  static long rss_pages[4096];
+  static char in_tree[4096];
+  int n = 0;
+  DIR* d = opendir("/proc");
+  if (!d) return 0;
+  struct dirent* e;
+  while ((e = readdir(d)) != NULL && n < 4096) {
+    if (e->d_name[0] < '0' || e->d_name[0] > '9') continue;
+    char path[64], buf[1024];
+    snprintf(path, sizeof(path), "/proc/%s/stat", e->d_name);
+    FILE* f = fopen(path, "r");
+    if (!f) continue;
+    size_t len = fread(buf, 1, sizeof(buf) - 1, f);
+    fclose(f);
+    buf[len] = '\0';
+    char* rp = strrchr(buf, ')');  // comm may contain spaces
+    if (!rp) continue;
+    char state;
+    int ppid;
+    long rss = 0;
+    // after "comm)": state ppid pgrp session tty_nr tpgid flags minflt cminflt
+    // majflt cmajflt utime stime cutime cstime priority nice num_threads
+    // itrealvalue starttime vsize rss
+    if (sscanf(rp + 2, "%c %d %*d %*d %*d %*d %*u %*u %*u %*u %*u %*u %*u %*d %*d %*d %*d %*d %*d %*u %*u %ld",
+               &state, &ppid, &rss) != 3) continue;
+    pids[n] = (pid_t)atoi(e->d_name);
+    ppids[n] = ppid;
+    rss_pages[n] = rss;
+    n++;
+  }
+  closedir(d);
+  for (int i = 0; i < n; i++) in_tree[i] = pids[i] == root;
+  for (int changed = 1; changed;) {  // add children of members until nothing changes
+    changed = 0;
+    for (int i = 0; i < n; i++) {
+      if (in_tree[i]) continue;
+      for (int j = 0; j < n; j++)
+        if (in_tree[j] && pids[j] == ppids[i]) { in_tree[i] = 1; changed = 1; break; }
+    }
+  }
+  long pages = 0;
+  for (int i = 0; i < n; i++) if (in_tree[i]) pages += rss_pages[i];
+  return pages * (sysconf(_SC_PAGESIZE) / 1024) / 1024;
 }
 
 // Reads the optional profiles file. Returns 0 (also when the file is
@@ -233,7 +314,15 @@ static int load_profiles_file(void) {
       s->state = STOPPED;
       s->is_hetero = 1;
       s->ld_library_path = STAGING_DIR "/litert-2.3.0:" STAGING_DIR;
-    } else if (strcmp(kind, "profile") == 0 && (n == 5 || n == 6)) {
+    } else if (strcmp(kind, "reserve_mb") == 0 && n == 2) {
+      g_reserve_mb = atoi(a[0]);
+      if (g_reserve_mb <= 0) { fprintf(stderr, "FATAL: profiles file line %d: bad reserve_mb\n", lineno); fclose(f); return 1; }
+    } else if (strcmp(kind, "cost") == 0 && n == 3) {
+      int mb = atoi(a[1]);
+      if (g_num_costs >= kMaxCosts || mb <= 0 || cost_of(a[0]) >= 0) { fprintf(stderr, "FATAL: profiles file line %d: bad or duplicate cost\n", lineno); fclose(f); return 1; }
+      g_cost_key[g_num_costs] = strdup(a[0]);
+      g_cost_mb[g_num_costs++] = mb;
+    } else if (strcmp(kind, "profile") == 0 && n == 5) {
       if (g_num_file_profiles >= kMaxFileProfiles || find_profile(a[0]) || !flat_name_ok(a[2]) || !flat_name_ok(a[3])) { fprintf(stderr, "FATAL: profiles file line %d: bad or duplicate profile\n", lineno); fclose(f); return 1; }
       int slot_ok = 0;
       for (int i = g_num_compiled_slots; i < kNumSlots; i++) if (strcmp(g_slots[i].name, a[1]) == 0) slot_ok = 1;
@@ -246,14 +335,18 @@ static int load_profiles_file(void) {
       p->argv[0] = "--config";
       p->argv[1] = staged_path(a[3]);
       p->argv[2] = NULL;
-      p->min_free_mb = n == 6 ? atoi(a[4]) : 0;
     } else {
-      fprintf(stderr, "FATAL: profiles file line %d: expected 'slot <name> <port> <binary> [ready_ms]' or 'profile <name> <slot> <model> <config> [min_free_mb]'\n", lineno);
+      fprintf(stderr, "FATAL: profiles file line %d: expected 'slot <name> <port> <binary> [ready_ms]', 'profile <name> <slot> <model> <config>', 'reserve_mb <mb>' or 'cost <profile or worker> <mb>'\n", lineno);
       fclose(f);
       return 1;
     }
   }
   fclose(f);
+  for (int i = 0; i < g_num_costs; i++)
+    if (!find_profile(g_cost_key[i]) && !find_slot_name(g_cost_key[i])) {
+      fprintf(stderr, "FATAL: profiles file: cost for unknown profile or worker %s\n", g_cost_key[i]);
+      return 1;
+    }
   return 0;
 }
 
@@ -354,6 +447,38 @@ static void wait_for_ready(WorkerSlot* s, char* out, size_t out_len) {
            s->pid, s->fixed_port, kTotalMs);
 }
 
+// The cost key of a running slot: its profile (hetero slots) or its name.
+static const char* running_key(const WorkerSlot* s) {
+  return s->is_hetero ? s->backend : s->name;
+}
+
+// Over running workers: the part of each one's cost it isn't using yet.
+static long committed_mb(void) {
+  reap_all();
+  long total = 0;
+  for (int i = 0; i < kNumSlots; i++) {
+    WorkerSlot* s = &g_slots[i];
+    if (s->state != RUNNING) continue;
+    int cost = cost_of(running_key(s));
+    if (cost <= 0) continue;
+    long unused = cost - tree_rss_mb(s->pid);
+    if (unused > 0) total += unused;
+  }
+  return total;
+}
+
+static void capacity_report(char* out, size_t out_len) {
+  reap_all();
+  snprintf(out, out_len, "OK reserve_mb=%d available_mb=%ld committed_mb=%ld\n", g_reserve_mb, mem_available_mb(), committed_mb());
+  for (int i = 0; i < kNumSlots; i++) {
+    WorkerSlot* s = &g_slots[i];
+    if (s->state != RUNNING) continue;
+    char line[160];
+    snprintf(line, sizeof(line), "%s %s cost_mb=%d rss_mb=%ld\n", s->name, running_key(s), cost_of(running_key(s)), tree_rss_mb(s->pid));
+    strncat(out, line, out_len - strlen(out) - 1);
+  }
+}
+
 static void start_worker(const char* worker, const char* model, const char* backend,
                           const char* mmproj, char* out, size_t out_len) {
   WorkerSlot* s = find_slot(worker);
@@ -432,12 +557,19 @@ static void start_worker(const char* worker, const char* model, const char* back
     return;
   }
 
-  // Admission: a profile with a free-memory floor doesn't start below it.
-  if (profile && profile->min_free_mb > 0) {
+  // Capacity: one rule for every worker (see the header comment).
+  if (g_reserve_mb > 0) {
+    const char* key = profile ? profile->name : s->name;
+    int cost = cost_of(key);
+    if (cost < 0) {
+      snprintf(out, out_len, "ERROR: capacity: no recorded cost for %s (cerebrate-profiles.conf); not starting it\n", key);
+      return;
+    }
     long avail = mem_available_mb();
-    if (avail >= 0 && avail < profile->min_free_mb) {
-      snprintf(out, out_len, "ERROR: profile %s needs %d MB free, the device has %ld MB; stop another worker first\n",
-               profile->name, profile->min_free_mb, avail);
+    long committed = committed_mb();
+    if (avail >= 0 && avail - committed - cost < g_reserve_mb) {
+      snprintf(out, out_len, "ERROR: capacity: %s needs %d MB; %ld MB free, %ld MB committed to running workers, reserve %d MB\n",
+               key, cost, avail, committed, g_reserve_mb);
       return;
     }
   }
@@ -591,6 +723,8 @@ static void handle_command(const char* cmd, const char* worker, const char* mode
     WorkerSlot* s = find_slot(worker);
     if (!s) { snprintf(out, out_len, "ERROR: unknown worker %s\n", worker); return; }
     status_line(s, out, out_len);
+  } else if (strcmp(cmd, "CAPACITY") == 0) {
+    capacity_report(out, out_len);
   } else if (strcmp(cmd, "LIST") == 0) {
     out[0] = '\0';
     for (int i = 0; i < kNumSlots; i++) {
@@ -672,7 +806,8 @@ int main(int argc, char** argv) {
     if (i > 0) strncat(worker_names, ",", sizeof(worker_names) - strlen(worker_names) - 1);
     strncat(worker_names, g_slots[i].name, sizeof(worker_names) - strlen(worker_names) - 1);
   }
-  fprintf(stderr, "READY cerebrate-supervisor port=%d workers=%s file_profiles=%d\n", CONTROL_PORT, worker_names, g_num_file_profiles);
+  fprintf(stderr, "READY cerebrate-supervisor port=%d workers=%s file_profiles=%d reserve_mb=%d costs=%d\n", CONTROL_PORT, worker_names,
+          g_num_file_profiles, g_reserve_mb, g_num_costs);
 
   while (1) {
     int client = accept(srv, NULL, NULL);

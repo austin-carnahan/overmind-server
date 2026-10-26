@@ -1,133 +1,57 @@
-"""Generic MLServer custom runtime for cerebrate-graph (Segmentation and
-Labeling Lane, Step 1).
+"""Generic MLServer custom runtime for cerebrate-graph and cerebrate-hetero
+workers (Segmentation and Labeling Lane).
 
-A pure tensor passthrough: each V2 request input becomes one named tensor
-for the worker, and each worker output becomes one V2 response output, with
-the same names, shapes, and dtypes. Model-specific preprocessing (image
-decode, resize, normalization) and postprocessing (boxes, masks, labels)
-deliberately live outside this adapter, so one adapter serves every ONNX
-model the worker can load.
+A tensor passthrough by default: each V2 request input becomes one named
+tensor for the worker, and each worker output becomes one V2 response output,
+with the same names, shapes, and dtypes. Models that take photos add a hook
+(cerebrate_graph_photo.py, model_hooks.py) for pre- and postprocessing.
 
-Which model, slot, and execution provider come from model-settings.json's
+Which model, slot, and backend come from model-settings.json's
 parameters.extra:
-  cerebrate_graph_worker      supervisor slot: graph1 | graph2 | graph3
-  cerebrate_graph_port        that slot's fixed port (8769 | 8770 | 8771)
+  cerebrate_graph_worker      supervisor slot (graph1-3, hetero1-2, gpu-*)
+  cerebrate_graph_port        that slot's fixed port
   cerebrate_graph_model_path  flat file in /data/local/tmp on the Android host
-  cerebrate_graph_backend     cpu | nnapi | nnapi16 | xnnpack | webgpu
+  cerebrate_graph_backend     cerebrate-graph: cpu | nnapi | ...; cerebrate-hetero:
+                              the supervisor profile name (e.g. yoloe-v8s-fast)
   cerebrate_graph_host        optional; default is the AVF gateway
   cerebrate_graph_request_timeout_s  optional; default 120
-  cerebrate_graph_residency   optional; pinned (default) | on_demand
-  cerebrate_graph_idle_stop_s optional, on_demand only; default 600
   cerebrate_graph_photo       optional; a hook name from cerebrate_graph_photo.HOOKS
                               (yoloe | sam | depth | migan | dinov2 | sam2 |
                               rfdetr | esam3 | owlv2): accept the encoded photo
                               ("photo", BYTES), preprocess it here and return
-                              final results as JSON (cerebrate_graph_photo.py,
-                              model_hooks.py); needs OpenCV
-  cerebrate_graph_supervisor_port  optional; default 8767 (a side-by-side test
-                              supervisor listens elsewhere)
+                              final results as JSON; needs OpenCV
+  cerebrate_graph_supervisor_port  optional; default from cerebrate_lifecycle
+                              (8767, or CEREBRATE_SUPERVISOR_PORT for a test stack)
 
 A hook either maps one request to one worker call (prepare/finish) or, for
-pipelines with a host step between graphs, drives several calls itself
-(an async run(inputs, params, call) method).
+pipelines with a host step between graphs, drives several calls itself (an
+async run(inputs, params, call) method).
 
-Residency (catalog v4 Section 9). pinned: START at load, STOP at unload --
-the worker runs for as long as the MLServer model is loaded. on_demand:
-load only validates the settings (the model reports ready without a
-worker); the first request STARTs the worker (paying its load and any
-accelerator compile), and it is STOPped again after idle_stop_s without
-requests. Starts and idle stops take the same refcount as pinned loads, so
-a rolling reload still never STOPs a worker another instance is using.
-An on_demand model stays ready (= able to start its worker on request):
-MLServer refuses requests to a model that isn't ready before predict()
-runs, so marking it unready after a failure would block the very request
-that restarts it. A lost worker releases the slot and the request is
-retried once on a freshly started worker; a failed start is a failed
-request (and a log line), and the next request starts afresh.
-
-The slot may also be cerebrate-hetero's (hetero1, port 8772); its
-"backend" is then one of the supervisor's fixed profile names (e.g.
-yoloe-v8s-fast) and model_path that profile's declared model. The worker
-speaks the same protocol and DESCRIBEs the same two fields.
-
-Lifecycle, refcounting, gateway discovery, and readiness handling follow
-cerebrate_infer_runtime.py (duplicated, not shared, per that module's own
-precedent); see its comments for the reasoning behind each.
+Starting, stopping, idle stops, making room and the lost-worker retry are the
+shared lifecycle's (cerebrate_lifecycle.py), the same for every Pixel model;
+this module keeps the request handling and checks, by DESCRIBE after each
+start, that the worker serves this model with this backend.
 """
 import asyncio
-import fcntl
 import os
-import socket
-import subprocess
 import sys
-import time
 
 from mlserver import MLModel
 from mlserver.codecs import NumpyCodec
 from mlserver.errors import MLServerError
 from mlserver.types import InferenceRequest, InferenceResponse, Parameters, ResponseOutput
 
-import cerebrate_graph_protocol as protocol
+# The shared modules live beside this module's real file (model folders
+# symlink this one).
+_HERE = os.path.dirname(os.path.realpath(__file__))
+if _HERE not in sys.path:
+    sys.path.insert(0, _HERE)
 
-DEFAULT_HOST = "10.70.217.78"
+import cerebrate_graph_protocol as protocol  # noqa: E402
+import cerebrate_lifecycle as lifecycle  # noqa: E402
+
 CONNECT_TIMEOUT_S = 5.0
 DEFAULT_REQUEST_TIMEOUT_S = 120.0
-DEFAULT_IDLE_STOP_S = 600.0
-
-SUPERVISOR_PORT = 8767
-SUPERVISOR_CONNECT_TIMEOUT_S = 5.0
-# Covers cerebrate-supervisor's up-to-120s readiness wait for graph slots
-# (large models and NNAPI compilation load slowly).
-SUPERVISOR_COMMAND_TIMEOUT_S = 150.0
-
-# One refcount file per slot: two MLServer models must never share a slot,
-# but each slot needs the rolling-reload protection cerebrate-infer's does.
-REFCOUNT_PATH_TEMPLATE = "/tmp/cerebrate-graph-{worker}.refcount"
-
-
-def _adjust_refcount(path: str, delta: int) -> int:
-    my_pid = os.getpid()
-    with open(path, "a+") as f:
-        fcntl.flock(f, fcntl.LOCK_EX)
-        f.seek(0)
-        owner_pid, _, count_str = f.read().strip().partition(":")
-        count = int(count_str) if owner_pid == str(my_pid) and count_str else 0
-        count = max(0, count + delta)
-        f.seek(0)
-        f.truncate()
-        f.write(f"{my_pid}:{count}")
-        fcntl.flock(f, fcntl.LOCK_UN)
-    return count
-
-
-def _discover_avf_gateway() -> str:
-    try:
-        out = subprocess.check_output(
-            ["ip", "route", "show", "default"], text=True, timeout=2
-        )
-        for line in out.splitlines():
-            parts = line.split()
-            if "via" in parts:
-                return parts[parts.index("via") + 1]
-    except (subprocess.SubprocessError, OSError, ValueError):
-        pass
-    return DEFAULT_HOST
-
-
-def _supervisor_request(host: str, command: str, fields: dict, port: int = SUPERVISOR_PORT) -> str:
-    lines = [command] + [f"{k}: {v}" for k, v in fields.items()]
-    message = ("\n".join(lines) + "\n\n").encode("utf-8")
-    with socket.create_connection((host, port), timeout=SUPERVISOR_CONNECT_TIMEOUT_S) as sock:
-        sock.settimeout(SUPERVISOR_COMMAND_TIMEOUT_S)
-        sock.sendall(message)
-        sock.shutdown(socket.SHUT_WR)
-        chunks = []
-        while True:
-            chunk = sock.recv(4096)
-            if not chunk:
-                break
-            chunks.append(chunk)
-    return b"".join(chunks).decode("utf-8", "replace")
 
 
 class CerebrateGraphRuntime(MLModel):
@@ -135,36 +59,25 @@ class CerebrateGraphRuntime(MLModel):
         extra = {}
         if self.settings.parameters is not None:
             extra = self.settings.parameters.extra or {}
-        self._worker = extra.get("cerebrate_graph_worker")
+        self._worker_slot = extra.get("cerebrate_graph_worker")
         self._model_path = extra.get("cerebrate_graph_model_path")
         self._backend = extra.get("cerebrate_graph_backend", "cpu")
-        if not self._worker or not self._model_path or "cerebrate_graph_port" not in extra:
+        if not self._worker_slot or not self._model_path or "cerebrate_graph_port" not in extra:
             print(
                 f"cerebrate-graph ({self.name}): model-settings.json extra needs "
                 "cerebrate_graph_worker, cerebrate_graph_port and cerebrate_graph_model_path"
             )
             self.ready = False
             return self.ready
-        self._host = extra.get("cerebrate_graph_host") or _discover_avf_gateway()
+        self._host = extra.get("cerebrate_graph_host") or lifecycle.discover_gateway()
         self._port = int(extra["cerebrate_graph_port"])
         self._request_timeout = float(
             extra.get("cerebrate_graph_request_timeout_s", DEFAULT_REQUEST_TIMEOUT_S)
         )
-        self._residency = extra.get("cerebrate_graph_residency", "pinned")
-        if self._residency not in ("pinned", "on_demand"):
-            print(f"cerebrate-graph ({self.name}): unknown cerebrate_graph_residency {self._residency!r}")
-            self.ready = False
-            return self.ready
-        self._idle_stop_s = float(extra.get("cerebrate_graph_idle_stop_s", DEFAULT_IDLE_STOP_S))
-        self._supervisor_port = int(extra.get("cerebrate_graph_supervisor_port", SUPERVISOR_PORT))
         self._hooks = None
         photo = extra.get("cerebrate_graph_photo")
         if photo:
-            # Imported only for models that take photos (it needs OpenCV); it
-            # lives beside this module's real file (model folders symlink it).
-            here = os.path.dirname(os.path.realpath(__file__))
-            if here not in sys.path:
-                sys.path.insert(0, here)
+            # Imported only for models that take photos (it needs OpenCV).
             try:
                 import cerebrate_graph_photo
                 self._hooks = cerebrate_graph_photo.HOOKS[photo]()
@@ -172,119 +85,34 @@ class CerebrateGraphRuntime(MLModel):
                 print(f"cerebrate-graph ({self.name}): cerebrate_graph_photo {photo!r} unavailable: {exc}")
                 self.ready = False
                 return self.ready
-        self._refcount_path = REFCOUNT_PATH_TEMPLATE.format(worker=self._worker)
         self._lock = asyncio.Lock()
-        self._start_lock = asyncio.Lock()
         self._reader = None
         self._writer = None
-        self._counted = False
-        self._last_used = time.monotonic()
-        self._idle_task = None
-
-        if self._residency == "on_demand":
-            self._idle_task = asyncio.create_task(self._idle_stopper())
-            print(
-                f"cerebrate-graph ({self.name}): on demand on {self._worker} "
-                f"(backend={self._backend}, idle stop after {self._idle_stop_s:.0f}s)"
-            )
-            self.ready = True
-            return self.ready
-        self.ready = await self._start_worker()
+        supervisor_port = extra.get("cerebrate_graph_supervisor_port")
+        self._worker = lifecycle.Worker(
+            self.name,
+            {"worker": self._worker_slot, "model": self._model_path, "backend": self._backend},
+            host=self._host, supervisor_port=int(supervisor_port) if supervisor_port else None,
+            verify=self._verify, drop=self._drop_connection,
+        )
+        self._worker.activate()
+        self.ready = True
         return self.ready
 
-    async def _start_worker(self) -> bool:
-        """START the slot and confirm by DESCRIBE that it serves this model
-        with this backend. True when ready."""
-        fields = {"worker": self._worker, "model": self._model_path, "backend": self._backend}
-        try:
-            response = await asyncio.to_thread(_supervisor_request, self._host, "START", fields, self._supervisor_port)
-        except OSError as exc:
-            self._start_error = f"cerebrate-supervisor unreachable: {exc}"
-            print(f"cerebrate-graph ({self.name}): {self._start_error}")
-            return False
-        if not response.startswith("OK"):
-            self._start_error = f"supervisor refused START: {response.strip()}"
-            print(f"cerebrate-graph ({self.name}): {self._start_error}")
-            return False
-        await asyncio.to_thread(_adjust_refcount, self._refcount_path, 1)
-        self._counted = True
-
-        # Confirm the process on this port is serving *this* model with
-        # *this* backend, not something left over on the slot.
-        try:
-            description, _ = await self._call({})
-        except (ConnectionError, protocol.WorkerError, ValueError) as exc:
-            print(f"cerebrate-graph ({self.name}): DESCRIBE failed: {exc}")
-            return False
+    async def _verify(self) -> None:
+        """After START: the process on this port serves *this* model with
+        *this* backend, not something left over on the slot."""
+        description, _ = await self._call({})
         if description.get("model") != self._model_path or description.get("backend") != self._backend:
-            print(
-                f"cerebrate-graph ({self.name}): worker on port {self._port} serves "
-                f"{description.get('model')} ({description.get('backend')}), expected "
-                f"{self._model_path} ({self._backend})"
+            raise ValueError(
+                f"worker on port {self._port} serves {description.get('model')} "
+                f"({description.get('backend')}), expected {self._model_path} ({self._backend})"
             )
-            return False
-        print(
-            f"cerebrate-graph ({self.name}): ready on {self._worker} "
-            f"(backend={self._backend}, load_us={description.get('load_us')})"
-        )
-        return True
-
-    async def _stop_worker(self) -> bool:
-        """Drop this instance's hold on the slot; STOP it if no other
-        instance holds it."""
-        await self._drop_connection()
-        if not getattr(self, "_counted", False):
-            return True
-        remaining = await asyncio.to_thread(_adjust_refcount, self._refcount_path, -1)
-        self._counted = False
-        if remaining > 0:
-            return True
-        try:
-            response = await asyncio.to_thread(
-                _supervisor_request, self._host, "STOP", {"worker": self._worker}, self._supervisor_port
-            )
-        except OSError as exc:
-            print(f"cerebrate-graph ({self.name}): failed to STOP {self._worker}: {exc}")
-            return False
-        if not response.startswith("OK"):
-            print(f"cerebrate-graph ({self.name}): supervisor STOP did not confirm: {response.strip()}")
-            return False
-        return True
-
-    async def _idle_stopper(self) -> None:
-        """on_demand: STOP the worker once no request has arrived for
-        idle_stop_s. Rechecks under both locks, so a request that arrived
-        meanwhile keeps it (or restarts it right after)."""
-        while True:
-            await asyncio.sleep(min(30.0, self._idle_stop_s / 2))
-            if not self._counted or time.monotonic() - self._last_used < self._idle_stop_s:
-                continue
-            async with self._start_lock:
-                async with self._lock:
-                    if not self._counted or time.monotonic() - self._last_used < self._idle_stop_s:
-                        continue
-                    if await self._stop_worker():
-                        print(f"cerebrate-graph ({self.name}): stopped {self._worker} after "
-                              f"{self._idle_stop_s:.0f}s idle")
-
-    async def _ensure_started(self) -> None:
-        self._last_used = time.monotonic()
-        if self._residency != "on_demand":
-            return
-        async with self._start_lock:
-            if self._counted:
-                return
-            self._start_error = "worker did not become ready (see the MLServer log)"
-            if not await self._start_worker():
-                await self._stop_worker()
-                self.ready = True
-                raise MLServerError(f"cerebrate-graph ({self.name}): could not start {self._worker} on demand: {self._start_error}")
+        print(f"cerebrate-graph ({self.name}): ready on {self._worker_slot} "
+              f"(backend={self._backend}, load_us={description.get('load_us')})")
 
     async def unload(self) -> bool:
-        if getattr(self, "_idle_task", None) is not None:
-            self._idle_task.cancel()
-            self._idle_task = None
-        stopped = await self._stop_worker()
+        stopped = await self._worker.deactivate() if getattr(self, "_worker", None) else True
         if stopped:
             self.ready = False
         return stopped
@@ -316,42 +144,34 @@ class CerebrateGraphRuntime(MLModel):
                 except (ConnectionError, OSError, asyncio.TimeoutError, asyncio.IncompleteReadError) as exc:
                     last_error = exc
                     await self._drop_connection()
-            self.ready = False
             raise ConnectionError(
                 f"cerebrate-graph at {self._host}:{self._port} unreachable"
             ) from last_error
 
     async def _call_worker(self, inputs: dict):
-        """One worker call with on-demand start and failure handling. on_demand:
-        a lost worker (killed, or orphaned and cleared after a supervisor
-        restart) releases the slot and the call is retried once against a
-        freshly started worker -- inference is stateless, so a retry can't
-        double-apply anything. A second loss fails the request."""
-        for attempt in (1, 2):
-            await self._ensure_started()
-            try:
-                return await self._call(inputs)
-            except protocol.WorkerError as exc:
-                raise MLServerError(f"cerebrate-graph rejected the request: {exc}") from exc
-            except ConnectionError:
-                if self._residency != "on_demand":
-                    raise
-                async with self._start_lock:
-                    await self._stop_worker()
-                self.ready = True
-                if attempt == 2:
-                    raise
-                print(f"cerebrate-graph ({self.name}): worker on {self._worker} lost; restarting it for this request")
-            except TypeError as exc:
-                raise MLServerError(str(exc)) from exc
+        """One worker call through the shared lifecycle (started on demand,
+        room made if needed, one retry on a lost worker)."""
+        try:
+            return await self._worker.run(lambda: self._call(inputs))
+        except lifecycle.WorkerUnavailable as exc:
+            raise MLServerError(f"cerebrate-graph ({self.name}): could not start {self._worker_slot}: {exc}") from exc
+        except protocol.WorkerError as exc:
+            raise MLServerError(f"cerebrate-graph rejected the request: {exc}") from exc
+        except TypeError as exc:
+            raise MLServerError(str(exc)) from exc
 
     async def predict(self, payload: InferenceRequest) -> InferenceResponse:
         if not payload.inputs:
             raise MLServerError("no inputs provided")
         if self._hooks is not None and hasattr(self._hooks, "run"):
-            # A multi-call hook (host step between graphs) drives the worker itself.
+            # A multi-call hook (host step between graphs) drives the worker
+            # itself; held for the whole request, so it isn't stopped between
+            # calls (a cached image must survive until the last one).
             try:
-                outputs, done = await self._hooks.run({i.name: i for i in payload.inputs}, payload.parameters, self._call_worker)
+                async with self._worker.use():
+                    outputs, done = await self._hooks.run({i.name: i for i in payload.inputs}, payload.parameters, self._call_worker)
+            except lifecycle.WorkerUnavailable as exc:
+                raise MLServerError(f"cerebrate-graph ({self.name}): could not start {self._worker_slot}: {exc}") from exc
             except ValueError as exc:
                 raise MLServerError(f"{self.name}: {exc}") from exc
             return InferenceResponse(

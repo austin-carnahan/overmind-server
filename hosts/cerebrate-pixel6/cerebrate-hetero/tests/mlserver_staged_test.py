@@ -14,9 +14,9 @@ already loaded (production: gRPC 8081, HTTP 8080, SUPERVISOR_PORT=8767), per
 model: the fidelity checks; unload stops the worker and the model is not
 READY, load makes it READY again with no worker; then contention -- the
 model's result while CONTENTION_MODEL (default yoloe-v8s-pf, the production
-YOLOE) and the production MobileNet worker (MOBILENET_PORT, default 8765)
-serve concurrently: every result equal to its solo result, MobileNet class
-795, YOLOE's median latency reported. Memory is read on the phone (runbook).
+YOLOE) and MobileNet (the cerebrate-infer endpoint, mobilenet_probe.py) serve
+concurrently through the same MLServer: every result equal to its solo
+result, MobileNet class 795, YOLOE's median latency reported. Memory is read on the phone (runbook).
 No admission or idle-stop test.
 usage: [SUPERVISOR_PORT=8777] mlserver_staged_test.py <grpc host:port> <http host:port> <gateway> <data dir> [--only <models>]"""
 import sys, os, json, time, socket, base64, urllib.request
@@ -27,7 +27,9 @@ GRPC, HTTP, GW, D = sys.argv[1:5]
 ONLY = sys.argv[6].split(",") if len(sys.argv) > 6 and sys.argv[5] == "--only" else None
 SUP_PORT = int(os.environ.get("SUPERVISOR_PORT", "8777"))
 CONTENTION_MODEL = os.environ.get("CONTENTION_MODEL", "yoloe-v8s-pf")
-MOBILENET_PORT = int(os.environ.get("MOBILENET_PORT", "8765"))
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+import mobilenet_probe  # noqa: E402
+PROBE_PNG = base64.b64encode(mobilenet_probe.probe_png())
 stub = pbg.GRPCInferenceServiceStub(grpc.insecure_channel(GRPC, options=[("grpc.max_send_message_length", 33554432), ("grpc.max_receive_message_length", 33554432)]))
 MODELS = ["depth-anything-v2-small", "mi-gan-512", "dinov2-s14", "yoloe-11s-pf", "sam2.1-hiera-tiny", "rf-detr-seg-nano", "efficientsam3-rvm", "owlv2-b16"]
 SLOT = {"depth-anything-v2-small": "gpu-depth", "mi-gan-512": "gpu-migan", "dinov2-s14": "gpu-dinov2", "yoloe-11s-pf": "gpu-yoloe11s",
@@ -233,12 +235,8 @@ if ONLY is not None:
                 r, ms = infer(CONTENTION_MODEL, photo=[photo(1)]); y_rec.append((r == y_solo, ms))
 
         def mobilenet_loop():
-            probe = bytes(i % 256 for i in range(150528))
-            with socket.create_connection((GW, MOBILENET_PORT), timeout=30) as s:
-                f = s.makefile("rb")
-                while not stop.is_set():
-                    s.sendall(probe); kv = dict(x.split("=", 1) for x in f.readline().decode().split() if "=" in x)
-                    mn_rec.append(kv.get("top_class") == "795")
+            while not stop.is_set():
+                mn_rec.append(mobilenet_probe.classify(stub, PROBE_PNG)[0] == 795)
 
         threads = [threading.Thread(target=yoloe_loop), threading.Thread(target=mobilenet_loop)]
         for t in threads:

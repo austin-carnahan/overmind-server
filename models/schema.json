@@ -4,10 +4,22 @@
   "description": "What each model is and does: identity, capabilities, artifacts (upstream provenance plus the exact files deployed, with sha256), model-level aliases, serving interface, and task-level selections. How each configuration executes lives in models/variants.yaml (variants.schema.json); scripts/validate-model-catalog checks both together.",
   "type": "object",
   "required": [
-    "models"
+    "models",
+    "serving_policy"
   ],
   "additionalProperties": false,
   "properties": {
+    "serving_policy": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["reserve_mb", "idle_stop_s", "capacity_wait_s"],
+      "description": "System-wide serving policy for every Pixel model, never per model. scripts/cerebrate-models generate writes it into the supervisor's profiles file (reserve_mb) and the MLServer adapter's serving_policy.json (idle_stop_s, capacity_wait_s).",
+      "properties": {
+        "reserve_mb": {"type": "integer", "minimum": 1, "description": "Free memory no worker start may take the phone below (cerebrate-supervisor's capacity rule)."},
+        "idle_stop_s": {"type": "number", "exclusiveMinimum": 0, "description": "A worker with no request for this long is stopped."},
+        "capacity_wait_s": {"type": "number", "minimum": 0, "description": "How long a request waits for a busy worker to finish when memory is full and nothing idle can be stopped."}
+      }
+    },
     "models": {
       "type": "object",
       "additionalProperties": {
@@ -52,8 +64,7 @@
       "type": "object",
       "required": [
         "capabilities",
-        "artifacts",
-        "residency"
+        "artifacts"
       ],
       "additionalProperties": false,
       "properties": {
@@ -89,15 +100,6 @@
             }
           },
           "description": "Keyed by device (e.g. pixel6), ordered most- to least-preferred backend identifiers."
-        },
-        "residency": {
-          "type": "string",
-          "enum": [
-            "pinned",
-            "on_demand",
-            "manual"
-          ],
-          "description": "Per catalog v4 Section 9. Applied at the worker-process level, not in-process."
         },
         "requirements": {
           "$ref": "#/definitions/requirements"
