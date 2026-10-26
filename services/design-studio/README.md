@@ -65,6 +65,19 @@ SSD.
     context, or with `snapshot=`, that the document is unchanged since the
     snapshot.
   - `overmind-make-object-group`: groups an object's layer and anchors it.
+    New groups are pass-through, so a Multiply member (a contact shadow)
+    darkens the room under it.
+  - `overmind-set-floor-horizon` and `overmind-place-on-floor`: record the
+    floor's horizon in the document, then put an object group down elsewhere
+    on the floor:
+    - **scale:** the destination's distance below the horizon over the
+      floor anchor's, times an optional manual factor;
+    - **position:** the floor anchor lands exactly on the destination;
+    - **restacked by depth:** in front of objects that are clearly farther
+      away, behind clearly nearer ones.
+
+    Every placement starts from a hidden pristine copy, so repeated
+    placements never resample. One undo step.
   - `overmind-seamless-blend`: a Poisson blend (GEGL seamless-clone) of a
     patch layer or group into its surroundings, limited to the patch's
     bounding box plus a margin. It's the GIMP-only **fallback**: about 100 s

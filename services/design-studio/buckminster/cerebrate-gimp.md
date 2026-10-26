@@ -148,6 +148,29 @@ The object's pixels are still in the working layer underneath. To leave a
 clean background behind a moved object, inpaint that region of the working
 layer (step 5).
 
+**Moving it nearer or farther: place it on the floor instead.** A plain move
+keeps its size, so it only looks right at the same depth. Once the document
+has a floor horizon (`overmind-set-floor-horizon`, two points on the floor's
+vanishing line), call:
+
+```
+gimp_gimp_pdb_call(name="overmind-place-on-floor",
+                   args={"image": <id>, "object": <group id>, "x": <floor x>, "y": <floor y>, "scale-adjust": 1.0})
+```
+
+- **What it does:** (x, y) is where the object's bottom should touch the
+  floor. The whole group (parts, shadow) is scaled for that depth and moved
+  there, then restacked in front of farther objects and behind nearer ones.
+- **What it returns:** the **new group id** (use it from now on) and a report
+  with the scale.
+- **If it looks too small or large,** call it again with the same x, y and
+  `scale-adjust` (e.g. 1.1). Every placement starts from the object's
+  pristine copy, so nothing degrades.
+- **What it can't do:** it doesn't change the viewing angle: an object
+  moved a long way still shows the side it showed in the photo. Objects
+  that sit on others (a lamp on a nightstand) need placing with their
+  support.
+
 ## 5. Remove or repaint → patch layer
 
 **On an edited document, use a snapshot (the default once anything has

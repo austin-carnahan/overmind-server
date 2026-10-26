@@ -361,6 +361,55 @@ stages 05–07).**
   - **Undo:** one Ctrl+Z in GIMP reverted all four moves (checked by the
     user).
 
+**2026-10-26, Experiment 4: perspective-aware placement
+(`overmind-place-on-floor`; script `exp4_place.py`; stages 08–10).** No model:
+the floor horizon is the line through the two baseboard vanishing points
+from the reconstruction. It runs from y = 900 at x = 0 to y = 1048 at
+x = 4000, a 2° roll.
+- **Results**, one bed (pristine floor anchor (1186, 2038)), three
+  placements:
+
+  | Placement | Scale | Floor anchor lands | Members off their scaled offsets |
+  | --- | --- | --- | --- |
+  | Original depth (photo spot) | 0.99 | exactly | ≤ 0.4 px |
+  | Closer | 1.40 | within 0.5 px | ≤ 0.9 px |
+  | Farther | 0.78 | exactly | ≤ 0.6 px |
+
+  Farther, the mattress top comes out level with the nightstand top at the
+  same depth: plausible. Closer, it reads as nearer, not just bigger.
+- **The horizon's tilt is the weak part.** At the photo spot (a 300 px
+  sideways move), the 2° horizon gives 0.99:
+  - with 0.99: mean |diff| from the photo's bed 18.5;
+  - unscaled: 1.2.
+
+  The tilt comes from two vanishing points far outside the frame (x = −1212
+  and 3875), so small line-fit errors swing it. Next refinement: fit it from
+  more lines (window sills, floorboards), or check the camera roll against
+  verticals. That's before a floor homography, which would inherit the same
+  vanishing points.
+- **Depth order has to follow placement.** The rug stayed in front of the
+  bed placed nearer the camera. Placement now restacks the group among its
+  sibling object groups by floor-anchor depth: in front of clearly farther
+  ones, behind clearly nearer ones.
+  - **Ties keep the existing order.** "Clearly" means more than 5%. Lowest
+    points at about the same depth say little: at its photo spot the bed's
+    corner is 1.5% nearer than the rug's front edge, yet the rug is in
+    front.
+- **Supported objects.** The lamp's anchor is its base on the nightstand,
+  read as a far floor point. Its depth should be its support's: the
+  relationships brainstorm ("supported by").
+- **Plug-in details:**
+  - the pristine copy lives in a hidden "Placement originals (hidden)"
+    group;
+  - GIMP renames copies ("#1"), so live members get their names back and the
+    pristine members are suffixed "(pristine)";
+  - a scaled group refuses photo-offset patches, since only an unscaled
+    group maps by a translation;
+  - a repeated placement gives identical pixels;
+  - headless tests first, then installed.
+- **Not covered:** the viewing angle. A uniformly scaled cutout keeps the
+  side it showed in the photo, which is fine for moderate moves only.
+
 ### Depth (Depth Anything V2)
 - **2026-10-26, hotel-room.jpg (sample run).** Very good. No issues seen.
 
