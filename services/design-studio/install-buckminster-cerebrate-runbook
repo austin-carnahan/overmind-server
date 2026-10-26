@@ -1,7 +1,10 @@
 #!/usr/bin/env bash
-# Install Buckminster's Cerebrate -> GIMP recipe into its OpenClaw workspace
-# (owned by `openclaw`, hence sudo), and point AGENTS.md at it once.
-# Workspace files are read at session start: no Gateway restart needed.
+# Link Buckminster's Cerebrate -> GIMP recipe into its OpenClaw workspace
+# (owned by `openclaw`, hence sudo), and point AGENTS.md at it once. The link
+# targets this checkout, so a `git pull` of /opt/overmind updates the recipe
+# with no re-install; Buckminster can read it but not edit it (/opt/overmind
+# isn't writable by openclaw). Workspace files are read at session start: no
+# Gateway restart needed.
 #
 #   sudo bash /opt/overmind/services/design-studio/install-buckminster-cerebrate-runbook
 set -euo pipefail
@@ -13,8 +16,10 @@ pointer='- **Cerebrate → GIMP** (find/outline objects, cut to layers, remove w
 [ "$(id -u)" = 0 ] || { echo "run with sudo" >&2; exit 1; }
 [ -f "$ws/AGENTS.md" ] || { echo "no $ws/AGENTS.md" >&2; exit 1; }
 
-install -o openclaw -g openclaw -m 644 -D "$src" "$ws/runbooks/cerebrate-gimp.md"
-echo "installed $ws/runbooks/cerebrate-gimp.md"
+install -d -o openclaw -g openclaw "$ws/runbooks"
+ln -sfn "$src" "$ws/runbooks/cerebrate-gimp.md"
+chown -h openclaw:openclaw "$ws/runbooks/cerebrate-gimp.md"
+echo "linked $ws/runbooks/cerebrate-gimp.md -> $src"
 
 if grep -qF 'runbooks/cerebrate-gimp.md' "$ws/AGENTS.md"; then
     echo "AGENTS.md already points at it; unchanged"

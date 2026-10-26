@@ -44,6 +44,11 @@ use one of these:
 - **`cerebrate__detect_by_text`** then **`cerebrate__segment_region`**: boxes
   from phrases, then precise masks for those boxes.
 
+**Check that each mask covers the whole object before using it.** EdgeSAM
+given a bed's box outlined the comforter and left out the pillows. Add the
+missing parts: segment their boxes too and add their rings to the selection,
+or retry with `target="box-refinement@quality"`.
+
 Labels are often wrong (the wicker lamp came back as "vase" and "ornament").
 Name layers from what you asked for or what you see, not from the model's
 label. Every mask has **`polygons`**: rings `{"hole": bool, "points": [x0, y0,
@@ -125,11 +130,22 @@ layer (step 5).
    A patch computed from the original photo doesn't fit any of these.
    Inpainting the document's *current* pixels isn't available yet.
 
-Inpaint one modest object at a time. It runs on a window around the mask, so
-a huge mask gives a softer fill. URLs expire with the artifacts (24 h). Call
-again rather than reusing an old one.
+Inpaint one modest object at a time. The inpainting model works at 512 px,
+on small and medium holes:
+- **Lamps, clutter, marks:** fine.
+- **A furniture-sized hole** (e.g. the floor and wall behind a moved bed):
+  comes out as a colour smear. Don't present it as done; tell the user that
+  area needs another approach.
+- **Cast shadows** aren't in an object's mask. Add the shadow's area to the
+  mask, or report what's left.
+
+URLs expire with the artifacts (24 h). Call again rather than reusing an old
+one.
 
 ## Gotchas
+
+- Previews you `file_fetch` must be under 8 MB: export a JPEG. A full-size PNG
+  is about 10 MB.
 
 - Omit optional `gimp_gimp_pdb_call` arguments instead of passing `null`. For
   example, `parent=null` fails on `gimp-image-insert-layer`.

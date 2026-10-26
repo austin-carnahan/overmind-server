@@ -21,8 +21,8 @@ these notes say otherwise.
 | --- | --- | --- |
 | Find objects, no prompt | RF-DETR (`fixed-class-segmentation`) | clean labels and masks on the hotel room. Only 80 classes: no "lamp" |
 | Find a named object | OWLv2 boxes → EdgeSAM | untested on real work; EfficientSAM3 missed the bedroom lamp (below) |
-| Precise mask from a box | EdgeSAM (`box-refinement`) | bed, lamp good; clipped a pillow |
-| Remove an object | inpaint with the 512 window, grow 7 px | lamp: clean wall, small residue at the base |
+| Precise mask from a box | EdgeSAM (`box-refinement`) | lamp good. Bed: the comforter and skirt, **not the pillows** (twice) |
+| Remove an object | inpaint with the 512 window, grow 7 px | small objects only. Lamp: clean wall, but its base smear and cast shadow stay. A bed-sized hole fails (below) |
 | Mask → GIMP | corner-traced polygons, eps 1 px | IoU 0.998 median, 0.990 min |
 
 ## Observations
@@ -63,6 +63,15 @@ these notes say otherwise.
 
   4.5–4.9 s per call, at full resolution, with no memory trouble.
 
+- **2026-10-26, bedroom.jpg, Buckminster's first run (EdgeSAM on RF-DETR's
+  bed box, twice with identical results).** The bed mask covered the comforter
+  and skirt but left out most of both pillows and a strip under the right
+  edge. Cut out, the bed had holes and its pillows stayed behind as ghosts.
+  The bed box *included* the pillows, so EdgeSAM chose one part.
+
+  **Recipe gap:** check that a mask covers the whole object, and add its parts
+  (pillow boxes, or `@quality`) when it doesn't.
+
 ### Inpainting (MI-GAN)
 - **2026-10-26, hotel-room.jpg (sample run).** Fine one object at a time.
   Needed the mask grown about 7 px, or the fill picks up the object's edge.
@@ -81,6 +90,17 @@ these notes say otherwise.
   - Fills of small round regions on fabric look plausible at 512 window
     scale.
 
+- **2026-10-26, bedroom.jpg, Buckminster's first run.**
+  - **The bed's footprint (976×545 patch, mask 309k px).** It filled with an
+    orange-tinted smear and dark blocks, the wood floor's colour pulled up
+    into the wall and baseboard. The window was about 1950 px, so the model
+    saw the hole 3.8× reduced. MI-GAN (512 px, small and medium holes) can't
+    fill an object-sized hole of room structure.
+  - **The lamp, grown about 11 px vs 7.** The same smear on the nightstand top
+    and the same vertical streak. The streak is the lamp's **cast shadow** on
+    the wall, which no object mask includes, so growing the mask doesn't
+    help.
+
 ### Depth (Depth Anything V2)
 - **2026-10-26, hotel-room.jpg (sample run).** Very good. No issues seen.
 
@@ -96,12 +116,35 @@ these notes say otherwise.
   - eps 2 and 4 px were smaller still, but the small masks lost fidelity:
     IoU down to 0.98 and 0.96.
 
+### Agent workflow (Buckminster)
+- **2026-10-26, first run** ("cut the bed out, move it 300 px left, remove
+  the lamp").
+  - **Followed the recipe:** hidden original, Room and Bed groups, grouped
+    before moving, both patches placed with the context check and accepted,
+    none forced.
+  - **Fell back well:** text segmentation found nothing, and it switched to
+    boxes then EdgeSAM.
+  - **Judged its own result honestly:** it called the result a draft, not
+    finished work.
+  - **Friction:**
+    - `file_fetch` refused the source path (its read policy covers only
+      `~/DesignStudio/workspaces`);
+    - `file_fetch` refused a 10.5 MB PNG preview (8 MB cap); a JPEG preview
+      worked;
+    - 4 commands failed (not yet inspected).
+
 ## Try next
 
 Run these when a test touches the step anyway.
 
-- **Remove with shadow:** grow the mask 12–15 px, or add a box below the
-  object, and compare the base residue with 7 px.
+- **Remove with shadow:** growing the mask doesn't reach a cast shadow (11 px
+  ≈ 7 px). Add the shadow's area to the mask, either as a box from the agent
+  or by segmenting "shadow of the lamp", and compare.
+- **Whole-object masks:** union the parts (bed + pillow boxes), or SAM 2.1
+  `@quality`, vs. EdgeSAM's one-part answer.
+- **Large holes** (a moved bed's footprint): a large-hole inpainter (e.g.
+  LaMa) vs. MI-GAN; or several overlapping 512 windows; or leave the
+  footprint to the user and say so.
 - **Inpaint window:** a context factor of 3× instead of 2×, or a minimum of
   768 px, on small objects. Does more surrounding help or blur?
 - **EfficientSAM3 threshold:** expose `threshold` (the hook supports it). Does
