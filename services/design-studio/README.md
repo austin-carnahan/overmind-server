@@ -54,9 +54,11 @@ SSD.
   the node host.
 - [`install-gimp-plugins`](install-gimp-plugins) runs **on the Mac** (no
   sudo). It installs [`gimp-plugins/`](gimp-plugins/) into the GIMP profile;
-  restart GIMP after a first install. Today that is
-  `overmind-import-artifact`, which adds an image from the artifact service as
-  a layer by URL (Cerebrate inpaint patches).
+  restart GIMP after a first install or a new procedure or argument. Today
+  that is `overmind-import-artifact`, which provides two procedures:
+  - `overmind-import-artifact`: adds an image from the artifact service by
+    URL, optionally into an object's layer group, after a context check;
+  - `overmind-make-object-group`: groups an object's layer and anchors it.
 - [`buckminster/cerebrate-gimp.md`](buckminster/cerebrate-gimp.md) is
   Buckminster's Cerebrate → GIMP recipe. Install it into its workspace with
   `sudo bash install-buckminster-cerebrate-runbook` (on Overmind).

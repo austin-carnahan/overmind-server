@@ -111,9 +111,15 @@ With `CEREBRATE_MCP_PUBLIC_URL` set, every output file also has a `url`:
 - **The patch.** It returns an RGBA patch, alpha = the grown mask, cut to the
   mask's bounds, with its `offset` and `size`. Placed as a layer at the
   offset, it covers only the filled pixels, so other edits underneath survive.
+- **Context.** It also returns `context`: the photo's own pixels around the
+  fill (the patch bounds plus 6 px, alpha 0 over the grown mask). GIMP
+  compares it with what the target layer shows at the placement spot before
+  placing the patch, which catches a misplaced or stale patch.
 - **Measured.** On the lamp in bedroom.jpg: 2.5 s and a clean fill, vs 23 s
   and a blur for the whole photo. `composite=True` also saves the whole photo
   with the patch applied.
+- **Mask growing.** Growing the mask with PIL's MaxFilter took 15 s on a 12 MP
+  mask on the Pi; `cv2.dilate` gives identical output in 0.7 s.
 
 ### Large photos and text segmentation
 
@@ -294,6 +300,35 @@ What the 2026-10-26 spike established:
   PNG/JPEG/WebP), then load the temporary file.
 - **The bridge's `pdb_call` can't pass object arrays** (`gimp-edit-copy`) or
   a null `parent`, hence the duplicate-and-mask cutout.
+
+**Object groups (2026-10-26).**
+- **Structure.** Each object or surface is a GIMP layer group holding its
+  original pixels and its repairs, so patches move with their object and stay
+  editable. The photo itself stays as a hidden bottom layer.
+- **`overmind-make-object-group`** creates the group around a fresh cutout
+  and records an *anchor* (a parasite saved in the `.xcf`).
+- **`overmind-import-artifact` with a target** places a patch into that
+  object's group, at its photo offset plus the group's movement since the
+  anchor, after the context check:
+  - the check refuses a mismatch, a target with too few overlapping pixels,
+    or a group scaled since anchoring;
+  - `force` overrides all three.
+
+The integration test passed **17/17** on bedroom.jpg, through `pdb_call` and
+layer ops only:
+1. hidden original;
+2. bed cut out, then grouped, then the group moved;
+3. two repairs, one targeting the cutout and one the group, landing in order
+   inside the group, offset by the move, and shown pixel for pixel;
+4. a second group move moved all members;
+5. the lamp repair created a "Room" group around the working layer, now
+   "Room (original)";
+6. refusals: a wrong object, stale pixels, a scaled group; `force` still
+   places.
+
+The check's margin: on unchanged pixels, GIMP's and the server's JPEG
+decodes differ by a mean of 0.03–0.05 levels (max 3), against a threshold of
+6. The stale case had 16.9% of its ring pixels off by more than 40.
 
 ## Remaining gaps
 

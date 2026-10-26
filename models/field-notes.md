@@ -74,6 +74,13 @@ these notes say otherwise.
     and a faint vertical shadow streak. The grown mask doesn't cover the
     contact shadow.
 
+- **2026-10-26, bedroom.jpg, two 28 px discs on the comforter (patch
+  placement test).**
+  - A full-photo inpaint took about 17 s. 15 s of that was the adapter growing
+    the 12 MP mask (PIL MaxFilter), fixed with `cv2.dilate`.
+  - Fills of small round regions on fabric look plausible at 512 window
+    scale.
+
 ### Depth (Depth Anything V2)
 - **2026-10-26, hotel-room.jpg (sample run).** Very good. No issues seen.
 

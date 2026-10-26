@@ -5,6 +5,20 @@ regions. GIMP (`gimp_gimp_*`) is where the result lands. **Pass references,
 never pixels.** Give Cerebrate a file path. Give GIMP outline points, or an
 artifact URL. Don't fetch, base64 or view image bytes just to move them.
 
+## 0. Document structure: one group per object
+
+Each object or surface is a **layer group** ("Bed", "Room", "Walls"). Inside
+a group are the object's original pixels and its repairs, each on its own
+layer. **The group is the object.** Move, scale, hide or fade the group, not
+its members, unless the user asks for detailed work.
+
+- **The original photo.** Keep it at the bottom: duplicate the base layer,
+  name the copy "Original photograph", hide it, and move it to the bottom.
+- **Working layer.** Edit the visible base layer, renamed for what it is,
+  e.g. "Room".
+- **Never merge or flatten repairs** unless the user asks. They stay
+  toggleable and editable.
+
 ## 1. Point Cerebrate at the photo
 
 Cerebrate reads design-studio project sources directly:
@@ -48,22 +62,32 @@ gimp_gimp_pdb_call(name="gimp-image-select-polygon",
 `"subtract"` for a hole. Large regions can have 20 or more rings. Skipping
 holes or reordering rings gives the wrong selection.
 
-## 4. Cut out to a layer, move it
+## 4. Cut out to an object group, then move the group
 
 `gimp-edit-copy`/`paste` can't be called through `gimp_gimp_pdb_call`: it
 rejects layer lists. Do this instead:
 
-1. `gimp_gimp_layer(action="duplicate", layer_id=<base layer>)`
+1. `gimp_gimp_layer(action="duplicate", layer_id=<working layer>)`
 2. `gimp_gimp_layer(action="add_alpha", layer_id=<new>)`
 3. `gimp_gimp_layer_mask(layer_id=<new>, action="add", type="selection")`
-4. `gimp_gimp_layer_mask(layer_id=<new>, action="apply")`. Skip this to keep
-   the mask editable.
+4. `gimp_gimp_layer_mask(layer_id=<new>, action="apply")`
 5. `gimp_gimp_layer(action="crop_to_content", layer_id=<new>)`, then `set`
-   the name, then `move` (dx, dy).
+   its name to "Original <object> cutout".
 6. `gimp_gimp_pdb_call(name="gimp-selection-none", args={"image": <id>})`
+7. **Group it now, before moving it:**
 
-The original stays in the base layer. To leave a clean background behind a
-moved object, inpaint its region (step 5).
+   ```
+   gimp_gimp_pdb_call(name="overmind-make-object-group",
+                      args={"image": <id>, "layer": <cutout id>, "name": "Bed"})
+   ```
+
+   The group records where the cutout sat in the photo. That's how later
+   patches find the object after it moves. Grouping after a move breaks this.
+8. Move it: `gimp_gimp_layer(action="move", layer_id=<group id>, dx=…, dy=…)`.
+
+The object's pixels are still in the working layer underneath. To leave a
+clean background behind a moved object, inpaint that region of the working
+layer (step 5).
 
 ## 5. Remove or repaint → patch layer
 
@@ -71,16 +95,35 @@ moved object, inpaint its region (step 5).
    The mask is grown 7 px by default.
 2. The result is `patch.url`, `offset [x, y]` and `size`: an RGBA patch
    covering only the filled pixels.
-3. Place it:
+3. Place it **in the group of what it repairs**:
 
    ```
    gimp_gimp_pdb_call(name="overmind-import-artifact",
                       args={"image": <id>, "url": <patch.url>, "x": <offset x>, "y": <offset y>,
-                            "name": "lamp removed"})
+                            "name": "Lamp removed", "target": <layer or group id>,
+                            "context-url": <context.url>})
    ```
 
-   GIMP fetches the patch itself, from the artifact service only. You never
-   handle its bytes.
+   - **target** is the object being repaired. Pass its group, or any layer in
+     it, and the patch goes into that group above it. A working layer that
+     isn't grouped yet (e.g. "Room") gets a group around it on first use; add
+     `"group-name": "Room"`, and the layer becomes "Room (original)".
+   - **Offsets** stay the photo's. If the group has moved since it was
+     grouped, the plug-in adds that movement.
+   - **The check.** Before placing, it compares the photo's pixels around the
+     fill (`context`) with what the target shows there. It returns the new
+     layer and its group.
+   - GIMP fetches both files itself, from the artifact service only. You never
+     handle their bytes.
+
+   **If it's refused, don't `force`; report it.**
+   - *"context mismatch"*: the target's pixels changed since the photo, or the
+     patch would land in the wrong place.
+   - *"can't verify"*: the wrong target.
+   - *"scaled or transformed"*: the group was resized since it was grouped.
+
+   A patch computed from the original photo doesn't fit any of these.
+   Inpainting the document's *current* pixels isn't available yet.
 
 Inpaint one modest object at a time. It runs on a window around the mask, so
 a huge mask gives a softer fill. URLs expire with the artifacts (24 h). Call
