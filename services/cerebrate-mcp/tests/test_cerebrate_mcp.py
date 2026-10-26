@@ -262,6 +262,13 @@ class CerebrateMCP(unittest.TestCase):
         self.assertTrue(np.array_equal(patch[..., 3] > 0, expected[:27, :37]))
         self.assertTrue((patch[..., :3][expected[:27, :37]] == FILL).all())
         self.assertNotIn("result_png", res)
+        # the context: the photo around the fill (bounds + 6 px), alpha 0 over the grown mask
+        self.assertEqual(res["context"]["offset"], [0, 0])
+        ctxim = np.asarray(Image.open(res["context"]["path"]))
+        self.assertEqual(ctxim.shape, (27 + 6, 37 + 6, 4))
+        self.assertTrue(np.array_equal(ctxim[..., 3] == 0, expected[:33, :43]))
+        photo = np.asarray(Image.open(io.BytesIO(PHOTO)).convert("RGB"))
+        self.assertTrue(np.array_equal(ctxim[..., :3], photo[:33, :43]))
 
     def test_polygons_rebuild_the_mask(self):
         """Rings replayed as an editor would (replace, add, subtract; a pixel

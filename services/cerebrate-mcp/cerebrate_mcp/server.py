@@ -152,8 +152,10 @@ def create_app() -> FastMCP:
         image of the same size, white = region to fill (a mask_png from segment_region works directly).
         grow_mask_px widens the mask first (default 7; the fill needs a margin around an object). The model
         runs on a window around the mask, so one modest region at a time works best. Returns a patch: an
-        RGBA PNG covering only the filled pixels (artifact + url), its offset [x, y] and size in the photo --
-        place it as a layer at the offset. composite=True also returns the whole repainted photo."""
+        RGBA PNG covering only the filled pixels (artifact + url), its offset [x, y] and size in the photo,
+        and context (the photo's pixels around the fill, + url and offset) -- pass both URLs to GIMP's
+        overmind-import-artifact, which checks the context before placing the patch. composite=True also
+        returns the whole repainted photo."""
         ctx = {}
 
         def request(photo, size):

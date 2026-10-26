@@ -269,10 +269,33 @@ def depth_result(doc: dict, art: Artifacts, run: str) -> dict:
     return {"image": doc["image"], "depth": depth}
 
 
+CONTEXT_PX = 6
+
+
+def inpaint_context(ctx: dict) -> tuple[Image.Image, tuple]:
+    """The photo's own pixels around the fill: the patch's bounds plus
+    CONTEXT_PX, alpha = everything but the grown mask. An editor compares
+    these with what it shows at the placement spot before placing the patch:
+    a mismatch means the patch would land misaligned, or was computed from
+    pixels that have changed since (GIMP's overmind-import-artifact)."""
+    photo, (wx, wy, wx1, wy1) = ctx["photo"], ctx["window"]
+    bx0, by0, bx1, by1 = ctx["bbox"]
+    r = (max(bx0 - CONTEXT_PX, 0), max(by0 - CONTEXT_PX, 0), min(bx1 + CONTEXT_PX, photo.width), min(by1 + CONTEXT_PX, photo.height))
+    hole = np.zeros((r[3] - r[1], r[2] - r[0]), np.uint8)
+    m = np.asarray(ctx["mask"])                                   # window coordinates
+    ix0, iy0, ix1, iy1 = max(r[0], wx), max(r[1], wy), min(r[2], wx1), min(r[3], wy1)
+    hole[iy0 - r[1]:iy1 - r[1], ix0 - r[0]:ix1 - r[0]] = m[iy0 - wy:iy1 - wy, ix0 - wx:ix1 - wx]
+    out = photo.crop(r)
+    out.putalpha(Image.fromarray(np.where(hole >= 128, 0, 255).astype(np.uint8)))
+    return out, r
+
+
 def inpaint_result(doc: dict, art: Artifacts, run: str, ctx: dict, composite: bool) -> dict:
     """The fill as a patch: RGBA, alpha = the grown mask, cut to the mask's
     bounds, with its offset in the photo -- placed as a layer it covers only
-    the filled pixels. composite also saves the whole photo with the patch."""
+    the filled pixels -- and its context (inpaint_context) for the editor's
+    alignment/staleness check. composite also saves the whole photo with
+    the patch."""
     wx, wy, wx1, wy1 = ctx["window"]
     filled = Image.open(io.BytesIO(base64.b64decode(doc["result"]))).convert("RGB")
     if filled.size != (wx1 - wx, wy1 - wy):
@@ -284,6 +307,8 @@ def inpaint_result(doc: dict, art: Artifacts, run: str, ctx: dict, composite: bo
     out = {"image": {"width": ctx["photo"].width, "height": ctx["photo"].height},
            "patch": art.save_bytes(run, "patch.png", _png(patch)),
            "offset": [bx0, by0], "size": [bx1 - bx0, by1 - by0], "window": [wx, wy, wx1, wy1]}
+    context, r = inpaint_context(ctx)
+    out["context"] = {**art.save_bytes(run, "context.png", _png(context)), "offset": [r[0], r[1]]}
     if composite:
         full = ctx["photo"].copy()
         full.paste(patch, (bx0, by0), patch)
