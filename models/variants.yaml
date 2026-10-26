@@ -547,7 +547,7 @@ variants:
 
   # ---- OWLv2 B/16 -----------------------------------------------------------
   owlv2-b16/gpu-fp32:
-    status: staged
+    status: production
     stages:
       - {name: image tower, artifact: tflite_gpu_image_tower, accelerator: gpu, precision: fp32, runtime: litert-2.3.0, phase: image}
       - {name: text tower, artifact: tflite_text_tower, accelerator: gpu+cpu, precision: fp32, runtime: litert-2.3.0, phase: prompt}

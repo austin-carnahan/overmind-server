@@ -34,8 +34,9 @@ GOLDEN = {
     # sam2.1-hiera-tiny/gpu-fp32: box-refinement quality (above); reduced precision stays serving_blocked
     ("text-prompted-segmentation", "default"): ("efficientsam3-rvm/gpu-trunk-fp32-neck-fp16acc32-grounding-fp16acc32", "gpu-esam3", "efficientsam3-rvm-fast", "efficientsam3-rvm"),
     ("text-prompted-segmentation", "quality"): ("efficientsam3-rvm/gpu-fp32", None, None, None),   # serving_blocked (memory)
+    ("open-vocabulary-detection", "default"): ("owlv2-b16/gpu-fp32", "gpu-owlv2", "owlv2-b16-default", "owlv2-b16"),
 }
-AVAILABLE = {"prompt-free-segmentation", "box-refinement", "relative-depth", "inpainting", "image-embedding", "fixed-class-segmentation", "text-prompted-segmentation"}
+AVAILABLE = {"prompt-free-segmentation", "box-refinement", "relative-depth", "inpainting", "image-embedding", "fixed-class-segmentation", "text-prompted-segmentation", "open-vocabulary-detection"}
 
 
 class RealRegistry(unittest.TestCase):

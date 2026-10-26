@@ -771,7 +771,7 @@ tasks:
     available: true
   open-vocabulary-detection:
     default: owlv2-b16/gpu-fp32
-    available: false
+    available: true
   image-embedding:
     default: dinov2-s14/gpu-fp32
     available: true
