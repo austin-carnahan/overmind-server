@@ -1,8 +1,8 @@
 # Cerebrate MCP
 
-**Status:** SPIKE — validated live on 2026-10-26 with a temporary container
-on overmind-01. It is not in the compose stack, and OpenClaw is not connected
-to it yet; both steps are below.
+**Status:** DEPLOYED on overmind-01 on 2026-10-26, in the compose stack,
+loopback-only (deploy record below). OpenClaw: connect with
+[`openclaw-connect.sh`](openclaw-connect.sh) (below).
 
 The Pixel 6's inference endpoints, for any MCP client (OpenClaw first), over
 Streamable HTTP on `127.0.0.1:8002/mcp`. The server is built with FastMCP 4.1.
@@ -81,16 +81,16 @@ the promotion checklist
 ([runbook](../../runbooks/cerebrate-pixel6-models.md#promote-a-staged-endpoint))
 include the MCP check.
 
-## Deploy (not done yet: needs approval)
+## Deploy
 
 1. **The checkout.** `/opt/overmind` must carry the model registry this service
-   reads (`models/registry.py`, `variants.yaml`). Today that is on the
-   `feat/segmentation-lane-graph-worker` line, which isn't merged into `main`.
+   reads (`models/registry.py`, `variants.yaml`). It has since the merge into
+   `main` (`30bc2dd`).
 2. **Artifact directory.** As austin, who owns `/var/lib/overmind` and is the
    container's user: `install -d /var/lib/overmind/cerebrate-mcp/artifacts`.
-3. **Start it.** Uncomment `cerebrate-mcp/compose.yaml` in
-   [`services/compose.yaml`](../compose.yaml), then run `docker compose -f
-   compose.yaml up -d cerebrate-mcp` from `services/`.
+3. **Start it.** The include is enabled in
+   [`services/compose.yaml`](../compose.yaml). From `services/`, run
+   `docker compose -f compose.yaml up -d --build --no-deps cerebrate-mcp`.
 4. **Verify.**
    - `curl -s http://127.0.0.1:8002/healthz` returns `{"ok": true}` when
      MLServer is reachable.
@@ -99,14 +99,35 @@ include the MCP check.
 **Rollback:** `docker compose -f compose.yaml rm -sf cerebrate-mcp`, then
 comment the include out again. Nothing else depends on it.
 
+**Deploy record (2026-10-26).**
+1. `/opt/overmind` was fast-forwarded to `7cc99d7`.
+2. The artifact directory was created as austin.
+3. `up -d --build --no-deps cerebrate-mcp` started it. No other container
+   changed.
+
+The live smoke test then passed 7/7 against the deployed service:
+- discovery listed the 10 endpoints;
+- RF-DETR → EdgeSAM masks identical to a direct MLServer request;
+- the mask artifact read back as a resource;
+- the mask fed `inpaint`.
+
 ## OpenClaw
 
-Run on the Gateway host (overmind-01):
+Run on the Gateway host (overmind-01), as a sudoer:
 
 ```bash
-openclaw mcp add cerebrate --transport streamable-http --url http://127.0.0.1:8002/mcp --timeout 330
-sudo systemctl restart openclaw-gateway.service   # mcp.* changes need a real restart
+bash /opt/overmind/services/cerebrate-mcp/openclaw-connect.sh   # ALLOW_AGENTS="buckminster" by default
 ```
+
+The script does three things:
+1. **Adds the server.** It runs `openclaw mcp add cerebrate --transport
+   streamable-http --url http://127.0.0.1:8002/mcp --timeout 330`, as the
+   `openclaw` user; OpenClaw probes the server before saving.
+2. **Scopes the tools.** It appends `cerebrate__*` to the allowed agents'
+   `tools.alsoAllow` and to every other agent's `tools.deny`. It shows the
+   changes, dry-runs them, and asks before applying.
+3. **Restarts the Gateway** (`mcp.*` changes need a real restart), confirms a
+   new PID, and probes the server through OpenClaw.
 
 - **Agent scoping.** MCP servers aren't scoped to agents by default
   ([sandboxing and trust](../../runbooks/openclaw/sandboxing-and-trust.md#mcp-servers-and-tool-access)).
