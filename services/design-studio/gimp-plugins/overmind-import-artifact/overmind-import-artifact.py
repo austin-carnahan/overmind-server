@@ -4,7 +4,7 @@ what the document currently looks like for Cerebrate to work on, import
 results (e.g. inpaint patches) as layers, and keep each object's repairs in
 the object's own layer group.
 
-Five PDB procedures, called by agents through the GIMP MCP's gimp_pdb_call:
+Seven PDB procedures, called by agents through the GIMP MCP's gimp_pdb_call:
 
   overmind-publish(image, mode, x, y, width, height, format, name, source, margin)
       -> snapshot, image-url, mask-url, x, y, width, height
@@ -27,7 +27,28 @@ Five PDB procedures, called by agents through the GIMP MCP's gimp_pdb_call:
       right after cutting an object out, while the cutout still lines up with
       the photo: the group records an *anchor* (which member is the original
       and where it sat), so later patches, whose offsets are in the photo's
-      pixels, land where the object is now.
+      pixels, land where the object is now. New groups are pass-through, so a
+      Multiply layer inside (a contact shadow) darkens the room under it.
+
+  overmind-set-floor-horizon(image, x0, y0, x1, y1)
+      Record the floor's horizon (its vanishing line: two points on it, image
+      pixels) in the document, for overmind-place-on-floor.
+
+  overmind-place-on-floor(image, object, x, y, scale-adjust) -> group, report
+      Put an object group down elsewhere on the floor, rescaled for
+      perspective: its floor anchor (the bottom of its anchored original --
+      the lowest row, middle of the bottom band) lands on (x, y), and the
+      whole group is scaled by
+        distance of (x, y) below the horizon / distance of the anchor below it
+      times scale-adjust (a manual correction, 1 = none). The first placement
+      keeps the group as it was then, hidden, as the object's pristine copy
+      (in "Placement originals (hidden)"); every placement starts again from
+      that copy, so placing an object repeatedly never resamples already
+      scaled pixels. The group is then restacked by depth: in front of every
+      object group whose floor anchor is clearly (5%) farther away, behind
+      every clearly nearer one; about equally far, the order stays. One undo step. Returns the new group (it replaces the
+      old one) and a JSON report. A scaled group no longer takes photo-offset
+      patches (they'd need the inverse transform): import is refused there.
 
   overmind-seamless-blend(image, patch, background, margin, op-id) -> report
       Poisson-blend a patch layer, or every visible layer of a patch group, into
@@ -100,6 +121,8 @@ from gi.repository import Gegl, Gimp, Gio, GLib, GObject  # noqa: E402
 IMPORT, GROUP, PUBLISH = "overmind-import-artifact", "overmind-make-object-group", "overmind-publish"
 BLEND, STATUS, OPS, KEEP_OPS = "overmind-seamless-blend", "overmind-op-status", "overmind-ops", 50
 ANCHOR, SNAPSHOTS, KEEP_SNAPSHOTS = "overmind-object-anchor", "overmind-snapshots", 20
+PLACE, HORIZON, ROOM, PLACEMENT = "overmind-place-on-floor", "overmind-set-floor-horizon", "overmind-room", "overmind-placement"
+ORIGINALS = "Placement originals (hidden)"
 DEFAULTS = {"allowed_prefixes": ["http://artifacts.home.arpa/artifacts/"], "max_bytes": 64 * 1024 * 1024,
             "upload_url": "http://artifacts.home.arpa/artifacts/upload", "token": ""}
 SIGNATURES = ((b"\x89PNG\r\n\x1a\n", ".png"), (b"\xff\xd8\xff", ".jpg"), (b"RIFF", ".webp"))
@@ -190,6 +213,7 @@ def make_group(image, layer, name):
     if layer.get_name() == name:
         layer.set_name(f"{name} (original)")
     group = Gimp.GroupLayer.new(image, name)
+    group.set_mode(Gimp.LayerMode.PASS_THROUGH)          # a Multiply member (a contact shadow) must reach the room
     image.insert_layer(group, parent, image.get_item_position(layer))
     image.reorder_item(layer, group, 0)
     stamp_anchor(group, layer)
@@ -233,6 +257,136 @@ def check_context(image, drawable, ctx_layer, x, y):
                       f"{frac:.1%} of {n} pixels differ by > {OUTLIER_DIFF} -- the patch would be misplaced, or was "
                       "computed from pixels that have changed since (force to place it anyway)")
     return {"pixels": n, "mean": round(mean, 2), "outliers": round(frac, 4)}
+
+
+# ---- placement on the floor -----------------------------------------------------------
+def parasite_json(item, name):
+    p = item.get_parasite(name)
+    return json.loads(bytes(p.get_data())) if p is not None else None
+
+
+def attach_json(item, name, value):
+    item.attach_parasite(Gimp.Parasite.new(name, Gimp.PARASITE_PERSISTENT | Gimp.PARASITE_UNDOABLE, list(json.dumps(value).encode())))
+
+
+def below_horizon(room, x, y):
+    """Signed distance of (x, y) from the floor's horizon, positive on the floor side (below it)."""
+    (x0, y0), (x1, y1) = room["horizon"]
+    d = ((x1 - x0) * (y - y0) - (y1 - y0) * (x - x0)) / math.hypot(x1 - x0, y1 - y0)
+    return d if x1 > x0 else -d
+
+
+def floor_anchor(member):
+    """Where an object's cutout meets the floor: the bottom edge of its lowest opaque row, and the middle of its
+    opaque pixels in the bottom band (5% of its height). Image pixels."""
+    w, h = member.get_width(), member.get_height()
+    ox, oy = member.get_offsets()[1:]
+    a = bytes(member.get_buffer().get(Gegl.Rectangle.new(0, 0, w, h), 1.0, "R'G'B'A u8", Gegl.AbyssPolicy.NONE))[3::4]
+    rows = [y for y in range(h) if max(a[y * w:(y + 1) * w]) >= 128]
+    if not rows:
+        raise Refused(f"'{member.get_name()}' has no opaque pixels")
+    bottom = rows[-1]
+    xs = [x for y in range(max(bottom - max(1, h // 20) + 1, 0), bottom + 1) for x in range(w) if a[y * w + x] >= 128]
+    return ox + (min(xs) + max(xs) + 1) / 2, oy + bottom + 1
+
+
+def originals_group(image):
+    for item in image.get_layers():
+        if item.is_group() and item.get_name() == ORIGINALS:
+            return item
+    g = Gimp.GroupLayer.new(image, ORIGINALS)
+    image.insert_layer(g, None, len(image.get_layers()))
+    g.set_visible(False)
+    return g
+
+
+DEPTH_MARGIN = 0.05   # restack only on a clear difference: lowest points ~equally far say little (the bed on its rug)
+
+
+def restack_by_depth(image, group, room, depth):
+    """Put the placed group in front of every sibling object group whose floor anchor is clearly farther away
+    (nearer the horizon, by more than DEPTH_MARGIN) and behind every clearly nearer one; objects at about the same
+    depth keep their order. Object groups are those with an anchored original. Returns
+    {"in_front_of": [...], "behind": [...], "same_depth": [...]}."""
+    parent = group.get_parent()
+    siblings = parent.get_children() if parent else image.get_layers()
+    closer, farther, same = [], [], []
+    for i, item in enumerate(siblings):
+        if item.get_id() == group.get_id() or not item.is_group():
+            continue
+        a = anchor_of(item)
+        m = image.get_layer_by_tattoo(a["tattoo"]) if a else None
+        if m is None or m.get_parent() is None or m.get_parent().get_id() != item.get_id():
+            continue
+        d = below_horizon(room, *floor_anchor(m))
+        if d > depth * (1 + DEPTH_MARGIN):
+            closer.append(i)
+        elif d < depth * (1 - DEPTH_MARGIN):
+            farther.append(i)
+        else:
+            same.append(i)
+    now = [s.get_id() for s in siblings].index(group.get_id())
+    if closer or farther:
+        pos = max(closer) + 1 if closer else min(farther)
+        image.reorder_item(group, parent, pos - 1 if now < pos else pos)
+    return {"in_front_of": [siblings[i].get_name() for i in farther], "behind": [siblings[i].get_name() for i in closer],
+            "same_depth": [siblings[i].get_name() for i in same]}
+
+
+def place(image, obj, x, y, adjust):
+    room = parasite_json(image, ROOM) or {}
+    if "horizon" not in room:
+        raise Refused("no floor horizon in this document: set it with overmind-set-floor-horizon")
+    group = obj if obj.is_group() else obj.get_parent()
+    if group is None:
+        raise Refused(f"'{obj.get_name()}' is not in an object group (overmind-make-object-group)")
+    pl = parasite_json(group, PLACEMENT)
+    if pl is None:                       # first placement: the group as it is now becomes the pristine copy
+        a = anchor_of(group)
+        member = image.get_layer_by_tattoo(a["tattoo"]) if a else None
+        if member is None or member.get_parent() != group:
+            raise Refused(f"group '{group.get_name()}' has no anchored original to find its floor contact from")
+        ax, ay = floor_anchor(member)
+        pristine = group.copy()
+        image.insert_layer(pristine, originals_group(image), 0)
+        pristine.set_name(f"{group.get_name()} (pristine)")
+        names = [c.get_name() for c in group.get_children()]
+        for c, n in zip(pristine.get_children(), names):     # GIMP keeps names unique (the copy got "#1"s):
+            c.set_name(f"{n} (pristine)")                    # the pristine members are suffixed, live copies keep theirs
+        pl = {"pristine": pristine.get_tattoo(), "member": group.get_children().index(member), "anchor": [ax, ay],
+              "photo": {k: a[k] for k in ("x", "y", "w", "h")}, "names": names}
+    pristine = image.get_layer_by_tattoo(pl["pristine"])
+    if pristine is None:
+        raise Refused(f"the pristine copy of '{group.get_name()}' is gone; can't place it without resampling")
+    ax, ay = pl["anchor"]
+    da, dd = below_horizon(room, ax, ay), below_horizon(room, x, y)
+    if da <= 0 or dd <= 0:
+        raise Refused(f"the floor anchor ({ax:.0f}, {ay:.0f}) and the destination ({x:.0f}, {y:.0f}) must both be "
+                      "below the floor horizon")
+    s = dd / da * adjust
+    parent, pos = group.get_parent(), image.get_item_position(group)
+    name, visible = group.get_name(), group.get_visible()
+    new = pristine.copy()
+    image.insert_layer(new, parent, pos)
+    image.remove_layer(group)
+    new.set_name(name)
+    new.set_visible(visible)
+    for c, n in zip(new.get_children(), pl["names"]):
+        c.set_name(n)
+    px, py = new.get_offsets()[1:]
+    x0, y0 = x + (px - ax) * s, y + (py - ay) * s
+    Gimp.context_push()
+    Gimp.context_set_interpolation(Gimp.InterpolationType.CUBIC)
+    new = new.transform_scale(x0, y0, x0 + new.get_width() * s, y0 + new.get_height() * s)
+    Gimp.context_pop()
+    # patches still map onto it by a translation only while unscaled: displacement() compares sizes
+    attach_json(new, ANCHOR, {"tattoo": new.get_children()[pl["member"]].get_tattoo(), **pl["photo"]})
+    report = {"scale": round(s, 4), "perspective_scale": round(dd / da, 4), "scale_adjust": adjust,
+              "anchor": [round(ax, 1), round(ay, 1)], "destination": [x, y],
+              "below_horizon": [round(da, 1), round(dd, 1)]}
+    report["stacking"] = restack_by_depth(image, new, room, dd)
+    attach_json(new, PLACEMENT, {**pl, "last": report})
+    return new, report
 
 
 # ---- snapshots ------------------------------------------------------------------------
@@ -458,6 +612,40 @@ def run_group(procedure, config_, data):
                                             GObject.Value(Gimp.GroupLayer, group)])
 
 
+def run_horizon(procedure, config_, data):
+    get = config_.get_property
+    image = get("image")
+    try:
+        if (get("x0"), get("y0")) == (get("x1"), get("y1")):
+            raise Refused("the horizon needs two different points")
+        image.undo_group_start()
+        try:
+            attach_json(image, ROOM, {**(parasite_json(image, ROOM) or {}),
+                                      "horizon": [[get("x0"), get("y0")], [get("x1"), get("y1")]]})
+        finally:
+            image.undo_group_end()
+    except Exception as exc:
+        return _error(procedure, HORIZON, exc)
+    return procedure.new_return_values(Gimp.PDBStatusType.SUCCESS, GLib.Error())
+
+
+def run_place(procedure, config_, data):
+    get = config_.get_property
+    image = get("image")
+    try:
+        image.undo_group_start()
+        try:
+            group, report = place(image, get("object"), get("x"), get("y"), get("scale-adjust"))
+        finally:
+            image.undo_group_end()
+        Gimp.displays_flush()
+    except Exception as exc:
+        return _error(procedure, PLACE, exc)
+    return Gimp.ValueArray.new_from_values([GObject.Value(Gimp.PDBStatusType, Gimp.PDBStatusType.SUCCESS),
+                                            GObject.Value(Gimp.GroupLayer, group),
+                                            GObject.Value(GObject.TYPE_STRING, json.dumps(report))])
+
+
 def run_publish(procedure, config_, data):
     get = config_.get_property
     image, mode, fmt = get("image"), (get("mode") or "selection").lower(), (get("format") or "png").lower()
@@ -612,7 +800,7 @@ class OvermindArtifacts(Gimp.PlugIn):
         return False
 
     def do_query_procedures(self):
-        return [IMPORT, GROUP, PUBLISH, BLEND, STATUS]
+        return [IMPORT, GROUP, PUBLISH, BLEND, STATUS, HORIZON, PLACE]
 
     def do_create_procedure(self, name):
         rw = GObject.ParamFlags.READWRITE
@@ -647,6 +835,20 @@ class OvermindArtifacts(Gimp.PlugIn):
                 "What became of an operation started with an op-id",
                 "Returns done (with its result), started (not finished), failed (with the error) or unknown, from the "
                 "document's operation journal.", name)
+        elif name == HORIZON:
+            procedure = Gimp.Procedure.new(self, name, Gimp.PDBProcType.PLUGIN, run_horizon, None)
+            procedure.set_documentation(
+                "Record the floor's horizon (vanishing line) in the document",
+                "Two points on the horizon, in image pixels. overmind-place-on-floor scales objects by their floor "
+                "contact's distance below it. One undo step.", name)
+        elif name == PLACE:
+            procedure = Gimp.Procedure.new(self, name, Gimp.PDBProcType.PLUGIN, run_place, None)
+            procedure.set_documentation(
+                "Put an object group down elsewhere on the floor, rescaled for perspective",
+                "The group's floor anchor (bottom of its anchored original) lands on (x, y); the whole group is scaled "
+                "by the destination's distance below the floor horizon over the anchor's, times scale-adjust. Always "
+                "starts from the object's pristine copy (kept hidden at the first placement), so repeated placements "
+                "never resample scaled pixels. One undo step. Returns the new group and a JSON report.", name)
         else:
             procedure = Gimp.Procedure.new(self, name, Gimp.PDBProcType.PLUGIN, run_group, None)
             procedure.set_documentation(
@@ -694,6 +896,17 @@ class OvermindArtifacts(Gimp.PlugIn):
             procedure.add_string_argument("op-id", "Operation id", "The op-id the operation was started with", "", rw)
             procedure.add_string_return_value("status", "Status", "done, started, failed or unknown", "", rw)
             procedure.add_string_return_value("details", "Details", "JSON: the result or error, age_s", "", rw)
+        elif name == HORIZON:
+            for arg, nick in (("x0", "First point x"), ("y0", "First point y"), ("x1", "Second point x"), ("y1", "Second point y")):
+                procedure.add_double_argument(arg, nick, f"{nick} on the floor horizon (image pixels)", -1e6, 1e6, 0.0, rw)
+        elif name == PLACE:
+            procedure.add_layer_argument("object", "Object", "The object's group (or a layer in it)", False, rw)
+            procedure.add_double_argument("x", "X", "Destination of the floor anchor, x (image pixels)", -1e6, 1e6, 0.0, rw)
+            procedure.add_double_argument("y", "Y", "Destination of the floor anchor, y (image pixels)", -1e6, 1e6, 0.0, rw)
+            procedure.add_double_argument("scale-adjust", "Scale adjust", "Manual correction on top of the perspective "
+                                          "scale (1 = none)", 0.05, 20.0, 1.0, rw)
+            procedure.add_group_layer_return_value("group", "Group", "The placed group (replaces the old one)", False, rw)
+            procedure.add_string_return_value("report", "Report", "JSON: scale, perspective_scale, anchor, ...", "", rw)
         else:
             procedure.add_layer_argument("layer", "Layer", "The object's layer", False, rw)
             procedure.add_string_argument("name", "Name", "Group name (default: the layer's)", "", rw)
