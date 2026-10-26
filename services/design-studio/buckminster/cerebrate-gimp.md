@@ -18,6 +18,10 @@ its members, unless the user asks for detailed work.
   e.g. "Room".
 - **Never merge or flatten repairs** unless the user asks. They stay
   toggleable and editable.
+- **Move groups, never members.** Every layer is movable on its own, so moving
+  a member (a cutout, a patch, "Room (original)") pulls it out of alignment
+  with the rest of its object. Move a member only when the user asks for
+  that one piece. Nothing is position-locked to stop this.
 
 ## 1. Point Cerebrate at the photo
 

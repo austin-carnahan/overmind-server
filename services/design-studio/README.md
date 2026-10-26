@@ -67,6 +67,34 @@ SSD.
   `openclaw nodes invoke ... file.fetch`, so the worker never needs SSH access
   to Overmind.
 
+## Object groups and alignment (open decision)
+
+Agent edits keep each object in a layer group, holding its original pixels
+and its repairs (see Buckminster's recipe,
+[`buckminster/cerebrate-gimp.md`](buckminster/cerebrate-gimp.md)). Every
+layer is still movable on its own. With the Move tool's default "Pick a layer
+or guide", dragging on the canvas grabs whatever is under the cursor (a
+patch, a cutout), and that member drifts out of alignment with its group.
+
+**Decision (2026-10-26): rely on technique for now; no position locks.**
+- **By hand:** select the group in the Layers panel and drag with the Move
+  tool set to "Move the active layer" (or hold Shift).
+- **Agents:** move groups, never members. Cmd+Z undoes a stray drag. The
+  groups' anchors also let a patch be realigned.
+
+**If we pin later.** GIMP's Lock position spreads both ways, as tested
+through the PDB:
+- a locked member also blocks moving its group;
+- a locked group blocks moving itself and all its members.
+
+So members can't be locked while their group stays draggable. The options
+are:
+1. **Pin every object group.** Unlock, move, re-lock to move it. The plug-in
+   would lock the groups it creates and briefly unlock one while placing a
+   patch.
+2. **Pin only surfaces that never move** ("Room", walls) and leave movable
+   objects unlocked.
+
 ## Publishing a checkpoint
 
 1. On the worker, put `document.xcf` and `preview.png` in an outbox folder
