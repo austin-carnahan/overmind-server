@@ -4,7 +4,7 @@ what the document currently looks like for Cerebrate to work on, import
 results (e.g. inpaint patches) as layers, and keep each object's repairs in
 the object's own layer group.
 
-Three PDB procedures, called by agents through the GIMP MCP's gimp_pdb_call:
+Five PDB procedures, called by agents through the GIMP MCP's gimp_pdb_call:
 
   overmind-publish(image, mode, x, y, width, height, format, name)
       -> snapshot, image-url, mask-url, x, y, width, height
@@ -26,7 +26,20 @@ Three PDB procedures, called by agents through the GIMP MCP's gimp_pdb_call:
       and where it sat), so later patches, whose offsets are in the photo's
       pixels, land where the object is now.
 
-  overmind-import-artifact(image, url, x, y, name, target, group-name, context-url, snapshot, force)
+  overmind-seamless-blend(image, patch, background, margin, op-id) -> report
+      Poisson-blend a patch layer, or every visible layer of a patch group, into
+      the background drawable's surroundings (GEGL seamless-clone): the patch's
+      own texture, the surroundings' light and colour at its edge. Writes the
+      blended colour back into each patch layer (their outlines unchanged).
+      Works only on the patch's bounding box plus margin, in the plug-in's
+      own buffers: the whole canvas took minutes and timed the bridge out.
+
+  overmind-op-status(image, op-id) -> status, details
+      What became of an operation started with an op-id: "done" (and its
+      result), "started" (not finished: it may have failed, or still be
+      running), or "unknown". For when a call's response was lost.
+
+  overmind-import-artifact(image, url, x, y, name, target, group-name, context-url, snapshot, force, op-id)
       -> layer, group
       Fetch the image at url and add it as a layer.
       - No target: a new top layer at (x, y), image coordinates.
@@ -46,6 +59,13 @@ Three PDB procedures, called by agents through the GIMP MCP's gimp_pdb_call:
         before someone edited that area is never silently applied.
       One undo step. Returns the new layer and its group.
 
+Operation ids: overmind-seamless-blend and overmind-import-artifact take an
+op-id (any string). Its progress is journalled in the document (parasite
+overmind-ops): run again with the same op-id after an operation finished, it
+returns the recorded result instead of repeating the work, so a retry after a
+lost response can't duplicate layers. An agent whose call's outcome is
+unknown asks overmind-op-status first, and never blindly re-runs.
+
 Why fetching here: GIMP's own file loading can't use a URL on macOS (the MCP
 bridge turns file arguments into local paths; GIO has no http backend), and
 agents should pass references, not pixels -- services/cerebrate-mcp/README.md,
@@ -63,6 +83,7 @@ import math
 import os
 import sys
 import tempfile
+import time
 import urllib.error
 import urllib.request
 from urllib.parse import urlsplit
@@ -74,6 +95,7 @@ gi.require_version("Gegl", "0.4")
 from gi.repository import Gegl, Gimp, Gio, GLib, GObject  # noqa: E402
 
 IMPORT, GROUP, PUBLISH = "overmind-import-artifact", "overmind-make-object-group", "overmind-publish"
+BLEND, STATUS, OPS, KEEP_OPS = "overmind-seamless-blend", "overmind-op-status", "overmind-ops", 50
 ANCHOR, SNAPSHOTS, KEEP_SNAPSHOTS = "overmind-object-anchor", "overmind-snapshots", 20
 DEFAULTS = {"allowed_prefixes": ["http://artifacts.home.arpa/artifacts/"], "max_bytes": 64 * 1024 * 1024,
             "upload_url": "http://artifacts.home.arpa/artifacts/upload", "token": ""}
@@ -290,6 +312,113 @@ def snapshot_hash(image, x, y, w, h):
     return hashlib.sha256(visible_rgba(image, x, y, w, h)).hexdigest()
 
 
+# ---- operation journal ----------------------------------------------------------------
+def ops(image):
+    p = image.get_parasite(OPS)
+    return json.loads(bytes(p.get_data())) if p is not None else {}
+
+
+def journal(image, op_id, **entry):
+    if not op_id:
+        return
+    d = ops(image)
+    d[op_id] = {**d.get(op_id, {}), **entry, "t": time.time()}
+    for k in sorted(d, key=lambda k: d[k]["t"])[:-KEEP_OPS]:
+        del d[k]
+    image.attach_parasite(Gimp.Parasite.new(OPS, Gimp.PARASITE_PERSISTENT, list(json.dumps(d).encode())))
+
+
+def finished(image, op_id):
+    """The recorded result of an op-id that already completed, else None."""
+    e = ops(image).get(op_id) if op_id else None
+    return e["result"] if e and e.get("status") == "done" else None
+
+
+def by_tattoo(image, tattoo):
+    return image.get_layer_by_tattoo(tattoo) if tattoo else None
+
+
+# ---- seamless blend --------------------------------------------------------------------
+def leaves(item):
+    if item.is_group():
+        return [x for ch in item.get_children() for x in leaves(ch)]
+    return [item] if item.get_visible() else []
+
+
+def blend(image, patch, background, margin):
+    """Poisson-blend the patch's layers into the background over their bounding box + margin."""
+    members = leaves(patch)
+    if not members:
+        raise Refused("the patch has no visible layers")
+    W, H = image.get_width(), image.get_height()
+    boxes = [(m.get_offsets()[1], m.get_offsets()[2], m.get_width(), m.get_height()) for m in members]
+    rx0 = max(min(x for x, y, w, h in boxes) - margin, 0)
+    ry0 = max(min(y for x, y, w, h in boxes) - margin, 0)
+    rx1 = min(max(x + w for x, y, w, h in boxes) + margin, W)
+    ry1 = min(max(y + h for x, y, w, h in boxes) + margin, H)
+    rw, rh = rx1 - rx0, ry1 - ry0
+    Gimp.progress_init("Blending into the surroundings")
+    t = [time.time()]
+    tmp = Gimp.Image.new(rw, rh, Gimp.ImageBaseType.RGB)
+    try:
+        for m in members:
+            lay = Gimp.Layer.new_from_drawable(m, tmp)
+            tmp.insert_layer(lay, None, 0)
+            lay.set_offsets(m.get_offsets()[1] - rx0, m.get_offsets()[2] - ry0)
+        merged = tmp.merge_visible_layers(Gimp.MergeType.CLIP_TO_IMAGE)
+        aux_px = bytes(rgba(merged, 0, 0, rw, rh))
+    finally:
+        tmp.delete()
+    t.append(time.time())
+    bg_px = bytes(rgba(background, rx0, ry0, rw, rh))
+    Gimp.progress_update(0.2)
+    # GEGL graphs in a plug-in need GEGL initialised in this process: without it, building the graph
+    # segfaults the plug-in (and GIMP then hangs waiting on it -- the freezes of 2026-10-26).
+    Gegl.init(None)
+    t.append(time.time())
+    rect = Gegl.Rectangle.new(0, 0, rw, rh)
+    in_buf, aux_buf, out_buf = (Gegl.Buffer.new("R'G'B'A u8", 0, 0, rw, rh) for _ in range(3))
+    in_buf.set(rect, "R'G'B'A u8", bg_px)
+    aux_buf.set(rect, "R'G'B'A u8", aux_px)
+    graph = Gegl.Node.new()
+    src = graph.create_child("gegl:buffer-source")
+    src.set_property("buffer", in_buf)
+    aux = graph.create_child("gegl:buffer-source")
+    aux.set_property("buffer", aux_buf)
+    sc = graph.create_child("gegl:seamless-clone")
+    src.connect_to("output", sc, "input")
+    aux.connect_to("output", sc, "aux")
+    wr = graph.create_child("gegl:write-buffer")
+    wr.set_property("buffer", out_buf)
+    sc.connect_to("output", wr, "input")
+    wr.process()
+    t.append(time.time())
+    if sc.get_property("error-msg"):
+        raise Refused(f"seamless clone: {sc.get_property('error-msg')}")
+    out = bytes(out_buf.get(rect, 1.0, "R'G'B'A u8", Gegl.AbyssPolicy.NONE))
+    Gimp.progress_update(0.8)
+    image.undo_group_start()
+    try:
+        for m in members:
+            mx, my = m.get_offsets()[1] - rx0, m.get_offsets()[2] - ry0
+            w, h = m.get_width(), m.get_height()
+            healed = b"".join(out[((my + r) * rw + mx) * 4:((my + r) * rw + mx + w) * 4] for r in range(h))
+            mine = bytearray(m.get_buffer().get(Gegl.Rectangle.new(0, 0, w, h), 1.0, "R'G'B'A u8", Gegl.AbyssPolicy.NONE))
+            for ch in range(3):
+                mine[ch::4] = healed[ch::4]                       # blended colour, the layer's own outline
+            buf = m.get_buffer()
+            buf.set(Gegl.Rectangle.new(0, 0, w, h), "R'G'B'A u8", bytes(mine))
+            buf.flush()
+            m.update(0, 0, w, h)
+    finally:
+        image.undo_group_end()
+    Gimp.progress_update(1.0)
+    t.append(time.time())
+    stages = ("patch", "background", "blend", "write")
+    return {"layers": len(members), "region": [rx0, ry0, rw, rh],
+            "stage_s": {k: round(b - a, 1) for k, a, b in zip(stages, t, t[1:])}}
+
+
 # ---- procedures -----------------------------------------------------------------------
 def _error(procedure, name, exc):
     return procedure.new_return_values(Gimp.PDBStatusType.EXECUTION_ERROR,
@@ -362,13 +491,51 @@ def run_publish(procedure, config_, data):
         GObject.Value(GObject.TYPE_INT, w), GObject.Value(GObject.TYPE_INT, h)])
 
 
+def run_blend(procedure, config_, data):
+    get = config_.get_property
+    image, patch, background, op_id = get("image"), get("patch"), get("background"), get("op-id")
+    try:
+        report = finished(image, op_id)
+        if report is None:
+            journal(image, op_id, proc=BLEND, status="started")
+            t0 = time.time()
+            report = {**blend(image, patch, background, get("margin")), "seconds": round(time.time() - t0, 1)}
+            journal(image, op_id, status="done", result=report)
+        Gimp.displays_flush()
+    except Exception as exc:
+        journal(image, op_id, status="failed", error=str(exc)[:300])
+        return _error(procedure, BLEND, exc)
+    return Gimp.ValueArray.new_from_values([GObject.Value(Gimp.PDBStatusType, Gimp.PDBStatusType.SUCCESS),
+                                            GObject.Value(GObject.TYPE_STRING, json.dumps(report))])
+
+
+def run_status(procedure, config_, data):
+    image, op_id = config_.get_property("image"), config_.get_property("op-id")
+    e = ops(image).get(op_id)
+    status = e.get("status", "unknown") if e else "unknown"
+    details = {k: v for k, v in (e or {}).items() if k != "status"}
+    if e:
+        details["age_s"] = round(time.time() - e["t"])
+    return Gimp.ValueArray.new_from_values([GObject.Value(Gimp.PDBStatusType, Gimp.PDBStatusType.SUCCESS),
+                                            GObject.Value(GObject.TYPE_STRING, status),
+                                            GObject.Value(GObject.TYPE_STRING, json.dumps(details))])
+
+
 def run_import(procedure, config_, data):
     get = config_.get_property
     image, url, x, y = get("image"), get("url"), get("x"), get("y")
     target, force, ctx_url, snap_id = get("target"), get("force"), get("context-url"), get("snapshot")
     name = get("name") or os.path.basename(urlsplit(url).path) or "artifact"
+    op_id = get("op-id")
     cfg, tmps = config(), []
     try:
+        done = finished(image, op_id)
+        if done:                                                        # a retry after a lost response
+            return Gimp.ValueArray.new_from_values([
+                GObject.Value(Gimp.PDBStatusType, Gimp.PDBStatusType.SUCCESS),
+                GObject.Value(Gimp.Layer, by_tattoo(image, done["layer"])),
+                GObject.Value(Gimp.GroupLayer, by_tattoo(image, done.get("group")))])
+        journal(image, op_id, proc=IMPORT, status="started", url=url)
         group = existing_group(target) if target is not None and (target.is_group() or target.get_parent() is not None) else None
         dx, dy = (0, 0)
         if snap_id:
@@ -407,8 +574,10 @@ def run_import(procedure, config_, data):
             layer.set_name(name)
         finally:
             image.undo_group_end()
+        journal(image, op_id, status="done", result={"layer": layer.get_tattoo(), "group": group.get_tattoo() if group else None})
         Gimp.displays_flush()
     except Exception as exc:  # every failure goes back to the caller as a PDB error
+        journal(image, op_id, status="failed", error=str(exc)[:300])
         return _error(procedure, IMPORT, exc)
     finally:
         for t in tmps:
@@ -424,7 +593,7 @@ class OvermindArtifacts(Gimp.PlugIn):
         return False
 
     def do_query_procedures(self):
-        return [IMPORT, GROUP, PUBLISH]
+        return [IMPORT, GROUP, PUBLISH, BLEND, STATUS]
 
     def do_create_procedure(self, name):
         rw = GObject.ParamFlags.READWRITE
@@ -445,6 +614,19 @@ class OvermindArtifacts(Gimp.PlugIn):
                 "(image) or x/y/width/height (region), and the selection over it as a mask, with this host's upload "
                 "token. Returns the snapshot id, the image and mask URLs (for Cerebrate) and the region. The snapshot's "
                 "provenance stays in the document, for importing results with snapshot=.", name)
+        elif name == BLEND:
+            procedure = Gimp.Procedure.new(self, name, Gimp.PDBProcType.PLUGIN, run_blend, None)
+            procedure.set_documentation(
+                "Poisson-blend a patch layer or group into the background's surroundings",
+                "GEGL seamless-clone over the patch's bounding box plus margin: keeps the patch's texture, matches the "
+                "background's light and colour at its edge, and writes the blended colour back into each visible patch "
+                "layer (outlines unchanged). One undo step. op-id makes it safe to re-run after a lost response.", name)
+        elif name == STATUS:
+            procedure = Gimp.Procedure.new(self, name, Gimp.PDBProcType.PLUGIN, run_status, None)
+            procedure.set_documentation(
+                "What became of an operation started with an op-id",
+                "Returns done (with its result), started (not finished), failed (with the error) or unknown, from the "
+                "document's operation journal.", name)
         else:
             procedure = Gimp.Procedure.new(self, name, Gimp.PDBProcType.PLUGIN, run_group, None)
             procedure.set_documentation(
@@ -465,6 +647,7 @@ class OvermindArtifacts(Gimp.PlugIn):
             procedure.add_string_argument("context-url", "Context URL", "Cerebrate inpaint context, for the check", "", rw)
             procedure.add_string_argument("snapshot", "Snapshot", "overmind-publish snapshot the result was computed from", "", rw)
             procedure.add_boolean_argument("force", "Force", "Place even if the check fails", False, rw)
+            procedure.add_string_argument("op-id", "Operation id", "Makes a retry after a lost response safe", "", rw)
             procedure.add_layer_return_value("layer", "Layer", "The new layer", False, rw)
             procedure.add_group_layer_return_value("group", "Group", "Its group (none without target)", True, rw)
         elif name == PUBLISH:
@@ -479,6 +662,16 @@ class OvermindArtifacts(Gimp.PlugIn):
                 procedure.add_string_return_value(rv, nick, nick, "", rw)
             for rv in ("x", "y", "width", "height"):
                 procedure.add_int_return_value(rv, rv, f"Snapshot region {rv}", 0, GLib.MAXINT, 0, rw)
+        elif name == BLEND:
+            procedure.add_layer_argument("patch", "Patch", "A patch layer, or a group of them", False, rw)
+            procedure.add_layer_argument("background", "Background", "What the patch must blend into", False, rw)
+            procedure.add_int_argument("margin", "Margin", "Pixels of surroundings around the patch", 8, 512, 48, rw)
+            procedure.add_string_argument("op-id", "Operation id", "Makes a retry after a lost response safe", "", rw)
+            procedure.add_string_return_value("report", "Report", "JSON: layers, region, seconds", "", rw)
+        elif name == STATUS:
+            procedure.add_string_argument("op-id", "Operation id", "The op-id the operation was started with", "", rw)
+            procedure.add_string_return_value("status", "Status", "done, started, failed or unknown", "", rw)
+            procedure.add_string_return_value("details", "Details", "JSON: the result or error, age_s", "", rw)
         else:
             procedure.add_layer_argument("layer", "Layer", "The object's layer", False, rw)
             procedure.add_string_argument("name", "Name", "Group name (default: the layer's)", "", rw)

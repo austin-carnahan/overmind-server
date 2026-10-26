@@ -65,6 +65,12 @@ SSD.
     context, or with `snapshot=`, that the document is unchanged since the
     snapshot.
   - `overmind-make-object-group`: groups an object's layer and anchors it.
+  - `overmind-seamless-blend`: a Poisson blend (GEGL seamless-clone) of a
+    patch layer or group into its surroundings, limited to the patch's
+    bounding box plus a margin. It's the GIMP-only **fallback**: about 100 s
+    for a bed-sized region, where Cerebrate's `seamless_blend` takes about 2 s.
+  - `overmind-op-status`: whether an operation started with an `op-id`
+    finished, and its result.
 
   The installer also runs
   [`patch-gimp-agent-bridge`](patch-gimp-agent-bridge) (below).
@@ -97,8 +103,36 @@ import and publish.
   refuse them. It's idempotent, and it fails loudly if the bridge's code
   changes shape. Re-run `install-gimp-plugins` after any bridge upgrade, then
   restart GIMP.
+- **One bridge at a time.** The same patch makes a second bridge, for
+  example from the menu item clicked again, exit if the one in the bridge
+  file is alive. Without it, the second bridge took the next port and
+  rewrote the file, and when it went away, clients were left pointing at a
+  dead port with the live bridge unreachable.
 - **Operator access stays.** The bridge's own `exec` is not an agent tool. It
   needs the bridge's local token.
+
+## Lost responses and plug-in crashes
+
+**Lost responses.** A call's response can be lost: a dropped connection, or a
+plug-in that died.
+- `overmind-seamless-blend` and `overmind-import-artifact` take an `op-id`
+  and journal their progress in the document (parasite `overmind-ops`).
+- `overmind-op-status(image, op-id)` reports `done` with the result,
+  `started` (not finished), `failed` with the error, or `unknown`.
+- Re-running with the same `op-id` after `done` returns the recorded result
+  instead of repeating the work, so a retry can't duplicate layers.
+
+**Plug-in crashes hang GIMP.** If a plug-in dies during a call, GIMP hangs
+waiting for it, and only a force-quit recovers. On 2026-10-26 this froze
+the interactive GIMP twice:
+- the GEGL graph in the blend segfaulted, because GEGL wasn't initialised in
+  the plug-in process (fixed: `Gegl.init`);
+- reproduced and fixed in a throwaway headless GIMP:
+  `GIMP3_DIRECTORY=<tmp> gimp-console -i -n --quit --batch-interpreter=python-fu-eval -b ...`
+  (the pattern `worker-reopen-check` uses).
+
+**Test new pixel-processing plug-in code headless first,** never in the
+session someone is working in.
 
 ## Object groups and alignment (open decision)
 
