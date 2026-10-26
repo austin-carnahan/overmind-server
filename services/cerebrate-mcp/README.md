@@ -186,6 +186,22 @@ The live smoke test then passed 7/7 against the deployed service:
 - the mask artifact read back as a resource;
 - the mask fed `inpaint`.
 
+**Deploy record (2026-10-26, GIMP handoff, `c50fa30`).**
+1. `up -d --build --no-deps cerebrate-mcp`; the signing key was created at
+   `/var/lib/overmind/cerebrate-mcp/url-key`.
+2. Caddy's `artifacts.home.arpa` site: `docker restart caddy`. A reload
+   didn't see the pulled Caddyfile: single-file bind mount.
+3. DNS `artifacts.home.arpa` via `scripts/sync-dns-rewrites --apply`.
+4. Buckminster's recipe via `install-buckminster-cerebrate-runbook`.
+
+End to end on bedroom.jpg (4000×3000), photo passed by path:
+- RF-DETR → EdgeSAM → `inpaint` with the mask's URL as input → an 18.5 KB
+  patch at (2167, 1386).
+- On the Mac, `gimp_pdb_call("overmind-import-artifact", …)` fetched and
+  placed it in 1.1 s.
+- Another host's URL and a tampered signature were refused.
+- Through Caddy, every path but `/artifacts/*` is 404.
+
 ## OpenClaw
 
 Run on the Gateway host (overmind-01), as a sudoer:

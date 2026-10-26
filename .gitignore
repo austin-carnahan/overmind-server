@@ -28,6 +28,7 @@ settings.json
 !/models/schema.json
 !/models/catalog.yaml
 !/models/README.md
+!/models/field-notes.md
 !/models/variants.yaml
 !/models/variants.schema.json
 !/models/registry.py

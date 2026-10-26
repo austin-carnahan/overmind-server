@@ -26,6 +26,9 @@ python3 -m venv /tmp/catalog-venv && /tmp/catalog-venv/bin/pip install pyyaml js
 /tmp/catalog-venv/bin/python3 -m unittest discover -s models/tests
 ```
 
+How the models behave on real work, and what to try next:
+[`field-notes.md`](field-notes.md).
+
 ## Browsing
 
 ```bash

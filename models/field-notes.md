@@ -1,0 +1,109 @@
+# Model field notes
+
+How the Cerebrate models behave on real work, as opposed to how they
+validated. Our recipes (which model for which step) are assumptions until
+these notes say otherwise.
+
+**How to use this file**
+- Add an entry whenever a test or a real task shows something: what was tried,
+  on what input, what happened. Include near-misses and things that went
+  well.
+- When there's a cheap chance, try a variation (another model, prompt,
+  threshold or window) and record both results. Ideas wait in **Try next**.
+- Inputs are referred to by name:
+  - **hotel-room.jpg**: the design-studio smoke-test project's source.
+  - **bedroom.jpg**: 4000×3000 phone photo,
+    `~/DesignStudio/workspaces/spike-a/` on the Mac.
+
+## Current recipes (Buckminster: [`cerebrate-gimp.md`](../services/design-studio/buckminster/cerebrate-gimp.md))
+
+| Step | Recipe today | Evidence |
+| --- | --- | --- |
+| Find objects, no prompt | RF-DETR (`fixed-class-segmentation`) | clean labels and masks on the hotel room. Only 80 classes: no "lamp" |
+| Find a named object | OWLv2 boxes → EdgeSAM | untested on real work; EfficientSAM3 missed the bedroom lamp (below) |
+| Precise mask from a box | EdgeSAM (`box-refinement`) | bed, lamp good; clipped a pillow |
+| Remove an object | inpaint with the 512 window, grow 7 px | lamp: clean wall, small residue at the base |
+| Mask → GIMP | corner-traced polygons, eps 1 px | IoU 0.998 median, 0.990 min |
+
+## Observations
+
+### Detection and labels
+- **2026-10-26, hotel-room.jpg (sample run).**
+  - RF-DETR gave the cleanest results: suitcase 0.91, bottle 0.80, bed 0.78.
+  - The YOLOE and SAM label descriptions read oddly.
+- **2026-10-26, bedroom.jpg.** The wicker lamp was named wrong by every
+  detector:
+  - RF-DETR: "vase" (0.51).
+  - YOLOE prompt-free: "ornament" (0.43). YOLOE's own "lamp" (0.63) was the
+    ceiling fan's light.
+  - YOLOE found 21 things to RF-DETR's 2, including scene labels ("living
+    space" ×3, "home interior", "dressing room", "server room") whose masks
+    are large regions, not objects.
+
+  **Takeaway:** name layers from the request or what the agent sees, not from
+  the label.
+- **2026-10-26, bedroom.jpg.** OWLv2 was refused by the capacity rule. It
+  needs 1,924 MB plus the 1,000 MB reserve, and the phone had 1,974 MB free.
+  It worked earlier the same day, so it depends on the phone's load.
+
+### Text-prompted segmentation (EfficientSAM3)
+- **2026-10-26, bedroom.jpg, full 4000×3000.** It OOM-killed MLServer: the
+  hook upsamples all kept masks to full resolution as float32. The MCP now
+  scales photos over 2048 px down first, and MLServer has survived since.
+- **2026-10-26, bedroom.jpg at 2048, prompts "wicker lamp", "lamp", "table
+  lamp", "vase".** No instances returned. The presence scores were 0.18,
+  **0.73**, 0.19 and 0.11, so it believed a lamp was there but no instance
+  cleared `score × presence > 0.5`. 13.3 s for 4 prompts.
+
+### Box → mask (EdgeSAM, SAM 2.1)
+- **2026-10-26, bedroom.jpg.** EdgeSAM on RF-DETR's boxes:
+  - bed 0.89 and the lamp gave good outlines;
+  - the bed's mask **clipped the far pillow** and left a small detached
+    fragment, visible once cut out to a layer.
+
+  4.5–4.9 s per call, at full resolution, with no memory trouble.
+
+### Inpainting (MI-GAN)
+- **2026-10-26, hotel-room.jpg (sample run).** Fine one object at a time.
+  Needed the mask grown about 7 px, or the fill picks up the object's edge.
+- **2026-10-26, bedroom.jpg, the lamp.**
+  - **Whole photo** squashed to 512: a blurred ghost, 23 s, a 15 MB PNG.
+  - **512 window** around the mask: a clean wall and continued shadow, 2.5 s
+    warm or 18 s cold, an 18.5 KB patch.
+  - **Residue:** a small smear where the lamp's base sat on the nightstand,
+    and a faint vertical shadow streak. The grown mask doesn't cover the
+    contact shadow.
+
+### Depth (Depth Anything V2)
+- **2026-10-26, hotel-room.jpg (sample run).** Very good. No issues seen.
+
+### Not for photo work
+- SmolLM2 gave absurd text on the hotel sample. Granite-Docling isn't needed
+  for this lane (it's Doclet's).
+
+### Mask → polygons (GIMP handoff)
+- **2026-10-26, bedroom.jpg, 23 masks.**
+  - Polygons through pixel *centres* lost half a pixel all round in GIMP.
+    Polygons through pixel *corners* gave IoU 0.998 median, 0.990 min.
+  - eps 1 px is about 4× smaller than RLE.
+  - eps 2 and 4 px were smaller still, but the small masks lost fidelity:
+    IoU down to 0.98 and 0.96.
+
+## Try next
+
+Run these when a test touches the step anyway.
+
+- **Remove with shadow:** grow the mask 12–15 px, or add a box below the
+  object, and compare the base residue with 7 px.
+- **Inpaint window:** a context factor of 3× instead of 2×, or a minimum of
+  768 px, on small objects. Does more surrounding help or blur?
+- **EfficientSAM3 threshold:** expose `threshold` (the hook supports it). Does
+  0.3 recover the lamp, and at what false-positive cost?
+- **Named objects:** OWLv2 → EdgeSAM vs. EfficientSAM3 vs. RF-DETR → EdgeSAM,
+  on the same phrases, when the phone has the memory.
+- **Box → mask quality:** SAM 2.1 (`box-refinement@quality`) vs. EdgeSAM on
+  the bed with its pillows.
+- **YOLOE scene labels:** filter out region-sized "scene" detections ("living
+  space", "home interior") by area or label before an agent sees them?
+- **Polygon tolerance:** eps relative to object size, e.g. 0.5 px under
+  20k px², to tighten small objects.

@@ -6,6 +6,9 @@ services:
     image: caddy:2.11.4@sha256:1172d4213087d3fc30bafc7ff2c2896180eb0c41ff7f75f315568fb36cabdcba
     container_name: caddy
     volumes:
+      # A single-file bind mount pins the file as it was at container start: after
+      # a `git pull` replaces the Caddyfile, `caddy reload` still reads the old
+      # one. Apply changes with `docker restart caddy`.
       - ./Caddyfile:/etc/caddy/Caddyfile:ro
       - caddy_data:/data
     ports:
