@@ -1,0 +1,105 @@
+#!/usr/bin/env bash
+# Time-boxed passwordless sudo for an agent working as you on this host (e.g.
+# Claude Code over ssh during an experiment block), and its revocation.
+#
+#   sudo scripts/agent-sudo grant [HOURS]   # default 8, at most 12
+#   sudo scripts/agent-sudo revoke          # any time; also what the expiry timer runs
+#   scripts/agent-sudo status               # no sudo needed
+#
+# grant writes /etc/sudoers.d/zz-agent-session for the invoking user
+# ($SUDO_USER), validated with visudo before it goes live (a broken sudoers
+# file would lock everyone out of sudo), and schedules its removal with a
+# persistent systemd timer (it still fires after a reboot that skipped the
+# expiry time). The timer runs a root-owned copy of this script in
+# /usr/local/sbin, never the copy in your (user-writable) checkout.
+#
+# Why not sudoers' own expiry: this host runs sudo-rs, which has no
+# NOTBEFORE/NOTAFTER and no sudo logfile. Every sudo call is in the journal
+# instead: journalctl -t sudo (readable by the adm group).
+#
+# Grant only ever adds one file and two units; revoke removes exactly those.
+# Nothing else in /etc/sudoers.d is touched.
+set -euo pipefail
+
+DROPIN=/etc/sudoers.d/zz-agent-session
+TMP=/etc/sudoers.d/.agent-session.tmp      # sudo ignores names with a dot: never live half-written
+UNIT=agent-sudo-expiry
+SBIN=/usr/local/sbin/agent-sudo
+MAX_HOURS=12
+
+die() { echo "agent-sudo: $*" >&2; exit 2; }
+need_root() { [ "$(id -u)" -eq 0 ] || die "run it with sudo: sudo $0 $*"; }
+
+grant() {
+    need_root grant
+    local user=${SUDO_USER:-}
+    [ -n "$user" ] && [ "$user" != root ] || die "run it with sudo from your own account (SUDO_USER is the grantee)"
+    local hours=${1:-8}
+    [[ $hours =~ ^[0-9]+$ ]] && [ "$hours" -ge 1 ] && [ "$hours" -le $MAX_HOURS ] || die "HOURS: 1..$MAX_HOURS"
+    local now until
+    now=$(date '+%Y-%m-%d %H:%M:%S')
+    until=$(date -d "+$hours hours" '+%Y-%m-%d %H:%M:%S')
+
+    install -m 0755 -o root -g root "$(readlink -f "$0")" "$SBIN"
+    umask 0337
+    cat > "$TMP" <<EOF
+# Temporary, from agent-sudo: granted $now for $user, expires $until.
+# Remove with: sudo agent-sudo revoke
+$user ALL=(ALL:ALL) NOPASSWD: ALL
+EOF
+    chown root:root "$TMP"; chmod 0440 "$TMP"
+    visudo -c -f "$TMP" >/dev/null || { rm -f "$TMP"; die "the drop-in didn't validate; nothing changed"; }
+    mv -f "$TMP" "$DROPIN"
+    if ! visudo -c >/dev/null; then                     # the whole configuration, with the drop-in live
+        rm -f "$DROPIN"; die "sudoers didn't validate with the drop-in; removed it, nothing changed"
+    fi
+
+    cat > /etc/systemd/system/$UNIT.service <<EOF
+[Unit]
+Description=Revoke agent-sudo's temporary sudo grant
+[Service]
+Type=oneshot
+ExecStart=$SBIN revoke
+EOF
+    cat > /etc/systemd/system/$UNIT.timer <<EOF
+[Unit]
+Description=Expire agent-sudo's temporary sudo grant ($until)
+[Timer]
+OnCalendar=$until
+Persistent=true
+[Install]
+WantedBy=timers.target
+EOF
+    systemctl daemon-reload
+    systemctl enable --now $UNIT.timer >/dev/null
+    logger -t agent-sudo "granted passwordless sudo to $user until $until"
+    echo "granted: $user has passwordless sudo until $until"
+    echo "revoke any time: sudo agent-sudo revoke    | audit: journalctl -t sudo --since '$now'"
+}
+
+revoke() {
+    need_root revoke
+    rm -f "$DROPIN" "$TMP"
+    systemctl disable --now $UNIT.timer >/dev/null 2>&1 || true
+    rm -f /etc/systemd/system/$UNIT.service /etc/systemd/system/$UNIT.timer
+    systemctl daemon-reload
+    logger -t agent-sudo "revoked the temporary sudo grant"
+    echo "revoked: no temporary sudo grant (sudo asks for a password again)"
+}
+
+status() {
+    if [ -e "$DROPIN" ]; then
+        echo "granted; expiry timer:"
+        systemctl list-timers $UNIT.timer --no-pager 2>/dev/null | sed -n '1,2p'
+    else
+        echo "no temporary grant"
+    fi
+    echo "recent sudo calls:"; journalctl -t sudo -n 10 --no-pager 2>/dev/null | grep -F COMMAND || true
+}
+
+case ${1:-} in
+    grant) shift; grant "$@" ;;
+    revoke) revoke ;;
+    status) status ;;
+    *) sed -n '2,8p' "$0"; exit 2 ;;
+esac
