@@ -3,9 +3,25 @@
 **When this applies:** changing what a surface looks like while keeping it in place: repainting a wall
 (and, as the capstone continues, recolouring fabric or replacing a material).
 
-## Repainting a wall [demonstrated, E01]
+## Repainting walls [demonstrated, E01]
 
-**The mask** is most of the work:
+**The masks** are most of the work. Make one per wall, so each wall can take its own colour (accent wall,
+two-plus-one) or all can share one.
+
+**Bound each wall by its real edges, not by segmentation** [demonstrated]: a polygon from the corner
+line, the ceiling line, the baseboard top and any casing or frame edge, read off a `gimp_render` with
+`overlay=["grid"]` (zoomed with `region`). Verticals lean in a photo taken looking slightly down or up:
+read both ends of every edge, never assume a vertical line. Segmenting the wall itself (SAM boxes) kept
+losing pieces: the light splits it, and a cut along an assumed vertical lost a whole triangle. Use
+Cerebrate for what stands **in front of** the wall instead, and make neighbouring walls exclusive
+(subtract one wall's mask from the next).
+
+**Check coverage before colour** [demonstrated]: overlay every wall's mask on the photo (publish each
+channel as a mask, or render it) and look for unmasked wall before judging any paint. Gaps are obvious
+there and easy to miss in a painted render. In E01 this caught a keep-out mask (a casing candidate) that
+had spilled over the neighbouring wall and erased it.
+
+Older notes on segmenting a single wall, still useful for what stands in front of it:
 
 1. Segment the wall with SAM 2.1 candidates ([scene and objects](scene-and-objects.md)). A large surface
    splits where the light changes: give it more than one box (upper and lower wall) and combine the best
@@ -20,7 +36,8 @@
    keep-out leaves a visible rim of the old colour instead.
 5. Save the result as a channel ("Back wall (paint mask)") so every paint layer can use it.
 
-**The colour:** one pass-through group per paint colour, inside the surface's group, containing:
+**The colour:** per wall, one pass-through group per paint colour ("Back: Clary Sage" -- GIMP renames duplicate
+names), containing:
 
 - a **lift**: a grey layer in **Divide** mode, grey = 1 / k in linear light, where
   k = luminance(new paint) / luminance(old paint) (e.g. ×1.9 for Clary Sage over a mid grey);

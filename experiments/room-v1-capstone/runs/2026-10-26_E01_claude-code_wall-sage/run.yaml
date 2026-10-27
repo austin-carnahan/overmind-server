@@ -3,7 +3,7 @@ run_id: 2026-10-26_E01_claude-code_wall-sage
 condition: exploratory
 status: pass
 started: 2026-10-26T19:55
-finished: 2026-10-26T21:05
+finished: 2026-10-26T22:10
 
 agent:
   name: Claude Code
@@ -22,12 +22,13 @@ capabilities:
 inputs:
   scene: bedroom_v1
   assets: [paint_clary_sage, paint_evergreen_fog, paint_goldenrod, paint_neutral_control]
-  instruction: "Repaint the back wall a muted sage green; test a mustard alternative."
+  instruction: "Repaint the back wall a muted sage green; test a mustard alternative." Then (user, mid-run): recolour all three walls, ceiling excluded, and support accent / two-plus-one schemes; attempts reset for the wider scope.
 
 outputs:   # ~/DesignStudio/workspaces/room-v1-capstone/runs/2026-10-26_E01_claude-code_wall-sage/
-  xcf: working.xcf                 # Room > Back wall paint > Attempt 3: lightness lift + LCh colour > 3 variants
+  xcf: working.xcf                 # Room > Wall paint > Left/Back/Right wall > 3 colours each (lift + LCh Color)
   before: before.png
-  clean: [after-clean-clary-sage.png, after-clean-evergreen-fog.png, after-clean-goldenrod.png]
+  clean: [after-clean-all-clary-sage.png, after-clean-all-goldenrod.png, after-clean-accent-back-goldenrod.png, after-clean-sides-evergreen-back-sage.png]
+  coverage: [coverage-attempt1.png .. coverage-attempt4.png]   # whole-room phase
   annotated: after-annotated.png
   attempts: [after-clean-clary-sage.png (1, replaced by 4), attempt2-clary-sage.png, attempt3-clary-sage.png, attempt3b-*.png, attempt4-*.png]
   calls: calls.jsonl
@@ -47,7 +48,20 @@ attempts:
     result: "reads as the intended colours with the photo's shading; edge halo from a 4 px keep-out, ragged corner"
   - n: 4
     method: "mask refinement: corner strip to the ceiling line, keep-out 2 px, 2 px feather, cut 8 px above the baseboard"
-    result: "clean corner, trim, nightstand and baseboard edges -- chosen"
+    result: "clean corner, trim, nightstand and baseboard edges; but the user saw that a triangle of the back wall (top right) was missing -- the mask was cut by a vertical line at the door casing's floor position, while the casing leans"
+whole_room_attempts:             # scope widened by the user; attempt count reset
+  - n: 1
+    method: "geometry first: each wall a polygon from its real edges (corner x~1690, ceiling lines, baseboard lines, the casing's leaning edge read off gridded renders); right wall = EfficientSAM3 'wall' instance; minus a 2 px keep-out; walls made exclusive; one paint group per wall with three colours"
+    result: "left and back walls complete (triangle fixed); the near right wall missing -- the user caught it; a coverage view (masks overlaid) shows it at once"
+  - n: 2
+    method: "right wall as a polygon right of the casing's outer edge"
+    result: "still a sliver: the keep-out's casing candidate (SAM 0.91) also covered most of that wall, so subtracting it erased it -- found by the coverage view"
+  - n: 3
+    method: "right wall without the keep-out (its polygon already stops at the casing)"
+    result: "all three walls covered; a small grey wedge above the casing crown, between the back and right polygons"
+  - n: 4
+    method: "add the wedge (ceiling corner, crown top edge) to the right wall"
+    result: "complete coverage; clean edges; a hairline beside the crown's left return -- chosen"
 
 interfaces:
   mcp_tools:
@@ -81,9 +95,12 @@ beyond_buckminster:
     why: "SAM's masks stopped short of the corner"
     mcp_alternative: "read two points off a gimp_render with grid overlay; good enough for a polygon"
     tradeoffs: "a few px less precise"
-interventions: []
+interventions:
+  - "User: the back wall's top-right triangle was never painted, and all three walls should be recolourable (accent / two-plus-one schemes)."
+  - "User: the near section of the right wall (right of the door casing) was missing -- 'you should be checking this'."
+  - "User: attempts reset for the wider scope; stop after each experiment with results, evaluation and a recommendation."
 observations:
   worked: "Recolour = grey Divide lift by the paint-to-paint luminance ratio + LCh Color layer with the swatch, masked to the wall, one pass-through group per colour. Keeps all shading; three variants toggle."
-  failed: "Per-channel albedo swaps carry the photo's colour cast (tan instead of sage) or explode (11x); masks overlapping bright trim glow when brightened."
-  follow_up: "gimp_measure can't read the composite. SAM splits a wall where the light changes: segment large surfaces with more than one box."
+  failed: "Per-channel albedo swaps carry the photo's colour cast (tan instead of sage) or explode (11x); masks overlapping bright trim glow when brightened. Segmenting walls (SAM boxes) kept losing pieces; vertical cut lines miss leaning edges; a keep-out candidate that spills erases what it should protect."
+  follow_up: "Check mask coverage (all masks over the photo) before judging colour -- I missed the right wall until the user pointed it out. gimp_measure can't read the composite."
 skill_updates: [9bfc5d9]

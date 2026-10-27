@@ -28,3 +28,22 @@ clean. A little old wall shows through the stool's leg openings.
 
 Recolour a surface by **lightness lift + LCh Color**, with the lift = new paint luminance / old paint
 luminance. Open: estimating the old paint colour better than a sampled neutral.
+
+## Whole room (scope widened mid-run)
+
+The first result painted most of the back wall only, and missed its top-right triangle: I had bounded the
+wall with a vertical line at the casing's position at floor level, but the camera looks slightly down,
+so verticals lean outward toward the top of the frame. Recolouring all three walls with per-wall colour
+groups exposed more:
+
+- **Geometry first works better than segmenting walls.** Each wall became a polygon from its real edges
+  (corner, ceiling line, baseboard line, the casing's leaning edge), read off gridded renders; Cerebrate
+  only supplied what stands in front of the walls (windows with trim, nightstand, lamp, stool).
+- **Check coverage before colour.** Overlaying every wall mask on the photo shows gaps instantly. I missed
+  the near right wall twice: once because `segment_by_text`'s right-wall instance covered only its top,
+  then because the casing candidate in the keep-out spilled over that wall and erased it.
+- Per-wall groups make schemes trivial: all Clary Sage, a Goldenrod accent on the back wall, Evergreen Fog
+  sides with a Clary Sage back.
+
+Remaining: a hairline of old wall beside the casing crown's left return; walls seen through the stool's
+openings keep the old colour.

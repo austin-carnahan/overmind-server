@@ -56,7 +56,7 @@ class Session:
     async def __aexit__(self, *exc):
         await self._g.__aexit__(*exc)
         await self._c.__aexit__(*exc)
-        self.log.close()
+        self.log.flush()                         # stays open: local() may still record after the MCP sessions end
 
     async def open_image(self, path):
         """The image for path: the already-open one if GIMP has it, else gimp_open. Returns its image_info."""
