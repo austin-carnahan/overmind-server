@@ -89,4 +89,4 @@ observations:
   worked: "Checking the camera against itself (one ceiling height everywhere, the vertical VP predicted) found v2's real flaw; 3D-clipped planes then line up with no hand-fitting. A grazing photographed surface still carries usable detail (the doorway). Rotationally symmetric fixtures (the fan) are free sprites."
   failed: "Plane-shift copies across a lit wall show as rectangles (use MI-GAN on plain wall); faces near edge-on and stray cut islands fling slivers far across the view; gimp-image-delete and gimp_close_image fail on an image with a window."
   follow_up: "Paint the bed side with a skirt-stripe texture rather than flat; a skirt ghost on the floor; wear on the casing."
-skill_updates: []
+skill_updates: [4829eff]
