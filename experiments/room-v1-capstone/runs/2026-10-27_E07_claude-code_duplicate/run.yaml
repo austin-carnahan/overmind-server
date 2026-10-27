@@ -1,0 +1,72 @@
+experiment: E07
+run_id: 2026-10-27_E07_claude-code_duplicate
+condition: exploratory
+status: pass
+started: 2026-10-27T04:30
+finished: 2026-10-27T05:00
+
+agent:
+  name: Claude Code
+  harness: "Claude Code VS Code extension 2.1.308"
+  model: claude-opus-5-5
+skills:
+  revision: 689f229
+  loaded: [gimp, interior-scene-editing]
+capabilities:
+  gimp_agent_mcp: "0.5.0 (38 tools, Python off)"
+  gimp: "3.2.6"
+  overmind_gimp_plugin: a23557b
+  cerebrate_mcp: "291e3c9, image sha256:8718726f4c13"
+  extra: ["Python on the Mac (pixel comparisons only)", "shell on the Mac"]
+
+inputs:
+  scene: bedroom_v1
+  assets: []
+  instruction: "Create a second matching nightstand or lamp and place it on the other side."
+
+outputs:   # ~/DesignStudio/workspaces/room-v1-capstone/runs/2026-10-27_E07_claude-code_duplicate/
+  xcf: working3.xcf                # top-level "Nightstand (copy)" group (+ its pristine copy in Placement originals); working.xcf / working2.xcf = attempts 1-2
+  before: before.png
+  clean: after-clean.png
+  annotated: after-annotated.png
+  placements: [place-A.png, place-B.png, place-A-again.png]
+  attempts: [attempt1-place-A.png, attempt1-place-B.png, attempt2-place-A.png, attempt2-place-B.png, attempt2-place-A-again.png]
+
+checks:                            # the experiment's three checks
+  independent_group: "pass: its own anchored object group 'Nightstand (copy)' (nightstand + lamp + continued panel + grounding), placed and moved on its own"
+  pristine_reuse: "pass: placed at A (x0.884), moved to B, placed back at A -- the group's pixels identical to the first placement (numeric check)"
+  believable_occlusion: "pass: overmind-place-on-floor restacked it behind Bed, Rug and the original Nightstand, in front of nothing nearer"
+  original_untouched: "pass: the original Nightstand group's pixels identical before and after (numeric check)"
+  no_resegmentation: "pass: the copy was cut from the photo with the existing Nightstand and Lamp layers' alpha as the selection"
+
+attempts:
+  - n: 1
+    method: "selection = existing nightstand + lamp alpha; duplicate the photo layer masked to it; overmind-make-object-group; flip; contact shadow + foot contact before the first placement; overmind-place-on-floor at A, B, A"
+    result: "all checks pass; the copy's left edge jagged (the side panel the stool hid, now on the outside after mirroring)"
+  - n: 2
+    method: "continue the hidden side panel from the visible one before mirroring (E04's fix)"
+    result: "panel continuous; a dark strip remains at the edge: the wall shadow the existing cutout carries along its right side"
+  - n: 3
+    method: "intersect the selection with E04's trim line along the side panel before cutting"
+    result: "clean -- chosen"
+model_comparison: {}               # no models: reused existing cutouts by design
+coverage_check: "zoomed renders of the copy's edges at A and B"
+
+interfaces:
+  mcp_tools:
+    - "gimp_pdb_call: gimp-image-select-item (existing layers' alpha), select-polygon (trim), overmind-make-object-group, gimp-item-transform-flip-simple, overmind-place-on-floor x3"
+    - "gimp_layer duplicate/move/add_alpha/crop/new/scale/set/reorder, gimp_layer_mask, gimp_draw fill_selection, gimp_apply_filter gaussian-blur, gimp_render (incl. layer_id renders for the pixel checks)"
+  models: []
+  scripts_or_direct: ["NumPy equality checks on rendered group pixels (verification only)"]
+beyond_buckminster:
+  - step: "pixel-identity checks"
+    capability: "NumPy comparison of renders"
+    why: "proof, not judgement"
+    mcp_alternative: "gimp_snapshot + gimp_render_compare (diff panel) shows the same by eye"
+    tradeoffs: "none for the result; only the strength of the evidence"
+interventions: []
+observations:
+  worked: "Duplicate = cut a fresh layer from the photo using the existing cutouts' alpha (no models), new object group, complete and trim before mirroring, ground before placing, then overmind-place-on-floor: independent, re-placeable without loss, depth-stacked automatically."
+  failed: "Skipping the known pre-mirror fixes (hidden panel, shadow strip) reproduces E04's flaws."
+  follow_up: "A lighting asymmetry remains: the mirrored copy's shaded side faces the window (as in E04)."
+skill_updates: []

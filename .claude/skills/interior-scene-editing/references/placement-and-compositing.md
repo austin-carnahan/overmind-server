@@ -66,7 +66,18 @@ light **before the first placement**, or edit the pristine copy and place again.
 Limits: the object keeps the viewpoint and light direction of its source photo; choose sources shot from
 roughly the room camera's height and angle.
 
-## Mirroring or duplicating an object [demonstrated, E04]
+## Duplicating an object [demonstrated, E07]
+
+1. **No re-segmentation:** select the object's existing cutout layers' alpha (`gimp-image-select-item`, add the
+   objects it supports, e.g. its lamp), duplicate the photo layer, mask to the selection, apply, crop. The
+   copy is a fresh layer; `overmind-make-object-group` gives it its own anchor.
+2. **Before mirroring,** complete what the original hid and trim stray shadow the old cutout carried
+   (next section) — the mirror puts them on the outside.
+3. **Ground it before the first placement** (contact shadow + foot contact inside the group).
+4. **Place it with `overmind-place-on-floor`:** perspective scale and depth stacking come for free, and
+   every later placement rebuilds from its pristine copy (placing it back gives identical pixels).
+
+## Mirroring an object [demonstrated, E04]
 
 - **Where a mirror is plausible:** a flipped copy shows the opposite side of the object, which is right
   only on the other side of the camera's view axis (an object right of centre shows its left side; its
