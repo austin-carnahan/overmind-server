@@ -72,4 +72,4 @@ observations:
   worked: "Faking it in layers: unseen walls painted from their sampled colour + gradient, a door painted front-on and warped into place, textures continued by shifted copies, furniture as boxes and sprites, then framing."
   failed: "Unbounded perspective warps can hang GIMP for minutes and exhaust memory; reorder positions inside groups are easy to get wrong; brightness/contrast on a dark painted surface washes it out."
   follow_up: "Wear and softness on painted elements (noise, slight blur, edge darkening); a Poisson blend (seamless_blend) for floor-copy seams."
-skill_updates: []
+skill_updates: [b302279]
