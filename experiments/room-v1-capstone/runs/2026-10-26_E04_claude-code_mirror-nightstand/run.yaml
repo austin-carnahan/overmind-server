@@ -1,0 +1,72 @@
+experiment: E04
+run_id: 2026-10-26_E04_claude-code_mirror-nightstand
+condition: exploratory
+status: pass                      # a plausible approximation (see observations)
+started: 2026-10-26T23:05
+finished: 2026-10-26T23:40
+
+agent:
+  name: Claude Code
+  harness: "Claude Code VS Code extension 2.1.308"
+  model: claude-opus-5-5
+skills:
+  revision: 843cc2b
+  loaded: [gimp, interior-scene-editing]
+capabilities:
+  gimp_agent_mcp: "0.5.0 (38 tools, Python off)"
+  gimp: "3.2.6"
+  overmind_gimp_plugin: a23557b
+  cerebrate_mcp: "291e3c9, image sha256:8718726f4c13"
+  extra: ["Python + bridge client on the Mac", "shell on the Mac"]
+
+inputs:
+  scene: bedroom_v1
+  assets: []
+  instruction: "Mirror the existing nightstand and position it opposite the bed. (User: be open to different models.)"
+
+outputs:   # ~/DesignStudio/workspaces/room-v1-capstone/runs/2026-10-26_E04_claude-code_mirror-nightstand/
+  xcf: working.xcf                 # "Nightstand (mirrored)" object group (nightstand + lamp + continued panel + grounding)
+  before: before.png
+  clean: after-clean.png
+  annotated: after-annotated.png
+  attempts: [attempt1.png, attempt2.png, attempt3.png]
+  calls: calls.jsonl
+
+model_comparison:                # same nightstand and lamp, same snapshot
+  existing_edgesam_exp1: "body and legs right; includes a jagged strip of wall shadow on the right side"
+  sam21_candidates: "c0 0.925 best (same strip); c1 fills the gap between the legs; c2 fragments the drawer"
+  edgesam_now: "score 1.00; its lamp mask includes the lamp's wall shadow"
+  efficientsam3_text: "'a nightstand' presence 0.22, 'a table lamp' 0.03: no detections at the default threshold"
+  lamp_box: "all SAM 2.1 lamp candidates take a bulge of wall shadow with a loose box; a tight box (2168,1386,2268,1552) excludes it"
+  chosen: "SAM 2.1 c0 trimmed along the side panel's edge + SAM 2.1 lamp with a tight box"
+
+attempts:
+  - n: 1
+    method: "nightstand + lamp cut from the room photo into one object group; flipped horizontally (gimp-item-transform-flip-simple, no selection active); flattened-silhouette shadow + foot contact added before placing; placed near the corner at the original's distance in front of the baseboard (x0.88)"
+    result: "a plausible pair; the copy's left side panel ends in a jagged edge -- in the photo the stool hid that part of the panel"
+  - n: 2
+    method: "continue the hidden side panel from the visible panel, 40 px across (shifted copy), before flipping"
+    result: "panel continuous, but a dark patch at its bottom corner (source rows included the shadow under the rail)"
+  - n: 3
+    method: "stop the continuation just above the bottom rail"
+    result: "clean -- chosen"
+
+interfaces:
+  mcp_tools:
+    - "cerebrate segment_region (SAM 2.1 @quality candidates; EdgeSAM), segment_by_text (EfficientSAM3)"
+    - "gimp_pdb_call: overmind-publish, gimp-image-select-polygon/rectangle/item, overmind-make-object-group, gimp-item-transform-flip-simple, overmind-place-on-floor"
+    - "gimp_layer (duplicate/move/add_alpha/crop/new/scale/set/reorder/delete), gimp_layer_mask, gimp_draw fill_selection, gimp_apply_filter gaussian-blur, gimp_render, gimp_text (HUD)"
+  models: ["SAM 2.1 (box-refinement@quality)", "EdgeSAM (box-refinement)", "EfficientSAM3 (text)"]
+  scripts_or_direct: ["Python MCP client", "NumPy/PIL: mask overlays and the side panel's edge profile (columns where the mask ends)"]
+beyond_buckminster:
+  - step: "comparing models' masks and profiling the panel edge"
+    capability: "local overlays and per-row mask extents (NumPy)"
+    why: "a fair side-by-side of five masks, and a straight trim line"
+    mcp_alternative: "import masks as layers and gimp_render them; read the edge off a gridded render"
+    tradeoffs: "same choice, slower; the trim line a few px less precise"
+interventions: []
+observations:
+  worked: "Mirroring a supported pair as one group (nightstand + lamp) and flipping the group; placing it where the camera geometry makes a mirror plausible (the other side of the view axis, same distance from the wall); grounding before the first placement."
+  failed: "A mirrored copy shows what was hidden in the original (the stool hid the side panel's lower corner): complete it before flipping. The flip mirrors the lighting: the copy's shaded side faces the window."
+  follow_up: "EfficientSAM3 is weak here (no detections for 'nightstand'/'table lamp'); SAM 2.1 candidates remain the default; keep box prompts tight to exclude cast shadows."
+skill_updates: [9382592]
