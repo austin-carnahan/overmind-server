@@ -58,4 +58,4 @@ observations:
   worked: "Whole-group depth order (from floor anchors) handled every physically valid concealment, including thin legs and arm gaps, without local occlusion masks."
   failed: "Anything that isn't an object group (the stool inside the Room layer) can't occlude; new object groups need restacking; placement has no wall or collision check."
   follow_up: "Candidate primitives (observations): 'restack by depth' for a group without moving it; destination validation (behind a wall line / overlapping a footprint)."
-skill_updates: []
+skill_updates: [c271c76]
