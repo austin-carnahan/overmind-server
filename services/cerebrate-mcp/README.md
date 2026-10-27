@@ -349,8 +349,9 @@ The live run:
 
 ## GIMP handoff
 
-Buckminster's recipe is
-[`services/design-studio/buckminster/cerebrate-gimp.md`](../design-studio/buckminster/cerebrate-gimp.md):
+The call contracts are in
+[`services/design-studio/buckminster/cerebrate-gimp.md`](../design-studio/buckminster/cerebrate-gimp.md)
+(editing procedures: the `interior-scene-editing` skill):
 1. source path → Cerebrate;
 2. polygons → `gimp-image-select-polygon`;
 3. duplicate layer + selection mask → cutout layer;

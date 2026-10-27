@@ -87,8 +87,12 @@ SSD.
 
   The installer also runs
   [`patch-gimp-agent-bridge`](patch-gimp-agent-bridge) (below).
-- [`buckminster/cerebrate-gimp.md`](buckminster/cerebrate-gimp.md) is
-  Buckminster's Cerebrate → GIMP recipe. Install it into its workspace with
+- [`buckminster/cerebrate-gimp.md`](buckminster/cerebrate-gimp.md) is the
+  Cerebrate ⇄ GIMP tool-contract adapter: exact calls, returns, refusals.
+  What to edit and why is in the shared skills,
+  [`.claude/skills/gimp`](../../.claude/skills/gimp/SKILL.md) and
+  [`.claude/skills/interior-scene-editing`](../../.claude/skills/interior-scene-editing/SKILL.md).
+  Install the adapter into Buckminster's workspace with
   `sudo bash install-buckminster-cerebrate-runbook` (on Overmind).
 - [`design-checkpoint`](design-checkpoint) runs **on Overmind as `openclaw`**
   and uses only the Python standard library. It pulls files with
@@ -155,8 +159,8 @@ displays, so close such windows by hand. Not patched.
 ## Object groups and alignment (open decision)
 
 Agent edits keep each object in a layer group, holding its original pixels
-and its repairs (see Buckminster's recipe,
-[`buckminster/cerebrate-gimp.md`](buckminster/cerebrate-gimp.md)). Every
+and its repairs (see the
+[`interior-scene-editing`](../../.claude/skills/interior-scene-editing/SKILL.md) skill). Every
 layer is still movable on its own. With the Move tool's default "Pick a layer
 or guide", dragging on the canvas grabs whatever is under the cursor (a
 patch, a cutout), and that member drifts out of alignment with its group.

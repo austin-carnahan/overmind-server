@@ -55,7 +55,8 @@ Read [README.md](README.md) and [the design index](design-notes/README.md) first
 
 `hosts/` selects machine roles/settings; `services/` owns deployment notes and
 service helpers; `agents/` contains shared authored behavior; `runbooks/` contains
-operational procedures. `design-notes/history/` is historical evidence, not a
+operational procedures; `.claude/skills/` holds shared agent skills (GIMP and
+interior scene editing, [README](.claude/skills/README.md)). `design-notes/history/` is historical evidence, not a
 source of current instructions. Current design docs take precedence over it.
 
 ## Change procedure
