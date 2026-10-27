@@ -1,0 +1,67 @@
+experiment: E08
+run_id: 2026-10-27_E08_claude-code_wall-art
+condition: exploratory
+status: pass
+started: 2026-10-27T05:10
+finished: 2026-10-27T05:40
+
+agent:
+  name: Claude Code
+  harness: "Claude Code VS Code extension 2.1.308"
+  model: claude-opus-5-5
+skills:
+  revision: af13a37
+  loaded: [gimp, interior-scene-editing]
+capabilities:
+  gimp_agent_mcp: "0.5.0 (38 tools, Python off)"
+  gimp: "3.2.6"
+  overmind_gimp_plugin: a23557b
+  cerebrate_mcp: "291e3c9, image sha256:8718726f4c13"
+  extra: ["Python + NumPy on the Mac (homography, metric rectification)", "shell on the Mac"]
+
+inputs:
+  scene: bedroom_v1
+  assets: [wall_art]
+  instruction: "Hang an imported artwork on the wall; optionally try a new window dressing."
+
+outputs:   # ~/DesignStudio/workspaces/room-v1-capstone/runs/2026-10-27_E08_claude-code_wall-art/
+  xcf: working.xcf                 # "Wall art (framed print)": warped print + room light (Multiply 70%) + drop shadow (appended effect)
+  before: before.png
+  clean: after-clean.png
+  annotated: after-annotated.png
+  attempts: [attempt1.png, attempt2.png]
+  cutout: art-cutout.png
+
+attempts:
+  - n: 1
+    method: "frame cut out (SAM 2.1, largest candidate, outer rings only); placed right of the back wall's small window in the trim's rectified coordinates (homography, window W/H guessed 1.2); gimp-item-transform-perspective; Multiply light 70%; dropshadow appended"
+    result: "in perspective but stretched: ~2.2:1 on screen vs the print's 1.58 -- a wrong window ratio makes the rectified wall anisotropic"
+  - n: 2
+    method: "window W/H measured by metric rectification: the window's own two vanishing points + the camera focal length (2393 px) -> 1.61 (edge directions 85 deg apart: a consistency check); print 1.06 window widths, centred on the window's height"
+    result: "right proportions; nearer right edge taller; verticals lean as the 12-degree camera tilt predicts (25 px / 64 px over the frame) -- chosen"
+model_comparison:
+  sam21: "on the whole-frame box: c0 0.91, c1 0.56, c2 0.78, all frame-shaped; used the largest (c1), outer rings only -- the frame is solid"
+coverage_check: "zoomed render of the frame edges and wall contact"
+related_findings:
+  - "E06's left window measures W/H 1.57 by the same method, against the 1.3 used there: the curtain widths are slightly off (listed under Revisit later)."
+  - "The back wall's ceiling and baseboard lines meet at (95, 1182), far from the baseboard-pair vanishing point (-1212, 855): the room camera's back-wall direction is unreliable; local rectangles are the better reference."
+
+interfaces:
+  mcp_tools:
+    - "gimp_open (asset), overmind-publish, cerebrate segment_region (SAM 2.1 candidates)"
+    - "gimp_pdb_call: gimp-image-select-polygon/item, gimp-file-load-layer, gimp-image-insert-layer, gimp-item-transform-perspective"
+    - "gimp_layer, gimp_layer_mask, gimp_measure histogram (nightstand white), gimp_apply_filter dropshadow (append), gimp_export, gimp_render"
+  models: ["SAM 2.1"]
+  scripts_or_direct: ["NumPy: window homography, metric rectification (window W/H), corner positions", "PIL grids for reading corners"]
+beyond_buckminster:
+  - step: "placement corners and the window's true ratio"
+    capability: "homography + metric rectification (NumPy)"
+    why: "guessed ratios visibly distort the art (attempt 1)"
+    mcp_alternative: "the same 'map points from a wall rectangle' primitive as E06, plus a known real size (a door, a standard window) when the ratio can't be measured"
+    tradeoffs: "by eye, an agent can still place art with gimp-item-transform-perspective, but proportions will drift"
+interventions: []
+observations:
+  worked: "Wall decor via a nearby real rectangle on the same wall: rectify it (true aspect from its own vanishing points + focal length), place the item in those coordinates, warp with transform-perspective, light by Multiply, soft appended shadow."
+  failed: "A guessed rectangle ratio stretches the art."
+  follow_up: "Optional window-dressing variant not repeated (done in E06). Revisit E06 with the measured 1.57 ratio."
+skill_updates: []

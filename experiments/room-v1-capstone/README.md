@@ -69,3 +69,4 @@ Experiments closed short of good enough, kept for a later enhancement pass:
 | --- | --- | --- |
 | [E03 material replacement](runs/2026-10-27_E03_claude-code_pattern/run.yaml) | partial (accepted 2026-10-27) | The print doesn't follow the folds: a displace-by-map operation (shading as the map) — `gegl:displace` needs an aux input `gimp_apply_filter` can't pass. Also the faint face line and the rim at the blanket edge. |
 | [E05 simulated rotation](runs/2026-10-27_E05_claude-code_rotation/run.yaml) | pass for solid furniture (accepted 2026-10-27) | The bed's near corner where the hanging blanket crosses the box edge; pillows for the −90° variant; a quad-to-quad warp or "rotate box on floor" primitive so an MCP-only agent can do C3D. |
+| [E06 perspective warping](runs/2026-10-27_E06_claude-code_perspective/run.yaml) | pass (accepted 2026-10-27) | Re-place the curtains with the window's measured W/H (1.57, found in E08) instead of the guessed 1.3. |

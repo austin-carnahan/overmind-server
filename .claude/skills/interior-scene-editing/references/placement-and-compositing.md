@@ -100,6 +100,10 @@ Curtains, a framed print, a panel: anything flat on a wall.
    rectified coordinates (width/height ratio from the real object or an estimate) are the wall's coordinate
    system: place the item there (e.g. a curtain from the rod's height to below the sill, overlapping the
    trim).
+   **Measure the rectangle's true width/height, don't guess it** [demonstrated, E08]: from its two vanishing
+   points (horizontal and vertical edge pairs) and the camera's focal length (metric rectification); a wrong
+   ratio makes the wall space anisotropic and visibly stretches anything placed in it. The recovered edge
+   directions should be ~90° apart (85° in E08): a check.
 3. Map the item's four corners from those coordinates into the image with the rectangle's homography
    **[gap]** (numerical). Interpolating linearly along the image lines instead gets depth wrong: the far
    side comes out too wide.
