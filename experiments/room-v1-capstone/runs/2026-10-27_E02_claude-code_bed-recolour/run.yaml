@@ -1,0 +1,73 @@
+experiment: E02
+run_id: 2026-10-27_E02_claude-code_bed-recolour
+condition: exploratory
+status: pass
+started: 2026-10-27T00:00
+finished: 2026-10-27T00:35
+
+agent:
+  name: Claude Code
+  harness: "Claude Code VS Code extension 2.1.308"
+  model: claude-opus-5-5
+skills:
+  revision: 9382592
+  loaded: [gimp, interior-scene-editing]
+capabilities:
+  gimp_agent_mcp: "0.5.0 (38 tools, Python off)"
+  gimp: "3.2.6"
+  overmind_gimp_plugin: a23557b
+  cerebrate_mcp: "291e3c9, image sha256:8718726f4c13"
+  extra: ["Python + bridge client on the Mac", "shell on the Mac"]
+
+inputs:
+  scene: bedroom_v1
+  assets: [paint_goldenrod, paint_clary_sage]
+  instruction: "Recolor the bed upholstery or pillows, retaining their shape and shading."
+
+outputs:   # ~/DesignStudio/workspaces/room-v1-capstone/runs/2026-10-27_E02_claude-code_bed-recolour/
+  xcf: working.xcf                 # Bed > "Recolour: pillows (Goldenrod)", "Recolour: skirt (Clary Sage)" (made in the pristine copy)
+  before: before.png
+  clean: after-clean.png
+  moved: after-clean-moved.png     # same recolour after moving the bed (attempt 1 masks)
+  annotated: after-annotated.png
+  calls: calls.jsonl
+
+attempts:
+  - n: 1
+    method: "segment the skirt on the bed's pristine copy (raised to the top of the stack and shown in place of the live bed, so masks align); recolour groups (lift + LCh Color) inside the pristine copy: pillows Goldenrod masked by their own alpha, skirt Clary Sage (SAM 2.1 c0 within the fabric layers); lift from each fabric's median, capped 0.5-1.3; place home, move, home again"
+    result: "recolour survives every placement; folds kept; a pale fringe round the pillows (the body cutout holds pillow pixels underneath) and a sliver where the skirt meets the blanket"
+  - n: 2
+    method: "grow the masks (pillows 3 px, skirt 2 px) inside the bed's own pixels"
+    result: "fringe gone; a faint tinted rim at one pillow's base (its contact shadow is part of the cutout) -- chosen"
+model_comparison:
+  first_try: "all models scored ~0 because the snapshot showed no bed: the pristine copy sits under the opaque Room group; raising its container fixed it"
+  sam21: "c0 0.95: striped skirt + ruffle, blanket excluded -- chosen; c1 0.90 adds blanket edge; c2 0.82 fragmented"
+  edgesam: "0.84: misses the left end"
+  efficientsam3: "'bed skirt' presence 0.88, score 0.69: nearly as good as SAM 2.1 c0; 'striped bedspread' 0.25, nothing"
+coverage_check: "zoomed renders of mask edges (pillow outlines, skirt/blanket boundary)"
+
+interfaces:
+  mcp_tools:
+    - "gimp_layer set visible / reorder (show the pristine copy), overmind-publish, gimp_render"
+    - "cerebrate segment_region (SAM 2.1 candidates, EdgeSAM), segment_by_text (EfficientSAM3)"
+    - "gimp_pdb_call: select-polygon/select-item/selection grow/save, overmind-place-on-floor x4"
+    - "gimp_measure histogram (fabric medians), gimp_layer new/set mode/reorder, gimp_layer_mask"
+  models: ["SAM 2.1 (box-refinement@quality)", "EdgeSAM", "EfficientSAM3"]
+  scripts_or_direct: ["Python MCP client", "NumPy/PIL: mask overlays, zoom crops"]
+beyond_buckminster:
+  - step: "comparing models' skirt masks"
+    capability: "local overlays"
+    why: "side-by-side judgement"
+    mcp_alternative: "import masks as layers and render"
+    tradeoffs: "slower, same choice"
+  - step: "knowing where the bed was placed (to place it back)"
+    capability: "the coordinates from the Experiment 4 record (no tool reads a group's stored placement)"
+    why: "re-placement needs the last destination"
+    mcp_alternative: "a read of the placement record (gap already noted in the skill)"
+    tradeoffs: "without it an agent must remember or re-derive the destination"
+interventions: []
+observations:
+  worked: "Recolour as lift + LCh Color groups inside the object's pristine copy: folds and shading kept, and the change survives every later placement. Pillow masks for free from their own cutout layers."
+  failed: "Segmenting the pristine copy while it sat under the Room group (models saw an empty floor). Masks taken exactly at a cutout's edge leave a fringe where the body cutout holds the same pixels underneath."
+  follow_up: "A way to read a group's placement record (destination, scale) through the tools would make re-placing straightforward."
+skill_updates: [b68c280]
