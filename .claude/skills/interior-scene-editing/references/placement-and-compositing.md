@@ -34,6 +34,38 @@ look wrong; the horizon's tilt is the weakest input (a 2° tilt made a 1% size e
 depth order compares lowest points, which says little for objects at about the same depth; supported
 objects should take their support's depth.
 
+## Bringing in an outside object [demonstrated, E11]
+
+A catalog or product photo of furniture, into the room as a movable object:
+
+1. **Work from a derived copy** of the original (scale a large original down in GIMP and export it); keep
+   the original untouched.
+2. **Cut it out:** find it (`detect_by_text`), segment it with SAM 2.1 candidates and pick the one that
+   covers the whole object including thin legs ([scene and objects](scene-and-objects.md)). Replay all
+   rings: holes inside furniture (under an armrest) are real. Export the cutout as a transparent PNG (hide
+   the background layer, `gimp_export`): that file is the reusable extracted object.
+3. **Load it into the room** as a layer (`gimp-file-load-layer`, then `gimp-image-insert-layer`; crop to
+   content).
+4. **Calibrate its size once** against a known object at that object's depth: scale it so its height
+   relates to, say, the nightstand's as their real heights do, and put its floor contact at the
+   nightstand's floor contact. Placement on the floor handles every later depth.
+5. **Group it** (`overmind-make-object-group`), then add, inside the group:
+   - **room light**: a Multiply layer filled with the photographed colour of a known white object in the
+     room (the nightstand's median, measured with `gimp_measure` histogram while it's selected), masked to
+     the object. One editable layer turns studio light into the room's;
+   - **contact shadow**: the silhouette filled black, flattened to the footprint's depth (~18% of the
+     height), blurred, ~85%; plus a foot-contact layer (the bottom ~7% of the silhouette, lightly
+     blurred, ~75%), both at the bottom of the group.
+6. **Place it** with `overmind-place-on-floor`. The destination is where its **front** touches the floor:
+   leave room for its depth behind it, or its back legs land in the wall.
+
+**Edits after placement:** every placement rebuilds the group from its pristine copy ("Placement
+originals (hidden)"), so layers added to a placed group are lost at the next placement. Add grounding and
+light **before the first placement**, or edit the pristine copy and place again.
+
+Limits: the object keeps the viewpoint and light direction of its source photo; choose sources shot from
+roughly the room camera's height and angle.
+
 ## Hidden parts of a moving object [demonstrated]
 
 A move can reveal parts that were hidden behind something that stays (the bed's skirt behind the rug, or

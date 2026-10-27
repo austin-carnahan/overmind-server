@@ -34,6 +34,9 @@ your client prefixes them (`gimp_gimp_*` in OpenClaw, `mcp__gimp__gimp_*` in Cla
 - GIMP keeps layer names unique: a copy of "Bed" becomes "Bed #1". Rename after copying.
 - `gimp_layer(action="new")` always creates at the top level; move it into a group with
   `gimp_layer(action="reorder", layer_id=…, parent_id=<group>, position=0)`.
+- **Bringing a file in as a layer:** `gimp_pdb_call("gimp-file-load-layer", {"image": id, "file": path})`,
+  then `gimp-image-insert-layer`. To hand a cutout from one image to another, hide the other layers,
+  `gimp_export` it as PNG (alpha is kept) and load that.
 - **Working on a copy of a document:** there is no file-copy tool. Open the original, `gimp_export` it
   to the copy's `.xcf` path before editing, and from then on export only to that path. GIMP's title bar
   may still show the original's name: never save with GIMP's own Save there.
