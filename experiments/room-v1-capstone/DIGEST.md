@@ -43,17 +43,24 @@ commits, listed in each record's `skill_updates`.
 
 ## Missing primitives (observations; each record has the detail)
 
-| Need | Seen in | Today |
-| --- | --- | --- |
-| Map points from a wall rectangle / quad-to-quad warp (homography in the plug-in) | E05, E06, E08 | NumPy |
-| Destination validation: behind a wall line, overlapping another footprint | E09, E10 | judgement |
-| Restack a group by depth without moving it | E10 | place at its own anchor |
-| Read a group's placement record (destination, scale) | E02 | the agent's memory |
-| Mask set operations (union, fill small holes, drop islands, colour within a region) | E12 | NumPy |
-| Displace by a map (prints following folds) | E03 | not available |
-| `gimp_measure` on the composite | E01 | renders |
-| Box rotation / reprojection of the room from the camera model | E05, E13 | NumPy reference in `tools/rotation/` |
-| `plug-in-tile` and other drawable-array procedures through the bridge | E03 | duplicate layers |
+**Revised 2026-10-27.** Buckminster now writes and runs its own Python on Overmind. In the
+[E08 rerun](runs/2026-10-27_E08_buckminster_python-validation/notes.md) it computed the homography and metric
+rectification itself, within 0.04 px of E08, and applied the result through GIMP's named procedures. So
+**computation is no longer a tool to build.** What remains for GIMP-side primitives is work *inside the
+document*, and one transport gap: getting pixels computed on Overmind back into GIMP.
+
+| Need | Seen in | Claude Code used | Buckminster now |
+| --- | --- | --- | --- |
+| Map points from a wall rectangle / quad-to-quad warp (homography) | E05, E06, E08 | NumPy | **its own code** (validated: E08) |
+| Box rotation / reprojection of the room from the camera model | E05, E13 | NumPy reference in `tools/rotation/` | its own code (untested) |
+| Mask set operations (union, fill small holes, drop islands, colour within a region) | E12 | NumPy | its own code on the masks' polygons or PNGs, applied as selections (untested) |
+| Destination validation: behind a wall line, overlapping another footprint | E09, E10 | judgement | its own code on footprints (untested) |
+| `gimp_measure` on the composite | E01 | renders | its own code on an exported preview (untested) |
+| Restack a group by depth without moving it | E10 | place at its own anchor | GIMP primitive still (a document operation) |
+| Read a group's placement record (destination, scale) | E02 | the agent's memory | GIMP primitive still |
+| Displace by a map (prints following folds) | E03 | not available | GIMP primitive, or computed pixels **if** they can be brought back into GIMP |
+| `plug-in-tile` and other drawable-array procedures through the bridge | E03 | duplicate layers | GIMP-side fix still |
+| **New: computed pixels back into GIMP** | — | the Mac's file system | open: Buckminster can fetch from the Mac (`file_fetch`) but has no write path back. An upload to the artifact store + `overmind-import-artifact` would close it. |
 
 ## Limitations that belong in the skills
 
@@ -70,8 +77,15 @@ The run records separate MCP use from everything else:
 - **Shared MCP tools only:** most edits ran on them alone (E02, E04, E07, E09, E10, E11 almost entirely).
 - **Needed more:** numerical geometry (E05, E06, E08, E13) and mask arithmetic (E12).
 
-These are good candidates for the baseline subset:
+Since 2026-10-27 Buckminster has Python on Overmind, so "needed more" no longer means "out of reach". The
+comparison now measures:
+- whether the agent recognises when to compute;
+- whether it writes correct code;
+- whether it hands the results to GIMP well.
+
+The question is no longer which tools the architecture lacks. Candidate subset:
 - **Should transfer:** E01, E04, E07, E11.
-- **Likely to show the restricted architecture's cost:** E06/E08 (geometry) and E12 (mask arithmetic).
+- **Computation by its own code:** E06 (E08 is already validated), E05, and E12 (the mask arithmetic, plus the
+  pixel-transport gap if it needs computed pixels).
 
 Freeze the skills with a tag before the replay (README, "Comparison protocol").

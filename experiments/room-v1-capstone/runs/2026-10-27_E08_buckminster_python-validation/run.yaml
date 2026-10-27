@@ -1,16 +1,16 @@
 experiment: E08
 run_id: 2026-10-27_E08_buckminster_python-validation
 condition: capability-validation    # Buckminster's Overmind-hosted Python, applied through GIMP MCP
-status: pending                     # waiting for Buckminster's run
-started: 2026-10-27T13:00
-finished: null
+status: pass                        # its own code reproduced E08's numbers; applied by named GIMP procedures
+started: 2026-10-27T13:55
+finished: 2026-10-27T14:03
 
 agent:
   name: Buckminster
-  harness: OpenClaw (built-in runtime)
-  model: null                       # fill from the session
+  harness: OpenClaw (built-in runtime), dashboard session started after the runbook install
+  model: null                       # the agent's default (not reported)
 skills:
-  revision: null                    # Buckminster's installed runbooks; the capstone skills are not installed for it yet
+  revision: null                    # Buckminster's installed runbooks (python.md, cerebrate-gimp.md); capstone skills not installed
 capabilities:
   gimp_agent_mcp: "0.5.0 via the macbook-m1 node (gimp_gimp_*)"
   python: "/mnt/substrate/design-studio/python: CPython 3.12.14 (uv-managed), numpy 2.5.4, scipy 1.18.1, opencv-python-headless 5.0.0.93, pillow 13.0.0, scikit-image 0.26.0, shapely 2.2.0 (uv.lock in services/design-studio/buckminster/python/)"
@@ -19,10 +19,30 @@ capabilities:
 inputs:
   scene: bedroom_v1                 # working.xcf = a copy of the reference (hash 85160e7c… unchanged)
   assets: [wall_art]                # art-cutout.png from the E08 run
-  instruction: prompt.md
+  instruction: prompt.md            # method + inputs, not a script
   numbers: expected.json            # what E08 recorded and what the reference script gives
 
-outputs: {}                         # filled after the run
-interfaces: {}
-results: {}
-observations: {}
+outputs:   # ~/DesignStudio/workspaces/room-v1-capstone/runs/2026-10-27_E08_buckminster_python-validation/
+  xcf: working.xcf                  # layer "Framed print (Buckminster, Python)" at x 2662, y 792, 721x480
+  preview: result.jpg               # 1.27 MB, exported by Buckminster
+  check_render: check-region.png    # my render of the region (GIMP, image 136)
+  script: "compute.py + inputs.json + output.json in Buckminster's workspace (not readable from austin; copy pending)"
+  report: buckminster-report.md
+
+results:
+  trim_aspect: {buckminster: 1.60823, reference_script: 1.6082, e08_recorded: 1.61}
+  edge_angle_deg: {buckminster: 85.20, reference_script: 85.2, e08_recorded: 85}
+  corners_max_abs_diff_px: 0.04     # Buckminster vs E08's recorded corners (TL, TR, BL, BR)
+  layer_bounds: "x 2662-3383, y 792-1272: the corners' bounding box exactly"
+  verdict: "pass: the geometry E08 needed NumPy for, Buckminster computed with its own code on Overmind"
+
+interfaces:
+  exec: "~19 commands on Overmind (writing and running its script with the environment's Python)"
+  mcp_tools: ["gimp_gimp_open (disposable XCF)", "gimp-file-load-layer, gimp-image-insert-layer", "crop to content", "gimp-item-transform-perspective", "layer rename", "XCF save, JPEG export"]
+  models: []
+beyond_buckminster: []              # nothing: the run used only Buckminster's own capabilities
+
+observations:
+  worked: "Given the method and inputs (not code), Buckminster wrote its own metric-rectification + homography script, ran it in the provisioned environment and applied the corners with gimp-item-transform-perspective. First attempt, about 8 minutes, no help."
+  failed: "The brief asked for scripts under /mnt/substrate/design-studio/projects/; Buckminster's AGENTS.md forbids direct writes there (project folders are design-checkpoint's), so it kept them in its workspace and said so. The runbook's 'uv add' route conflicts with the same rule."
+  follow_up: "Runbook: scripts live in the workspace. Decide whether Buckminster may write to the Python environment (uv add) or asks for packages. Copy compute.py/inputs/output into this record."

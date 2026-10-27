@@ -11,27 +11,27 @@ Apply the results to the document through GIMP's named procedures as usual.
 ## The environment
 
 ```text
-/mnt/substrate/design-studio/python/       on the SSD; you can read and write it
-  bin/uv                                   run scripts, add packages (wraps uv with this environment's settings)
+/mnt/substrate/design-studio/python/       on the SSD; you use it, you don't change it
+  bin/uv                                   maintenance (wraps uv with this environment's settings)
   pyproject.toml, uv.lock                  what is installed
   .venv/bin/python                         Python 3.12 with numpy, scipy, opencv-python-headless, pillow,
                                            scikit-image, shapely
 ```
 
-- **Run a script:** `/mnt/substrate/design-studio/python/bin/uv run --no-sync python script.py args…`
-  - Or call `.venv/bin/python` directly.
-- **Need another package?** `/mnt/substrate/design-studio/python/bin/uv add <package>`
-  - It updates `pyproject.toml` and the lock.
-  - Mention it in your report, so it can be carried into the repository.
-- **Where scripts go:** keep them with the work, in the project folder under `/mnt/substrate/design-studio/projects/<project>/`.
+- **Run a script:** `/mnt/substrate/design-studio/python/.venv/bin/python script.py args…`
+- **Need another package?** Ask for it, and say what it's for.
+  - Writes under `/mnt/substrate/design-studio/` aren't yours to make; project folders belong to
+    `design-checkpoint`.
+  - Meanwhile, solve it with what's installed if you can.
+- **Where scripts go:** in your workspace, one folder per task (for example `compute/<project>/<task>/`).
   - Give each script a short docstring, its inputs as a JSON file, and its output as JSON.
-  - A script someone can rerun is the record of how a number was found.
+  - A script someone can rerun is the record of how a number was found. Say its path in your report.
 
 ## The boundary
 
 | Where | What runs there |
 | --- | --- |
-| **Overmind** (your `exec`) | Your Python: computation, files in your workspace and project folders. |
+| **Overmind** (your `exec`) | Your Python: computation, files in your workspace. |
 | **The Mac** (GIMP) | Named operations only, through the GIMP tools. GIMP's code evaluators (`python-fu-eval`, Script-Fu eval, the console) stay blocked. |
 
 Compute here; apply there with the procedures (for example `gimp-item-transform-perspective` with the corners your

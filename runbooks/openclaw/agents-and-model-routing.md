@@ -54,6 +54,17 @@ messaging tools.
   for design notes, reading files, and local git. It briefly ran with an
   allowlist that only permitted `design-checkpoint`; that was dropped once a
   general-purpose design role needed git.
+- **Python (since 2026-10-27):** it writes and runs its own Python through
+  `exec`, with `/mnt/substrate/design-studio/python/.venv/bin/python`. That's
+  a uv-managed CPython 3.12 with numpy, scipy, OpenCV, Pillow, scikit-image
+  and shapely, maintained by the operator.
+  - It computes on Overmind and applies the results in GIMP through named
+    procedures; GIMP's code evaluators stay blocked.
+  - Its scripts live in its workspace.
+  - Runbook: `runbooks/python.md`, linked from
+    `services/design-studio/buckminster/python.md`.
+  - Validated by an E08 rerun:
+    `experiments/room-v1-capstone/runs/2026-10-27_E08_buckminster_python-validation/`.
 - **Limits enforced by the system:** `/opt/overmind` isn't writable by
   `openclaw`, and the Gateway denies `system.run` on every node, so it has no
   shell on the Mac.

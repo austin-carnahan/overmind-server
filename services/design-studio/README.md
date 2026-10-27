@@ -128,8 +128,13 @@ corners for `gimp-item-transform-perspective`).
   - a uv-managed CPython 3.12 with numpy, scipy, OpenCV (headless), Pillow,
     scikit-image and shapely (definition and lock in
     [`buckminster/python/`](buckminster/python/));
-  - its `bin/uv` wrapper keeps the cache and interpreter there, so Buckminster
-    can `uv add` a package itself.
+  - its `bin/uv` wrapper keeps the cache and interpreter there. Packages are
+    added by the operator (`bin/uv add`, then copy `pyproject.toml` and
+    `uv.lock` back here, and precompile with `compileall`). Buckminster's
+    `AGENTS.md` keeps it from writing under `/mnt/substrate/design-studio/`,
+    so it asks instead.
+  - Buckminster keeps its scripts in its workspace (validated 2026-10-27:
+    [E08 rerun](../../experiments/room-v1-capstone/runs/2026-10-27_E08_buckminster_python-validation/notes.md)).
 
   Its runbook is [`buckminster/python.md`](buckminster/python.md). Install it
   with `sudo bash install-buckminster-python`, which links it into the
