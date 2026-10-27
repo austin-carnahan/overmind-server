@@ -103,4 +103,4 @@ observations:
   worked: "Recolour = grey Divide lift by the paint-to-paint luminance ratio + LCh Color layer with the swatch, masked to the wall, one pass-through group per colour. Keeps all shading; three variants toggle."
   failed: "Per-channel albedo swaps carry the photo's colour cast (tan instead of sage) or explode (11x); masks overlapping bright trim glow when brightened. Segmenting walls (SAM boxes) kept losing pieces; vertical cut lines miss leaning edges; a keep-out candidate that spills erases what it should protect."
   follow_up: "Check mask coverage (all masks over the photo) before judging colour -- I missed the right wall until the user pointed it out. gimp_measure can't read the composite."
-skill_updates: [9bfc5d9]
+skill_updates: [9bfc5d9, 02b07ec]
