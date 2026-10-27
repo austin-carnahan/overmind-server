@@ -61,4 +61,4 @@ observations:
   worked: "Depth stacking by floor anchor (with the 5% tie rule) gave the right order in every non-colliding case; moving a group never touched stationary pixels."
   failed: "No collision check: a destination can put an object inside another (P1)."
   follow_up: "Candidate primitive (observation): overmind-place-on-floor could warn when the placed object's footprint overlaps another object group's floor footprint. Meanwhile: before placing, render the destination with a points overlay and check the footprint is free."
-skill_updates: []
+skill_updates: [596ecc8]
