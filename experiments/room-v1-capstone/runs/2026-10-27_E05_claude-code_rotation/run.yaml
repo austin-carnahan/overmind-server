@@ -84,4 +84,4 @@ observations:
   worked: "C3D for solid box-like furniture in a photo with two clear receding directions: the bed and the nightstand turn convincingly, including a re-pose to a new wall; small top objects as re-anchored sprites."
   failed: "Open-frame objects (background baked into faces); near-frontal product shots (ill-conditioned camera); A (mirror) is a reflection, not a turn, and contradicts room perspective."
   follow_up: "Candidate primitives (observations): quad-to-quad warp; rotate-box-on-floor using the document's floor geometry. Untidy corners where hanging fabric crosses a box edge."
-skill_updates: []
+skill_updates: [78f190c]
