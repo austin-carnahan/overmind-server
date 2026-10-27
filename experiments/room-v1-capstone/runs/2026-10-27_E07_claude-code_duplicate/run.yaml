@@ -69,4 +69,4 @@ observations:
   worked: "Duplicate = cut a fresh layer from the photo using the existing cutouts' alpha (no models), new object group, complete and trim before mirroring, ground before placing, then overmind-place-on-floor: independent, re-placeable without loss, depth-stacked automatically."
   failed: "Skipping the known pre-mirror fixes (hidden panel, shadow strip) reproduces E04's flaws."
   follow_up: "A lighting asymmetry remains: the mirrored copy's shaded side faces the window (as in E04)."
-skill_updates: []
+skill_updates: [c0e3c35]
