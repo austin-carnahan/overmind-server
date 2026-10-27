@@ -1,0 +1,54 @@
+experiment: P0
+run_id: 2026-10-26_P0_claude-code_hud-check
+condition: exploratory
+status: pass
+started: 2026-10-26T19:40
+finished: 2026-10-26T19:50
+
+agent:
+  name: Claude Code
+  harness: "Claude Code VS Code extension 2.1.308"
+  model: claude-opus-5-5
+skills:
+  revision: 3a4f8b5
+  loaded: [gimp]
+capabilities:
+  gimp_agent_mcp: "0.5.0 (38 tools, Python off)"
+  gimp: "3.2.6"
+  overmind_gimp_plugin: a23557b
+  cerebrate_mcp: "291e3c9, image sha256:8718726f4c13"
+  extra: ["Python + bridge client on the Mac", "shell on the Mac"]
+
+inputs:
+  scene: bedroom_v1
+  assets: []
+  instruction: "Plan Phase 0: prove the live status panel is visible, a clean export excludes it, and it cannot leak into inference snapshots."
+
+outputs:   # ~/DesignStudio/workspaces/room-v1-capstone/runs/2026-10-26_P0_claude-code_hud-check/
+  xcf: working.xcf
+  clean: after-clean.png
+  annotated: after-annotated.png
+  script: p0.py
+  calls: calls.jsonl
+
+interfaces:
+  mcp_tools: ["gimp_open/list_images/image_info", "gimp_pdb_call (gimp-group-layer-new, gimp-image-insert-layer, overmind-publish x3)", "gimp_layer (new, set, reorder)", "gimp_text (create, edit)", "gimp_render", "gimp_export"]
+  models: []
+  scripts_or_direct: ["cp of the reference XCF into the run folder (shell)", "Python MCP client driving the MCP tools", "fetching published artifacts and comparing pixels (NumPy)"]
+beyond_buckminster:
+  - step: "copy the reference XCF"
+    capability: "shell on the Mac"
+    why: "keeps the reference closed entirely"
+    mcp_alternative: "gimp_open + gimp_export to the copy's path (documented in the gimp skill)"
+    tradeoffs: "the MCP route opens the reference in GIMP, where a stray Save could overwrite it"
+  - step: "leak check on published snapshots"
+    capability: "fetching artifact URLs + NumPy comparison"
+    why: "a numeric check of what Cerebrate would receive"
+    mcp_alternative: "none needed in practice: the rule (hide the HUD or publish a group) is enough"
+    tradeoffs: "verification only"
+interventions: []
+observations:
+  worked: "HUD as native text layers in a top group, entirely through MCP tools (group via PDB, gimp_layer new/reorder, gimp_text create/edit). Status updates are one gimp_text call."
+  failed: "Publishing the canvas (overmind-publish without source) with the HUD visible leaks it: 253,569 px of the HUD area differ. Hidden: 0 px. source=Room: 0 px."
+  follow_up: "Rule for every run: hide the HUD group before any canvas publish or clean export, or publish a specific group (source=)."
+skill_updates: []
