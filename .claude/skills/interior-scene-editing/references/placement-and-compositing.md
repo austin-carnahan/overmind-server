@@ -186,6 +186,26 @@ with the group. Limit: it is the shadow of the old spot, including other objects
 
 [scene and objects](scene-and-objects.md) · [surface reconstruction](surface-reconstruction.md)
 
+## A nearby viewpoint, faked in GIMP [demonstrated, E13 v2]
+
+Aim for a convincing picture, not a correct render. Every element is a layer:
+
+1. **What the photo saw:** each room surface warped by one 3×3 matrix (`gimp-item-transform-matrix`);
+   furniture as box faces (E05) and upright sprites (pillows, lamps, stools: scaled by depth, anchored where
+   they rest). Cut pillows out of the bed's top before warping it, or they lie flat.
+2. **What it didn't see, painted:** a wall in the colour sampled from any sliver the photo shows (it may
+   differ from the other walls with the light), a Multiply gradient toward the dark corner, a little grain
+   (`gegl:noise-rgb`); the ceiling in its lit colour with a radial falloff.
+3. **Known fixtures, built:** a door unit painted front-on in its own image (casing in the trim's colour, slab
+   in the door's colour, panels, knob), then `gimp-item-transform-perspective` onto the wall where the photo
+   puts it; baseboards continued as warped copies of another wall's baseboard.
+4. **Continue textures** with copies of the same surface shifted along it (mask out rugs, vents, windows),
+   feathered ~80 px.
+5. **Frame** the convincing part (a 4:3 crop).
+
+**Bound every warp's source** to what maps in front of the camera and near the frame: an unbounded source
+mapped toward the horizon hung GIMP for minutes and exhausted memory.
+
 ## A nearby viewpoint of the whole room [experimental, E13]
 
 Possible as a 2.5D approximation, outside the shared tools (**[gap]**: a per-pixel renderer; reference in

@@ -40,6 +40,11 @@ your client prefixes them (`gimp_gimp_*` in OpenClaw, `mcp__gimp__gimp_*` in Cla
   (`set_core_object_array` error): find another route (tiling = duplicate the layer at offsets).
 - `gimp-item-transform-matrix` clips every point whose projective w is negative: a homography that is right
   up to sign can return an **empty** layer. Normalise the matrix so w > 0 over the layer (multiply by -1).
+- A projective transform whose source maps toward the horizon produces an enormous layer: GIMP can grind for
+  many minutes and exhaust memory (E13 v2: 11 GB of swap; GIMP had to be restarted). Clip the source to the
+  part that maps inside (a margin around) the canvas before transforming.
+- `gimp_layer(action="reorder", position=…)` is the position in the parent's final list: when moving a layer
+  down within the same group, recompute the index after it leaves its old slot.
 - Avoid `gimp-group-layer-merge` on a freshly duplicated group: once (E05) it merged the document's whole top
   level into one layer. To get one layer of an object, select its members' alpha and cut from the source
   layer instead.

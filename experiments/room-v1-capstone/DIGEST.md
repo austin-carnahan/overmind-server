@@ -18,7 +18,7 @@ commits, listed in each record's `skill_updates`.
 | E10 Concealment | pass | Whole-group order suffices; only object groups can occlude |
 | E11 Furniture import | pass | Catalogue chair: cut out, light-matched, grounded, placed, moved again |
 | E12 Hard extraction | pass | One model, several prompts; MI-GAN removed the cable; cropped base hidden behind the bed |
-| E13 Camera shift | partial | 2.5D ray-cast views coherent to ~25°; 26–51% of the frame never photographed |
+| E13 Camera shift | partial → pass (v2) | v1: 2.5D ray-cast, coherent to ~25°, 26–51% holes. v2 (user direction): the 45° view faked in GIMP — painted wall + door, texture copies, framing — convincing |
 
 ## Worked unchanged (repeatable from the skills)
 

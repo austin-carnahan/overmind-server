@@ -1,0 +1,75 @@
+experiment: E13
+run_id: 2026-10-27_E13v2_claude-code_painted-45
+condition: exploratory             # revision of 2026-10-27_E13_claude-code_camera-shift at the user's direction
+status: pass                       # a convincing 45-degree view (framed); visible seams documented
+started: 2026-10-27T07:20
+finished: 2026-10-27T08:55
+
+agent:
+  name: Claude Code
+  harness: "Claude Code VS Code extension 2.1.308"
+  model: claude-opus-5-5
+skills:
+  revision: 9acaa75
+  loaded: [gimp, interior-scene-editing]
+capabilities:
+  gimp_agent_mcp: "0.5.0 (38 tools, Python off)"
+  gimp: "3.2.6"
+  overmind_gimp_plugin: a23557b
+  cerebrate_mcp: "291e3c9, image sha256:8718726f4c13"
+  extra: ["Python + NumPy on the Mac: the 3x3 matrices and quads only (tools/rotation/view45.py)", "shell on the Mac"]
+
+inputs:
+  scene: bedroom_v1
+  assets: []
+  instruction: >-
+    User, after E13: the main failure is the black right wall -- put the door frame and door in, colour the
+    wall with the known colour and rough lighting to match the others, use the known trim; solve the flat
+    pillows and objects; lie a little, play visual tricks for a convincing image; a ray-casting library is
+    beyond the original challenge's scope.
+
+outputs:   # ~/DesignStudio/workspaces/room-v1-capstone/runs/2026-10-27_E13_claude-code_camera-shift/v2/
+  xcf: view45-v2.xcf               # 4000x3000: groups Room (45° view) / Right wall (painted) / Furniture (45° view), sources hidden
+  framed: view45-v2-framed.png     # 4:3 crop (650,170,3350,2512): the presented view
+  full: attempt5-full.png
+  annotated: after-annotated.png
+  door: door-unit.png              # the painted door unit, front view
+  attempts: [attempt1.png, attempt2.png, attempt3.png, attempt4-full.png]
+
+how:
+  geometry: "the E05 camera; orbit 45 deg about the room centre; per plane a photo->view 3x3 matrix; furniture boxes per face; sprites anchored in 3D and scaled by depth"
+  in_gimp: "every element a layer: painted bases (gimp_draw fill + gegl:noise-rgb), photo textures warped with gimp-item-transform-matrix, door painted with gimp_draw in its own image and warped with gimp-item-transform-perspective, gradients with gimp-drawable-edit-gradient-fill, blurs/shadows with gimp_apply_filter"
+  tricks:
+    - "right wall (never photographed): painted in the colour of the strip the photo does show (#655238, warmer: it faces the windows) + a Multiply gradient darkening toward the corner + grain"
+    - "door: position from the casing's floor contact (Y 1.33 from the right wall's floor line), standard proportions from the ceiling height; painted front-on (casing in the window trim's colour, slab in the photo door's colour, two panel outlines, brass knob) and warped onto the wall"
+    - "baseboards on the right wall: the back wall's baseboard texture warped along it, either side of the door"
+    - "ceiling: painted in the photo's lit ceiling colour + radial falloff; the warped photo ceiling (a smeared streak) hidden"
+    - "floor and near left wall: shifted copies of their own texture from further along the same plane (rug, vents, window masked out), feathered 80 px"
+    - "bed: foot face and top warped from the photo with the pillows cut out of the top; pillows, lamp, stool as upright sprites; soft contact shadows"
+    - "framing: a 4:3 crop that keeps the convincing part"
+
+attempts:
+  - {n: 1, what: "bases + warped planes + painted right wall, door, baseboards, furniture", result: "right wall and door exist; door cartoonish; flat painted ceiling/floor/left-wall areas; muddy ceiling sample"}
+  - {n: 2, what: "shifted texture copies to fill flat areas", result: "first run hung GIMP: an unbounded shifted copy mapped toward the horizon (11 GB swap); GIMP restarted, nothing unsaved lost. Bounded each copy's source to what maps in front of the camera and within the frame: works, but the door vanished (reordered below the wall paint) and copies showed as patches"}
+  - {n: 3, what: "door order fixed; ceiling repainted lit + falloff; copies feathered and brightness-matched", result: "ceiling right; door washed grey by a brightness/contrast pass"}
+  - {n: 4, what: "door re-placed fresh (warp + 1 px soften); 4:3 framing", result: "convincing"}
+  - {n: 5, what: "hide the warped photo ceiling (stretched streak)", result: "chosen"}
+
+remaining: ["the door is clean and a little graphic (no wear, crisp edges)", "a floor-copy seam and a duplicated vent at the lower right", "a white curved stroke on the back wall (inpaint residue)", "the bed's box edges are straight-cut", "near left wall and bottom floor outside the frame stay patchy"]
+interfaces:
+  mcp_tools: ["gimp_new_image, gimp-file-load-layer, gimp-item-transform-matrix (x~12), gimp-item-transform-perspective (door), gimp-image-select-polygon, gimp_layer_mask, gimp_draw (fills, door painting), gimp-drawable-edit-gradient-fill, gimp_apply_filter (noise, blur), gimp_measure histogram (colour samples), gimp-drawable-brightness-contrast, gimp_render, gimp_export"]
+  models: []
+  scripts_or_direct: ["NumPy: 3x3 matrices, quads, clipping (world near-plane and frame bounds)", "PIL: the final crop"]
+beyond_buckminster:
+  - step: "matrices and quads"
+    capability: "NumPy"
+    why: "a homography per plane/face/copy from 4 point pairs"
+    mcp_alternative: "the quad-to-quad warp primitive from the digest (plus a camera/orbit helper to produce the target quads)"
+    tradeoffs: "everything else here is shared-tool work"
+interventions:
+  - "User direction after E13 v1 (see instruction)."
+observations:
+  worked: "Faking it in layers: unseen walls painted from their sampled colour + gradient, a door painted front-on and warped into place, textures continued by shifted copies, furniture as boxes and sprites, then framing."
+  failed: "Unbounded perspective warps can hang GIMP for minutes and exhaust memory; reorder positions inside groups are easy to get wrong; brightness/contrast on a dark painted surface washes it out."
+  follow_up: "Wear and softness on painted elements (noise, slight blur, edge darkening); a Poisson blend (seamless_blend) for floor-copy seams."
+skill_updates: []
