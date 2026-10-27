@@ -1,0 +1,71 @@
+experiment: E11
+run_id: 2026-10-26_E11_claude-code_chair-import
+condition: exploratory
+status: pass
+started: 2026-10-26T22:20
+finished: 2026-10-26T22:55
+
+agent:
+  name: Claude Code
+  harness: "Claude Code VS Code extension 2.1.308"
+  model: claude-opus-5-5
+skills:
+  revision: e87a217
+  loaded: [gimp, interior-scene-editing]
+capabilities:
+  gimp_agent_mcp: "0.5.0 (38 tools, Python off)"
+  gimp: "3.2.6"
+  overmind_gimp_plugin: a23557b
+  cerebrate_mcp: "291e3c9, image sha256:8718726f4c13"
+  extra: ["Python + bridge client on the Mac", "shell on the Mac"]
+
+inputs:
+  scene: bedroom_v1
+  assets: [chair_catalog]
+  instruction: "Extract a catalog chair or replacement nightstand and place it in the bedroom; reuse and move it again."
+
+outputs:   # ~/DesignStudio/workspaces/room-v1-capstone/runs/2026-10-26_E11_claude-code_chair-import/
+  xcf: working.xcf                 # top-level "Chair" group (pass-through) + "Chair (pristine)" in Placement originals
+  extracted_object: chair-cutout.png   # the reusable transparent cutout (pristine pixels, 2000 px tall derivative)
+  derived_source: chair-derived.png    # 5792x8206 TIFF original scaled to 2000 px tall in GIMP
+  before: before.png
+  clean: after-clean.png               # by the window
+  moved_again: after-clean-moved-again.png
+  annotated: after-annotated.png
+  calls: calls.jsonl
+
+attempts:
+  - n: 1
+    method: |
+      Derive a 2000 px copy of the TIFF in GIMP; OWLv2 "an armchair" box -> SAM 2.1 candidates (candidate 0, 0.97:
+      whole chair incl. legs, arm gaps open); cut out (all rings: the 9 holes are real) and export as transparent PNG;
+      gimp-file-load-layer into the room copy; calibrate size at the nightstand's depth (95 cm chair vs 66 cm
+      nightstand incl. its visible top: 4.58 px/cm -> 435 px); overmind-make-object-group "Chair"; room light =
+      Multiply layer filled with the photographed white of the nightstand (median 155,128,83 via gimp_measure
+      histogram), masked to the chair; contact shadow = silhouette flattened to 18% height, blurred, 55%;
+      overmind-place-on-floor by the window (760,2080; x1.34), then moved across the room (2950,1990; x1.14).
+    result: "clean matte, convincing light; shadow too faint; position B put the back legs inside the back wall (the anchor is the front feet: the destination ignored the chair's depth)"
+  - n: 2
+    method: "grounding edited into the pristine copy (placement rebuilds from it): contact shadow 85% + a foot-contact layer (bottom 7% of the silhouette, blurred, 75%); B moved forward to (2900,2170)"
+    result: "grounded in both places; B stands on the floor with room for its depth -- chosen; final placement by the window"
+
+interfaces:
+  mcp_tools:
+    - "gimp_open (TIFF original), gimp_canvas scale, gimp_export (derived PNG, transparent cutout, XCF)"
+    - "gimp_pdb_call: overmind-publish, gimp-image-select-polygon (rings), gimp-file-load-layer, gimp-image-insert-layer, overmind-make-object-group, overmind-place-on-floor x5, gimp-image-select-item/rectangle"
+    - "cerebrate detect_by_text (OWLv2), segment_region (SAM 2.1 @quality, candidates)"
+    - "gimp_layer (duplicate/add_alpha/crop/scale/set/new/reorder/move), gimp_layer_mask, gimp_draw fill_selection, gimp_apply_filter gaussian-blur, gimp_measure histogram, gimp_render, gimp_text (HUD)"
+  models: ["OWLv2 B/16", "SAM 2.1 (box-refinement@quality)"]
+  scripts_or_direct: ["Python MCP client (all tool calls)", "NumPy/PIL: candidate overlays and zoom crops for judging", "size arithmetic (95 cm x px/cm)", "cp of the reference XCF"]
+beyond_buckminster:
+  - step: "choosing the chair's mask candidate"
+    capability: "local overlays (NumPy/PIL)"
+    why: "fast side-by-side"
+    mcp_alternative: "import each candidate mask as a layer and gimp_render"
+    tradeoffs: "same decision, more calls"
+interventions: []
+observations:
+  worked: "The whole import ran on shared MCP tools: derive, segment, cut out, export transparent, gimp-file-load-layer, calibrate against a known object at its depth, light-match with a Multiply of a known white object's photographed colour, group, place on the floor, and move again from the pristine copy with no re-extraction."
+  failed: "A destination too close to a wall (the anchor is the front feet; the object's depth must fit behind it). Edits to a placed group are lost at the next placement unless made in the pristine copy."
+  follow_up: "Primitive candidate (observation only): overmind-place-on-floor could carry post-placement edits back into the pristine copy, or warn that they will be discarded. The chair keeps its studio three-quarter view (no viewpoint change)."
+skill_updates: [843cc2b]
