@@ -185,3 +185,25 @@ with the group. Limit: it is the shadow of the old spot, including other objects
 ## Related
 
 [scene and objects](scene-and-objects.md) · [surface reconstruction](surface-reconstruction.md)
+
+## A nearby viewpoint of the whole room [experimental, E13]
+
+Possible as a 2.5D approximation, outside the shared tools (**[gap]**: a per-pixel renderer; reference in
+`experiments/room-v1-capstone/tools/rotation/render.py`). The room is five planes from the camera model,
+furniture boxes and upright cards for small objects. Each new-view pixel takes its colour from where its ray
+meets the scene, if the photo saw that point. Results for the bedroom:
+
+| Shift | Result |
+| --- | --- |
+| ~12° | convincing |
+| ~25° | coherent |
+| 33–45° | geometrically consistent, but 40–50% of the frame was never photographed (holes) |
+
+Small objects modelled as flat cards, and pillows painted onto a top surface, break first.
+
+- **Check where the camera stood:** in the doorway here, so a near wall was behind it. Per-plane warps
+  (`gimp-item-transform-matrix`) only work while every plane stays in front of the camera.
+- **Remove small objects from the room texture** (inpaint) before re-placing them as objects, or they
+  appear twice.
+- **Deliver one layer per element,** a group per view.
+

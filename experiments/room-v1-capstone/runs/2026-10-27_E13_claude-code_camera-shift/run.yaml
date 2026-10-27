@@ -1,0 +1,74 @@
+experiment: E13
+run_id: 2026-10-27_E13_claude-code_camera-shift
+condition: exploratory
+status: partial                    # an approximate nearby view up to 45 deg; holes where nothing was photographed
+started: 2026-10-26T22:55
+finished: 2026-10-27T02:30
+
+agent:
+  name: Claude Code
+  harness: "Claude Code VS Code extension 2.1.308"
+  model: claude-opus-5-5
+skills:
+  revision: cba69df
+  loaded: [gimp, interior-scene-editing]
+capabilities:
+  gimp_agent_mcp: "0.5.0 (38 tools, Python off)"
+  gimp: "3.2.6"
+  overmind_gimp_plugin: a23557b
+  cerebrate_mcp: "291e3c9, image sha256:8718726f4c13"
+  extra: ["Python + NumPy on the Mac: camera model, a per-pixel ray-caster (tools/rotation/render.py)", "shell on the Mac"]
+
+inputs:
+  scene: bedroom_v1                # used in its photographed arrangement (bed at its photo spot), texture = Room group
+  assets: []
+  instruction: "Attempt nearby room viewpoints at 10-15, 20-30 and 30-35 degrees; optionally 45."
+
+outputs:   # ~/DesignStudio/workspaces/room-v1-capstone/runs/2026-10-27_E13_claude-code_camera-shift/
+  xcf: views.xcf                   # 2000x1500: groups "View 12/25/33/45° (method C)" and "View 25° (method A)", one layer per element; 12° shown
+  source_xcf: source.xcf           # bedroom copy with the MI-GAN removal of nightstand/lamp/stool in the Room group
+  before: before.png
+  clean: after-clean.png
+  annotated: after-annotated.png
+  views: [view-12deg-A/B/C.png, view-25deg-*, view-33deg-*, view-45deg-*, tiers-A-vs-C.png]
+  crops: [view-*deg-C-cropped.png, crops.json]
+  textures: [photo.png, bg-room.png, bg-room-clean.png]
+
+motion: "orbit about a vertical axis through (1.9, 1.9) on the floor (room centre), camera moving into the room; height kept"
+tiers:
+  - {deg: 12, camera: [0.437, -0.354, 1.0], unseen: "26%", note: "convincing; the doorway wall at the right edge never photographed -> hole"}
+  - {deg: 25, camera: [0.981, -0.625, 1.0], unseen: "36%", note: "room still coherent; ceiling largely unseen; bed box turns credibly"}
+  - {deg: 33, camera: [1.341, -0.728, 1.0], unseen: "42%", note: "pillows painted flat on the bed's top start to show; stray wall triangle above the ceiling (plane boundary)"}
+  - {deg: 45, camera: [1.9, -0.787, 1.0], unseen: "51%", note: "geometry still holds; half the frame unseen; small objects look like cards"}
+fails_first: "1) the near right wall (only the doorway was photographed): hole from 12 deg; 2) the ceiling beyond the frame; 3) objects' unmodelled shape (pillows flat on the bed top, billboards for lamp/stool) from ~33 deg; 4) MI-GAN removal artefacts behind the nightstand where the view looks behind it"
+
+methods:
+  A_surface_warp: "the photo projected onto the five room planes: furniture flattened onto floor/walls (the bed reads as a rug by 25 deg)"
+  B_layered_reprojection: "room texture without the bed (the rebuilt Room group) + bed and nightstand as textured boxes + lamp and stool as upright billboards"
+  C_selective_reconstruction: "B with nightstand, lamp and stool inpainted out of the room texture (MI-GAN), so the view behind them shows wall/floor instead of their smeared copies"
+
+attempts:
+  - {n: 1, what: "per-plane homographies (warpPerspective), both orbit directions", result: "+theta: the doorway plane (behind the camera) rendered as a giant wedge -- per-plane warps can't cull; -theta: camera walks back into the hall, doorway smeared"}
+  - {n: 2, what: "per-pixel ray-caster (planes + boxes + billboards), +theta into the room", result: "works; quarter-res test at 12/25 deg"}
+  - {n: 3, what: "MI-GAN removal of nightstand/lamp/stool for method C", result: "first run interrupted: the Mac slept on battery mid-inpaint (connection closed); rerun under caffeinate -i: plausible, a pale ghost and a dark blotch"}
+  - {n: 4, what: "all tiers x methods at half resolution; GIMP document with one group per view", result: "chosen"}
+  - {n: 5, what: "largest fully valid 4:3 crop per view", result: "small (730x550 of 2000x1500 at 12 deg): the holes fringe two sides"}
+
+interfaces:
+  mcp_tools:
+    - "gimp_layer set visible (Room-only texture), gimp_export, gimp_new_image, gimp-group-layer-new, gimp-file-load-layer, gimp_render"
+    - "overmind-publish (selection, source=Room), cerebrate inpaint (MI-GAN), overmind-import-artifact (snapshot)"
+  models: ["MI-GAN 512"]
+  scripts_or_direct: ["NumPy ray-caster and camera model (all geometry and the rendering)", "PIL compositing and crops"]
+beyond_buckminster:
+  - step: "the whole reprojection"
+    capability: "a per-pixel renderer in NumPy"
+    why: "a viewpoint change needs per-surface visibility and occlusion; GIMP has per-layer warps but no ray casting"
+    mcp_alternative: "per-plane gimp-item-transform-matrix works only while every plane stays in front of the camera (small motions away from near walls); beyond that, a reprojection service (Cerebrate side, CPU) would be the primitive"
+    tradeoffs: "the renders are imported as layers, so the result stays editable, but producing them is outside GIMP"
+interventions: []
+observations:
+  worked: "A camera from two baseboards + boxes for furniture gives a coherent nearby view up to ~25 deg and geometrically consistent rooms to 45 deg; one layer per element keeps it editable."
+  failed: "Anything not photographed (near wall, ceiling beyond frame) is a hole -- 26-51% of the frame; flat-painted parts of objects (pillows) and billboards break by ~33 deg; per-plane homographies can't handle surfaces behind the camera."
+  follow_up: "Fill large holes with a generative model (not available: MI-GAN smears furniture-sized holes); model pillows as their own boxes; render at full resolution in chunks. Mac sleep can kill long runs: use caffeinate."
+skill_updates: []

@@ -14,3 +14,8 @@ Claude Code-side helpers (Python, NumPy; environment-dependent: not available to
 
 A candidate primitive if this becomes routine: a GIMP procedure that warps a layer from a source quad to a
 target quad (computing the homography itself), so an agent needs only corner coordinates.
+
+- `scene.py` — the bedroom as five planes (floor, ceiling, three walls) with their image polygons.
+- `render.py` — E13's 2.5D ray-caster: a new camera (orbit about a pivot) casts a ray per pixel into the planes,
+  box furniture and upright billboards; colour from the original photo where that surface point was visible,
+  a hole elsewhere; one RGBA layer per element for GIMP. `render.py <out> <theta> <A|B|C> <room texture> <photo.npy> <masks.npz> [step]`.
