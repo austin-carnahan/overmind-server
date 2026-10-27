@@ -62,7 +62,8 @@ wall into the mask (every lamp candidate did); a box hugging the object keeps it
 shadow strips along the object's straight edges with a polygon.
 
 **Models compared on this scene** (E04): SAM 2.1 candidates and EdgeSAM both good on furniture;
-EfficientSAM3 from text found neither "a nightstand" nor "a table lamp" (presence 0.22 / 0.03). Try
+EfficientSAM3 from text found neither "a nightstand" nor "a table lamp" (presence 0.22 / 0.03), but
+"bed skirt" worked (presence 0.88, nearly as good as SAM 2.1; E02). Try
 another model when one misses, and say which one you used.
 
 ## Recover before generating [demonstrated]

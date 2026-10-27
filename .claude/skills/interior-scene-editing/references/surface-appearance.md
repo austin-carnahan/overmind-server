@@ -63,3 +63,18 @@ Limits: the wall's photographed colour cast remains in its shading; walls seen t
 ## Related
 
 [scene and objects](scene-and-objects.md) · the gimp skill's [layers and modes](../../gimp/references/layers-and-modes.md)
+
+## Recolouring furniture and fabric [demonstrated, E02]
+
+The wall method works on fabric (lift + LCh Color keeps folds, highlights and stripes), with three
+differences:
+
+- **Do it in the object's pristine copy** ("Placement originals (hidden)" › "<object> (pristine)"): every
+  placement rebuilds the object from it, so edits there survive moves and edits on the live group don't.
+- **Masks:** a part with its own cutout layer (a pillow) is its own mask. Otherwise segment the pristine
+  copy itself: raise its container above the Room group, show it and hide the live object, publish, then
+  put both back (at the bottom of the stack it's invisible and the models see empty floor). Grow masks
+  2-3 px **inside the object's own pixels**: cutouts overlap (the body cutout also holds the pillows'
+  pixels), and a mask exactly at an edge leaves a fringe.
+- **Cap the lift** (about 0.5-1.3): patterned fabric clips if lifted far.
+
