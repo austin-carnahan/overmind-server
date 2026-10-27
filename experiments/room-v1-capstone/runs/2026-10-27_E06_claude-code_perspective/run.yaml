@@ -1,0 +1,68 @@
+experiment: E06
+run_id: 2026-10-27_E06_claude-code_perspective
+condition: exploratory
+status: pass
+started: 2026-10-27T03:40
+finished: 2026-10-27T04:20
+
+agent:
+  name: Claude Code
+  harness: "Claude Code VS Code extension 2.1.308"
+  model: claude-opus-5-5
+skills:
+  revision: b308c90
+  loaded: [gimp, interior-scene-editing]
+capabilities:
+  gimp_agent_mcp: "0.5.0 (38 tools, Python off)"
+  gimp: "3.2.6"
+  overmind_gimp_plugin: a23557b
+  cerebrate_mcp: "291e3c9, image sha256:8718726f4c13"
+  extra: ["Python + NumPy on the Mac (homography)", "shell on the Mac"]
+
+inputs:
+  scene: bedroom_v1
+  assets: [window_dressing]
+  instruction: "Warp a planar furniture face or curtain panel to match the room perspective."
+
+outputs:   # ~/DesignStudio/workspaces/room-v1-capstone/runs/2026-10-27_E06_claude-code_perspective/
+  xcf: working.xcf                 # "Curtains (method B)" (shown), "Curtains (method A)" (hidden): panels + room light + drop shadow
+  before: before.png
+  clean: after-clean.png
+  annotated: after-annotated.png
+  compare: [method-A.png, method-B.png]
+  cutouts: [curtain-near.png, curtain-far.png]
+
+attempts:
+  - n: 1
+    method: "global camera (E05) back-projection onto the left-wall plane"
+    result: "rejected before building: the rod, trim top and sill come out tilted ~4 deg on that plane (their vanishing point (3303,1207) vs the baseboard one (3875,1044)); the baseboard lines were fitted near the corner"
+  - n: 2
+    method: "two panels (SAM 2.1 c1 each) warped with gimp-item-transform-perspective; corners A = linear interpolation along the trim/rod lines, B = the window trim's own homography (a real rectangle on the wall, width/height 1.3); room light Multiply + drop shadow"
+    result: "first run: slivers -- the exported cutout PNG kept the asset's full canvas; cropped to content before warping. Then: B correct (near panel wider, far foreshortened); A's far panel too wide (no depth foreshortening); curtains too dark/khaki"
+  - n: 3
+    method: "room-light Multiply at 55% (they hang beside a bright window)"
+    result: "cream, believable -- chosen (method B)"
+model_comparison:
+  sam21: "c1 0.97 both panels: complete, no holes -- chosen; c0 small holes / window-light bleed"
+  efficientsam3: "'a curtain' presence 0.99, both panels found (0.82, 0.80) -- usable here"
+coverage_check: "renders of the window zone; panels top at the rod, edges over the trim"
+
+interfaces:
+  mcp_tools:
+    - "gimp_open (asset), cerebrate segment_region (SAM 2.1 candidates), segment_by_text (EfficientSAM3), overmind-publish"
+    - "gimp_pdb_call: gimp-image-select-polygon, gimp-file-load-layer, gimp-image-insert-layer, gimp-item-transform-perspective, gimp-image-select-item"
+    - "gimp_layer (duplicate/add_alpha/crop_to_content/new/set/reorder/delete), gimp_layer_mask, gimp_measure histogram, gimp_apply_filter dropshadow (append), gimp_export, gimp_render"
+  models: ["SAM 2.1", "EfficientSAM3"]
+  scripts_or_direct: ["Python/NumPy: the window homography and the panel corners (B); line intersections and a grid read-off (A)", "PIL grids/crops"]
+beyond_buckminster:
+  - step: "perspective-correct panel corners (B)"
+    capability: "a 3x3 homography from the window's 4 corners (NumPy SVD)"
+    why: "linear interpolation along image lines (A, possible by hand) misplaces depth"
+    mcp_alternative: "a small primitive: map points from a known rectangle's coordinates into the image (or warp a layer into 'u0..u1, v0..v1 of this rectangle') -- the warp itself is already gimp-item-transform-perspective"
+    tradeoffs: "A is close for short spans; it fails visibly when one side is much nearer the camera"
+interventions: []
+observations:
+  worked: "Use a real rectangle on the same plane (the window trim) as the plane's reference: place items in its rectified coordinates, warp with gimp-item-transform-perspective."
+  failed: "The global camera from short baseboard lines is off by ~4 deg on the far left wall; linear interpolation along lines (A) ignores foreshortening."
+  follow_up: "Light match by Multiply needs softening next to a light source (window)."
+skill_updates: []

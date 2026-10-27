@@ -79,6 +79,26 @@ roughly the room camera's height and angle.
   active**, add grounding, then place it with `overmind-place-on-floor`.
 - Limit: the lighting is mirrored too (the shaded side may now face the window).
 
+## Putting a flat item on a wall in perspective [demonstrated, E06]
+
+Curtains, a framed print, a panel: anything flat on a wall.
+
+1. Cut the item out (SAM 2.1 candidates) and export it as PNG; after loading it as a layer, **crop it to
+   content** (the PNG keeps the source's whole canvas, and the warp would map that).
+2. Find a **real rectangle on the same wall** (a window's trim, a door frame) and its four image corners. Its
+   rectified coordinates (width/height ratio from the real object or an estimate) are the wall's coordinate
+   system: place the item there (e.g. a curtain from the rod's height to below the sill, overlapping the
+   trim).
+3. Map the item's four corners from those coordinates into the image with the rectangle's homography
+   **[gap]** (numerical). Interpolating linearly along the image lines instead gets depth wrong: the far
+   side comes out too wide.
+4. Warp with `gimp-item-transform-perspective` (upper-left, upper-right, lower-left, lower-right).
+5. Light: Multiply by a known white's photographed colour, softened (~55%) next to a light source; a soft
+   drop shadow appended (`gegl:dropshadow`, `mode="append"`).
+
+Prefer the wall's own rectangle over a whole-room camera: a camera from short baseline segments was off by
+~4° on a far wall.
+
 ## Turning an object 90° (simulated) [experimental, E05]
 
 A cutout can't really rotate, but some objects can be convincingly re-faced. Choose by object:
