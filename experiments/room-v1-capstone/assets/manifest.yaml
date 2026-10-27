@@ -1,0 +1,100 @@
+# Fill each file, source_page, rights, size and SHA-256 after downloading.
+# No third-party image bytes are included in this starter pack.
+# Files live outside the repository, under ASSET_ROOT (relative `file:` paths resolve there):
+#   ~/DesignStudio/workspaces/room-v1-capstone/assets/
+# Never edit a downloaded original; derivatives go in a run's output folder.
+
+scenes:
+  bedroom_v1:
+    file: ~/DesignStudio/workspaces/bedroom/bedroom-v1.xcf     # reference; never modified by a run
+    sha256: 85160e7cf990d47d54dff9bc7331c0f66d45c6a778a1c874ea5a34daf9f0d491
+    pinned: 2026-10-26
+    state: "after Experiments 1-4: Rug, Bed (placed closer, scale 1.40), Nightstand, Lamp, Room (rebuilt behind the bed), hidden Original photograph and Placement originals"
+  bedroom_photo:
+    file: ~/DesignStudio/workspaces/spike-a/bedroom.jpg
+    sha256: 5d94a32ec35ac179cb69b4222e1d09940dbf30960548d0a0b37fb1a3870e1deb
+    cerebrate_path: /mnt/substrate/design-studio/projects/bedroom/sources/5d94a32ec35ac179cb69b4222e1d09940dbf30960548d0a0b37fb1a3870e1deb.jpg
+
+assets:
+  nightstand_symmetric:
+    status: to_source
+    kind: furniture_photo
+    target: "simple approximately symmetrical nightstand, top/feet visible"
+    file: null
+    source_page: null
+    rights: null
+    sha256: null
+    physical_dimensions_cm: null
+  nightstand_asymmetric:
+    status: to_source
+    kind: furniture_photo
+    target: "asymmetric nightstand for viewpoint stress test"
+    file: null
+    source_page: null
+    rights: null
+    sha256: null
+    physical_dimensions_cm: null
+  chair_catalog:
+    status: to_source
+    kind: furniture_photo
+    target: "chair clean product photo, feet visible, compatible viewing angle"
+    file: null
+    source_page: null
+    rights: null
+    sha256: null
+    physical_dimensions_cm: null
+  chair_room_photo:
+    status: to_source
+    kind: furnished_room_photo
+    target: "chair in a furnished room with partial clutter or occlusion"
+    file: null
+    source_page: null
+    rights: null
+    sha256: null
+  window_dressing:
+    status: to_source
+    kind: drapery_photo
+    target: "curtain or shade with visible folds"
+    file: null
+    source_page: null
+    rights: null
+    sha256: null
+  fabric_pattern_a:
+    status: to_source
+    kind: texture
+    target: "repeatable linen or woven textile pattern"
+    file: null
+    source_page: null
+    rights: null
+    sha256: null
+  fabric_pattern_b:
+    status: to_source
+    kind: texture
+    target: "floral, stripe or contrasting textile print"
+    file: null
+    source_page: null
+    rights: null
+    sha256: null
+  wall_art:
+    status: to_source
+    kind: artwork
+    target: "rectangular print or framed graphic with clear usage rights"
+    file: null
+    source_page: null
+    rights: null
+    sha256: null
+  paint_clary_sage:
+    kind: paint_color
+    name: "Sherwin-Williams Clary Sage SW 6178"
+    source_page: "https://www.sherwin-williams.com/en-us/color/color-family/green-paint-colors/SW6178-clary-sage"
+    hex_approx: null
+  paint_evergreen_fog:
+    kind: paint_color
+    name: "Sherwin-Williams Evergreen Fog SW 9130"
+    source_page: "https://www.sherwin-williams.com/en-us/color/color-family/green-paint-colors/sw9130"
+    hex_approx: null
+  paint_goldenrod:
+    kind: paint_color
+    name: "Sherwin-Williams Goldenrod SW 6677"
+    source_page: "https://www.sherwin-williams.com/en-us/color/color-family/yellow-paint-colors/SW6677-goldenrod"
+    hex_approx: null

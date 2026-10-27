@@ -1,0 +1,91 @@
+suite: room-v1-capstone
+scene: bedroom-v1.xcf      # ~/DesignStudio/workspaces/bedroom/bedroom-v1.xcf; pinned in assets/manifest.yaml (scenes)
+purpose: "Explore GIMP + Cerebrate decorating capabilities before freezing Buckminster's scene-editing skill."
+experiments:
+  - id: E01
+    name: Wall recoloring
+    category: appearance
+    priority: pilot
+    prompt: "Repaint the back wall a muted sage green; test a mustard alternative."
+    assets: [paint_clary_sage, paint_evergreen_fog, paint_goldenrod]
+    check: [clean_boundaries, preserved_lighting, editable_layers]
+  - id: E02
+    name: Furniture recoloring
+    category: appearance
+    prompt: "Recolor the bed upholstery or pillows, retaining their shape and shading."
+    assets: []
+    check: [preserved_folds, clean_mask, survives_replacement]
+  - id: E03
+    name: Material and pattern replacement
+    category: appearance
+    priority: high
+    prompt: "Replace the bedspread's material with patterned textile, retaining folds and highlights."
+    assets: [fabric_pattern_a, fabric_pattern_b]
+    check: [plausible_pattern_deformation, retained_volume, editable_result]
+  - id: E04
+    name: Basic mirroring
+    category: geometry
+    priority: pilot
+    prompt: "Mirror the existing nightstand and position it opposite the bed."
+    assets: []
+    check: [plausible_view, correct_floor_contact, group_integrity]
+  - id: E05
+    name: Simulated 90-degree object rotation
+    category: geometry
+    prompt: "Approximate a quarter-turn view of a symmetrical cabinet using splits, mirroring and warps."
+    assets: [nightstand_symmetric]
+    check: [face_alignment, plausible_silhouette, documented_artifacts]
+  - id: E06
+    name: Perspective warping
+    category: geometry
+    prompt: "Warp a planar furniture face or curtain panel to match the room perspective."
+    assets: [window_dressing]
+    check: [aligned_perspective, no_large_tears, editable_result]
+  - id: E07
+    name: Object duplication
+    category: composition
+    prompt: "Create a second matching nightstand or lamp and place it on the other side."
+    assets: []
+    check: [independent_group, pristine_reuse, believable_occlusion]
+  - id: E08
+    name: Wall-mounted decoration
+    category: composition
+    prompt: "Hang an imported artwork on the wall; optionally try a new window dressing."
+    assets: [wall_art, window_dressing]
+    check: [wall_perspective, clean_edges, editable_group]
+  - id: E09
+    name: Object overlap and occlusion
+    category: composition
+    prompt: "Overlap or reorder bed, rug and nightstand; try moving several groups together."
+    assets: []
+    check: [correct_ordering, protected_stationary_pixels, undoable_group_move]
+  - id: E10
+    name: Partial concealment
+    category: composition
+    priority: high
+    prompt: "Place a chair partly behind the nightstand, then in front of it."
+    assets: [chair_catalog]
+    check: [accurate_visibility, believable_edges, independent_objects]
+  - id: E11
+    name: External furniture import
+    category: external_assets
+    priority: primary_gate
+    prompt: "Extract a catalog chair or replacement nightstand and place it in the bedroom; reuse and move it again."
+    assets: [chair_catalog, nightstand_symmetric]
+    check: [clean_cutout, plausible_scale, floor_contact, reusable_group, convincing_shadow]
+  - id: E12
+    name: Difficult external extraction
+    category: external_assets
+    priority: high
+    prompt: "Extract a furniture object from an already furnished room photo, then place it in our bedroom."
+    assets: [chair_room_photo]
+    check: [mask_quality, fringe_control, editable_result]
+  - id: E13
+    name: Modest camera viewpoint shift
+    category: challenge
+    priority: exploratory_not_beta_gate
+    prompt: "Attempt nearby room viewpoints at 10-15, 20-30 and 30-35 degrees; optionally 45."
+    assets: []
+    tiers_degrees: ["10-15", "20-30", "30-35", "optional 45"]
+    methods: [surface_warp, layered_reprojection, selective_reconstruction]
+    check: [room_coherence, plausible_surfaces, failure_modes_documented]
