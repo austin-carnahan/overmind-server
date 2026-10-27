@@ -1,0 +1,87 @@
+experiment: E05
+run_id: 2026-10-27_E05_claude-code_rotation
+condition: exploratory
+status: pass                       # for solid box-like furniture in the room; fails documented per object below
+started: 2026-10-27T01:50
+finished: 2026-10-27T03:30
+scope_note: "User widened scope mid-run: several items incl. the bed, several approaches, differently oriented items; the five-attempt limit lifted for this experiment."
+
+agent:
+  name: Claude Code
+  harness: "Claude Code VS Code extension 2.1.308"
+  model: claude-opus-5-5
+skills:
+  revision: 7682647
+  loaded: [gimp, interior-scene-editing]
+capabilities:
+  gimp_agent_mcp: "0.5.0 (38 tools, Python off)"
+  gimp: "3.2.6"
+  overmind_gimp_plugin: a23557b
+  cerebrate_mcp: "291e3c9, image sha256:8718726f4c13"
+  extra: ["Python + NumPy on the Mac (camera model, homographies)", "shell on the Mac"]
+
+inputs:
+  scene: bedroom_v1
+  assets: [nightstand_symmetric]
+  instruction: "Approximate a quarter-turn view of a symmetrical cabinet using splits, mirroring and warps. (User: try several items incl. the bed, the different approaches, differently oriented items; limit lifted.)"
+
+outputs:   # ~/DesignStudio/workspaces/room-v1-capstone/runs/2026-10-27_E05_claude-code_rotation/
+  xcf_room: room-bed3.xcf          # "Bed (rotated 90°, method C3D)", "Nightstand (rotated -90°, moved, C3D)", bed -90 variant (hidden), stool C3D (hidden)
+  xcf_cabinet: rotation.xcf        # cabinet: A mirror, C2D faces, C3D variants
+  before: before.png
+  clean: after-clean.png           # bed +90, nightstand re-posed, stool unchanged
+  annotated: after-annotated.png
+  renders: [bed-source.png, bed-A-mirror.png, bed-C3D.png, bed-C3D-v2.png, bed-C3D-k-1.png, ns-stool-C3D.png, cab-*.png, attempt-A-mirror.png, attempt-C-faces.png]
+  code: "experiments/room-v1-capstone/tools/rotation/ (camera.py, box.py, rotate_lib.py)"
+
+methods:
+  A_mirror: "flip the object horizontally (a symmetric object seen from the other side)"
+  B_split_mirror: "not used: for these objects it reproduces the same view (no rotation)"
+  C2D_face_swap: "swap front and side faces into each other's slots, widths by an assumed W/D ratio (cabinet only)"
+  C3D_camera: "camera from two perpendicular vanishing points; object fitted as a box on the floor; rotated 90 deg (and moved) in 3D; each visible face warped from its source face (hidden faces from their opposite, mirrored) by a homography; top rotated; small objects on top (pillows, lamp) re-anchored as sprites; new footprint shadow"
+  D_identity: "four-fold or rotationally symmetric objects: a quarter turn looks the same -- leave them"
+
+results:
+  bed:
+    C3D_plus90: "convincing: striped long side to the front, mirrored foot end as the head end, blanket top rotated, pillows as sprites at the head end. Untidy near corner (blanket overhang vs end face)."
+    C3D_minus90: "geometrically right; pillows not carried (flattened into the top)."
+    A_mirror: "plausible at a glance, but the mirrored bed contradicts the room's perspective (it is the same view flipped, not a turn)."
+  nightstand: "C3D: rotated -90 and moved against the left wall, drawers facing into the room, lamp riding along: convincing; small stretched patch between the legs."
+  stool: "C3D failed: open frame with splayed legs -- the wall seen through its openings is baked into the face textures. D (unchanged) is right for a square stool."
+  lamp: "D: rotationally symmetric."
+  cabinet_asset:
+    A_mirror: "best: reads as the symmetric cabinet seen from the other side."
+    C2D: "drawer front in the side slot plausible; the side panel stretched ~8x is a blurry plank without legs."
+    C3D: "failed: nearly frontal product shot from tabletop height; the 92 px side face gives an ill-conditioned vanishing point (depth 0.59 vs width 1.99; the model puts the camera below the top); faces don't join."
+  chair: "not attempted: ornate, non-box; only A would apply."
+
+attempts:
+  - {n: 1, what: "cabinet A + C2D", result: "A hidden under the white backdrop (stacking bug); C2D blurry side panel"}
+  - {n: 2, what: "camera model from the room's vanishing points", result: "f 2393 px (HFOV 80 deg), tilt 12 deg; room-corner vertical within 6 px; bed box fitted from hem floor contacts (W/L 0.75)"}
+  - {n: 3, what: "bed C3D, source via duplicate+merge of the pristine group", result: "the first gimp-group-layer-merge produced a 4000x3000 layer and the top-level groups vanished (disposable copy; cause unclear); switched to selection-based cutouts"}
+  - {n: 4, what: "bed C3D", result: "top face empty: homography with w < 0 everywhere is clipped by GIMP; sign-normalised"}
+  - {n: 5, what: "bed C3D + pillow sprites", result: "convincing"}
+  - {n: 6, what: "nightstand re-posed C3D + lamp sprite; stool C3D", result: "nightstand convincing; stool failed (open frame)"}
+  - {n: 7, what: "cabinet C3D with its own camera, measured vs prior depth, k=+1/-1", result: "failed (ill-conditioned)"}
+  - {n: 8, what: "stool D; bed -90 variant", result: "final composite"}
+
+interfaces:
+  mcp_tools:
+    - "gimp_pdb_call: gimp-item-transform-matrix (per face), gimp-image-select-polygon/item, gimp-selection-translate, gimp-item-transform-flip-simple, gimp-group-layer-new/insert-layer"
+    - "gimp_layer duplicate/move/scale/set/reorder/merge_down, gimp_layer_mask, gimp_draw fill_selection, gimp_apply_filter gaussian-blur, gimp_render (grid overlays to read corners), gimp_measure"
+    - "cerebrate detect_by_text (OWLv2), segment_region (SAM 2.1), segment_by_text (EfficientSAM3: no detection for 'a nightstand' on the asset)"
+  models: ["SAM 2.1", "OWLv2 B/16", "EfficientSAM3"]
+  scripts_or_direct: ["Python/NumPy camera model and homographies (tools/rotation)", "PIL grids and crops for reading corners"]
+beyond_buckminster:
+  - step: "camera from vanishing points, box fitting, 3D rotation, homographies"
+    capability: "numerical computation (NumPy: SVD for homographies, ray casting)"
+    why: "every face needs a 3x3 projective matrix from 4 point pairs; by hand this is error-prone"
+    mcp_alternative: "a small primitive: warp a layer from a source quad to a target quad (the plug-in computes the homography); the 3D part (where the rotated corners land) would still need geometry -- a 'rotate box on floor' helper using the stored floor horizon/vanishing points would cover it"
+    tradeoffs: "without it, an agent can only do A (mirror) and D (identity), or eyeball target quads"
+interventions:
+  - "User widened the scope and lifted the attempt limit for E05."
+observations:
+  worked: "C3D for solid box-like furniture in a photo with two clear receding directions: the bed and the nightstand turn convincingly, including a re-pose to a new wall; small top objects as re-anchored sprites."
+  failed: "Open-frame objects (background baked into faces); near-frontal product shots (ill-conditioned camera); A (mirror) is a reflection, not a turn, and contradicts room perspective."
+  follow_up: "Candidate primitives (observations): quad-to-quad warp; rotate-box-on-floor using the document's floor geometry. Untidy corners where hanging fabric crosses a box edge."
+skill_updates: []

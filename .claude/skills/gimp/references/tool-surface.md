@@ -38,6 +38,11 @@ your client prefixes them (`gimp_gimp_*` in OpenClaw, `mcp__gimp__gimp_*` in Cla
   float it): `gimp-selection-none` first when you mean the whole item.
 - Procedures taking a **drawables array** (e.g. `plug-in-tile`) fail through `gimp_pdb_call` on GIMP 3.2
   (`set_core_object_array` error): find another route (tiling = duplicate the layer at offsets).
+- `gimp-item-transform-matrix` clips every point whose projective w is negative: a homography that is right
+  up to sign can return an **empty** layer. Normalise the matrix so w > 0 over the layer (multiply by -1).
+- Avoid `gimp-group-layer-merge` on a freshly duplicated group: once (E05) it merged the document's whole top
+  level into one layer. To get one layer of an object, select its members' alpha and cut from the source
+  layer instead.
 - **Bringing a file in as a layer:** `gimp_pdb_call("gimp-file-load-layer", {"image": id, "file": path})`,
   then `gimp-image-insert-layer`. To hand a cutout from one image to another, hide the other layers,
   `gimp_export` it as PNG (alpha is kept) and load that.

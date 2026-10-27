@@ -79,6 +79,34 @@ roughly the room camera's height and angle.
   active**, add grounding, then place it with `overmind-place-on-floor`.
 - Limit: the lighting is mirrored too (the shaded side may now face the window).
 
+## Turning an object 90° (simulated) [experimental, E05]
+
+A cutout can't really rotate, but some objects can be convincingly re-faced. Choose by object:
+
+| Object | Method |
+| --- | --- |
+| Solid, box-like (bed, nightstand, cabinet), in a photo with two clearly receding floor directions | **C3D**: works ([demonstrated] on the bed and the nightstand) |
+| Four-fold or rotationally symmetric (square stool, round lamp) | **leave it** (a quarter turn looks the same) |
+| Symmetric object in a near-frontal photo (product shot) | **mirror** (reads as the other side; not a true turn) |
+| Open frames (stools with gaps), ornate shapes (carved chairs) | **don't**: the background seen through gaps is baked into its faces |
+
+**C3D** (needs geometry the shared tools don't compute: **[gap]**; a Claude Code reference implementation is
+in `experiments/room-v1-capstone/tools/rotation/`):
+
+1. A camera from two vanishing points of perpendicular floor directions (the two walls' baseboards): focal
+   length and orientation. Check it on a vertical (a room corner).
+2. Fit the object as a box on the floor from its **floor contacts** (legs, the hem of a skirt), not from the
+   top of fabric that hangs over its edges; height from a vertical edge.
+3. Rotate the box 90° about its vertical axis (and move it, if re-posing). Each face visible afterwards takes
+   its texture from the same face of the original; a face that was hidden takes its opposite, mirrored.
+4. Warp each face with `gimp-item-transform-matrix` (the homography from source quad to target quad), clip
+   it to its target quad; rotate the top the same way. Objects resting on top (pillows, a lamp) move as
+   separate pieces, re-anchored in 3D and scaled for depth.
+5. New contact shadow from the rotated footprint. Paint far faces first.
+
+Limits: fabric that hangs across a box edge leaves untidy corners; it is a re-facing of the photographed
+sides, so anything never photographed (the back) is borrowed by symmetry.
+
 ## Hidden parts of a moving object [demonstrated]
 
 A move can reveal parts that were hidden behind something that stays (the bed's skirt behind the rug, or

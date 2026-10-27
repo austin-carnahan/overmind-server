@@ -137,7 +137,7 @@ class Session:
 async def hud(s, image_id, title, status, group=None):
     """Create or update the experiment HUD: a top group of native text layers, through MCP tools only.
     Returns {"group", "title", "status", "backing"} ids. Hide it before publishing or clean exports."""
-    saved = s.run_dir / "hud.json"
+    saved = s.run_dir / f"hud-{image_id}.json"                # per image: a run can drive several documents
     if group is None and saved.exists():                     # this run already made one: reuse it
         group = json.load(open(saved))
     if group is None:
