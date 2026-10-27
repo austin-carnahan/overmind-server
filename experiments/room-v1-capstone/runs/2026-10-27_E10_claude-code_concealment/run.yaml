@@ -1,0 +1,61 @@
+experiment: E10
+run_id: 2026-10-27_E10_claude-code_concealment
+condition: exploratory
+status: pass                       # with the documented placement limits
+started: 2026-10-27T06:20
+finished: 2026-10-27T07:00
+
+agent:
+  name: Claude Code
+  harness: "Claude Code VS Code extension 2.1.308"
+  model: claude-opus-5-5
+skills:
+  revision: ed366cd
+  loaded: [gimp, interior-scene-editing]
+capabilities:
+  gimp_agent_mcp: "0.5.0 (38 tools, Python off)"
+  gimp: "3.2.6"
+  overmind_gimp_plugin: a23557b
+  cerebrate_mcp: "291e3c9, image sha256:8718726f4c13"
+  extra: ["Python on the Mac (stool anchor from a mask)", "shell on the Mac"]
+
+inputs:
+  scene: bedroom_v1
+  assets: [chair_catalog]          # via E11's cutout (chair-cutout.png), not re-extracted
+  instruction: "Place a chair partly behind the nightstand, then in front of it."
+
+outputs:   # ~/DesignStudio/workspaces/room-v1-capstone/runs/2026-10-27_E10_claude-code_concealment/
+  xcf: working.xcf                 # Chair and Stool object groups; final = chair in front of nightstand + stool, behind the bed
+  before: before.png
+  clean: after-clean.png
+  annotated: after-annotated.png
+  placements: [A-in-front-of-nightstand.png, B-behind-the-bed.png, C-behind-nightstand.png, D-beside-stool.png, final-A.png]
+
+checks:
+  accurate_visibility: "pass for A (chair over the nightstand, legs and arm gaps open), B (bed pillows hide the chair's seat front), final (arm in front of the stool): whole-group order sufficed, no local masks needed"
+  believable_edges: "pass: the cutout's legs and armrest gaps stay open over the nightstand and stool"
+  independent_objects: "pass: Chair, Stool, Nightstand each re-ordered by depth on placement"
+  behind_the_nightstand: "not physically possible here: the nightstand stands against the wall, so nothing fits behind it. Attempted (C) and rejected: the destination was behind the wall line and on top of the stool -- placement checks neither"
+
+attempts:
+  - {n: 1, method: "chair (E11 cutout) calibrated at the nightstand's depth, room light, grounding before placing; A in front of the nightstand, B behind the bed", result: "both right"}
+  - {n: 2, method: "C: chair placed to be partly behind the nightstand", result: "invalid: anchor behind the back wall's floor line, chair drawn over the stool -- the stool was part of the Room layer, so it couldn't occlude anything"}
+  - {n: 3, method: "stool cut out (E01's SAM 2.1 mask) as an object group; chair against the wall beside it (D); back to A", result: "D plausible; at A the new stool sat at the top of the stack and covered the chair's arm (only the placed group is restacked)"}
+  - {n: 4, method: "restack the stool by placing it at its own floor anchor (scale 1.0)", result: "correct order: Bed > Rug > Chair > Stool > Nightstand -- chosen"}
+
+interfaces:
+  mcp_tools: ["gimp_pdb_call: gimp-file-load-layer, overmind-make-object-group x2, overmind-place-on-floor x6, select-polygon/item/rectangle", "gimp_layer, gimp_layer_mask, gimp_draw, gimp_apply_filter, gimp_measure histogram, gimp_render"]
+  models: []                       # reused E11's chair cutout and E01's stool mask
+  scripts_or_direct: ["NumPy: the stool's floor anchor from its mask (bottom row, middle of the bottom band)"]
+beyond_buckminster:
+  - step: "the stool's own floor anchor (to restack it in place)"
+    capability: "NumPy on a decoded mask"
+    why: "overmind-place-on-floor needs a destination; placing at the current anchor restacks without moving"
+    mcp_alternative: "gimp_measure(kind='bbox') on the stool layer gives the bottom edge and centre: close enough; or a 'restack by depth' procedure"
+    tradeoffs: "bbox centre vs bottom-band middle: a few px"
+interventions: []
+observations:
+  worked: "Whole-group depth order (from floor anchors) handled every physically valid concealment, including thin legs and arm gaps, without local occlusion masks."
+  failed: "Anything that isn't an object group (the stool inside the Room layer) can't occlude; new object groups need restacking; placement has no wall or collision check."
+  follow_up: "Candidate primitives (observations): 'restack by depth' for a group without moving it; destination validation (behind a wall line / overlapping a footprint)."
+skill_updates: []

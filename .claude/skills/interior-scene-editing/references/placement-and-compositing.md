@@ -35,6 +35,13 @@ the destination with `gimp_render(points=[...])` and check the whole footprint i
 right in every collision-free case, and a rug that is about as near as the object keeps its order (the tie
 margin), which matched the photo.
 
+**Only object groups take part in depth order** [demonstrated, E10]: anything still inside the Room layer
+(a stool) is always behind every object, so a chair placed near it draws over it. Make every object that
+may need to hide something its own group first. A new group lands at the top of the stack: restack it by
+placing it at its own floor anchor (`gimp_measure(kind="bbox")` bottom-centre; scale stays 1.0). Whole-group
+order was enough for thin legs and armrest gaps; no local occlusion masks were needed. Placement also
+doesn't check walls: keep destinations in front of the wall's floor line.
+
 **Limits** [demonstrated]: a uniformly scaled cutout keeps the side it showed in the photo, so long moves
 look wrong; the horizon's tilt is the weakest input (a 2° tilt made a 1% size error on a sideways move);
 depth order compares lowest points, which says little for objects at about the same depth; supported
