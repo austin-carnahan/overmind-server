@@ -57,6 +57,14 @@ must move with it. [demonstrated on the lamp: left behind unless included]
 
 Simple compact objects: EdgeSAM (`box-refinement`) is fine and faster.
 
+**Box prompts: keep them tight** [demonstrated, E04]: a loose box pulls the object's cast shadow on the
+wall into the mask (every lamp candidate did); a box hugging the object keeps it out. Trim residual
+shadow strips along the object's straight edges with a polygon.
+
+**Models compared on this scene** (E04): SAM 2.1 candidates and EdgeSAM both good on furniture;
+EfficientSAM3 from text found neither "a nightstand" nor "a table lamp" (presence 0.22 / 0.03). Try
+another model when one misses, and say which one you used.
+
 ## Recover before generating [demonstrated]
 
 Pixels a mask missed are still in the photo: fix the mask and cut them as "(recovered pixels)". Only

@@ -34,6 +34,8 @@ your client prefixes them (`gimp_gimp_*` in OpenClaw, `mcp__gimp__gimp_*` in Cla
 - GIMP keeps layer names unique: a copy of "Bed" becomes "Bed #1". Rename after copying.
 - `gimp_layer(action="new")` always creates at the top level; move it into a group with
   `gimp_layer(action="reorder", layer_id=…, parent_id=<group>, position=0)`.
+- `gimp-item-transform-flip-simple` and other transforms act on the **selection** if one is active (they
+  float it): `gimp-selection-none` first when you mean the whole item.
 - **Bringing a file in as a layer:** `gimp_pdb_call("gimp-file-load-layer", {"image": id, "file": path})`,
   then `gimp-image-insert-layer`. To hand a cutout from one image to another, hide the other layers,
   `gimp_export` it as PNG (alpha is kept) and load that.

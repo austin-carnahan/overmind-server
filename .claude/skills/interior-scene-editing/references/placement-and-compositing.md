@@ -66,6 +66,19 @@ light **before the first placement**, or edit the pristine copy and place again.
 Limits: the object keeps the viewpoint and light direction of its source photo; choose sources shot from
 roughly the room camera's height and angle.
 
+## Mirroring or duplicating an object [demonstrated, E04]
+
+- **Where a mirror is plausible:** a flipped copy shows the opposite side of the object, which is right
+  only on the other side of the camera's view axis (an object right of centre shows its left side; its
+  mirror belongs left of centre), at a similar distance from the wall.
+- **Take supported objects along:** cut the object and what sits on it (nightstand + lamp) into one group.
+- **Complete what the original hid before flipping:** the mirror shows it. In E04 the stool had hidden the
+  nightstand's lower side panel; a copy of the visible panel shifted across filled it (stop short of
+  edges and rails, whose shadows come along otherwise).
+- Flip the group with `gimp-item-transform-flip-simple` (horizontal, auto-center) **with no selection
+  active**, add grounding, then place it with `overmind-place-on-floor`.
+- Limit: the lighting is mirrored too (the shaded side may now face the window).
+
 ## Hidden parts of a moving object [demonstrated]
 
 A move can reveal parts that were hidden behind something that stays (the bed's skirt behind the rug, or
