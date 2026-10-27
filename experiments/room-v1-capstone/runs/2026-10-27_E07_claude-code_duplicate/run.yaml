@@ -34,7 +34,7 @@ outputs:   # ~/DesignStudio/workspaces/room-v1-capstone/runs/2026-10-27_E07_clau
 
 checks:                            # the experiment's three checks
   independent_group: "pass: its own anchored object group 'Nightstand (copy)' (nightstand + lamp + continued panel + grounding), placed and moved on its own"
-  pristine_reuse: "pass: placed at A (x0.884), moved to B, placed back at A -- the group's pixels identical to the first placement (numeric check)"
+  pristine_reuse: "pass: placed at A (x0.883), moved to B, placed back at A -- the group's pixels identical to the first placement (numeric check)"
   believable_occlusion: "pass: overmind-place-on-floor restacked it behind Bed, Rug and the original Nightstand, in front of nothing nearer"
   original_untouched: "pass: the original Nightstand group's pixels identical before and after (numeric check)"
   no_resegmentation: "pass: the copy was cut from the photo with the existing Nightstand and Lamp layers' alpha as the selection"

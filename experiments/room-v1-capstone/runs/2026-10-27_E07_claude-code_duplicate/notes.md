@@ -8,7 +8,7 @@ independent object without any model calls, then placed, moved and placed back w
 
 ## Observed
 
-- **The pair reads as a matched set:** the copy is smaller for its depth (×0.884), grounded, mirrored, and
+- **The pair reads as a matched set:** the copy is smaller for its depth (×0.883), grounded, mirrored, and
   sits behind the bed's pillows.
 - **Every check passed numerically:**
   - the copy re-placed at A after a move to B is pixel-identical to its first placement;
