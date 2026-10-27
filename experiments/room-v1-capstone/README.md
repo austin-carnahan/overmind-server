@@ -26,7 +26,11 @@ detail are in [plan.md](plan.md). This folder is the authoritative record.
    have: the capability, why it was preferable, whether existing MCP operations or a small primitive
    could do it, and the tradeoffs. Keep **what was achieved** separate from **what it required**.
 4. Save the XCF and renders, set the status (`pass` / `partial` / `fail` / `blocked`), write `notes.md`.
-5. If the run taught a reusable technique or rule, update the skill in a focused commit and list it
+   Up to five attempts per experiment, numbered in `run.yaml`; check coverage (overlay masks on the photo)
+   before judging results.
+5. **Stop:** show the results with your own evaluation and a recommendation, open the run's XCF in GIMP,
+   and wait for confirmation before the next experiment.
+6. If the run taught a reusable technique or rule, update the skill in a focused commit and list it
    under `skill_updates`. Measurements, screenshots and trial history stay in the run, not the skill.
 
 Buckminster's environment: the GIMP Agent MCP (38 tools), Cerebrate (9 tools), Overmind's `overmind-*`
