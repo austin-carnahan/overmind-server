@@ -5,6 +5,8 @@ for a representative subset, by Buckminster, with the same skills and starting c
 experiments are defined in [experiments.yaml](experiments.yaml); the reasoning and per-experiment
 detail are in [plan.md](plan.md). This folder is the authoritative record.
 
+**Status (2026-10-27):** all 13 experiments run by Claude Code; summary in [DIGEST.md](DIGEST.md).
+
 ## Where things live
 
 | What | Where |
