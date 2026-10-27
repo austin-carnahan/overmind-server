@@ -186,10 +186,13 @@ with the group. Limit: it is the shadow of the old spot, including other objects
 
 [scene and objects](scene-and-objects.md) · [surface reconstruction](surface-reconstruction.md)
 
-## A nearby viewpoint, faked in GIMP [demonstrated, E13 v2]
+## A nearby viewpoint, faked in GIMP [experimental, E13 v2: partial]
 
 Aim for a convincing picture, not a correct render. Every element is a layer:
 
+0. **Wireframe first:** draw the room's floor, ceiling and corner lines for the new view from one camera
+   model, as their own layer. Fit every surface layer to it and check it overlaid before anything else.
+   Planes warped independently left walls and ceiling visibly misaligned (E13 v2's biggest flaw).
 1. **What the photo saw:** each room surface warped by one 3×3 matrix (`gimp-item-transform-matrix`);
    furniture as box faces (E05) and upright sprites (pillows, lamps, stools: scaled by depth, anchored where
    they rest). Cut pillows out of the bed's top before warping it, or they lie flat.
@@ -205,6 +208,13 @@ Aim for a convincing picture, not a correct render. Every element is a layer:
 
 **Bound every warp's source** to what maps in front of the camera and near the frame: an unbounded source
 mapped toward the horizon hung GIMP for minutes and exhausted memory.
+
+- **Don't extend surfaces near the camera** with shifted copies: they read as a stretched, mixed room. Frame
+  tighter, or paint the plane plainly and let the crop hide it.
+- **Cut out fixtures before repainting a surface** (a ceiling fan, lights, vents) and re-place them as
+  sprites; hiding the photo ceiling erased the fan.
+- **Ask where unseen fixtures are** (which end of a wall a door is at) instead of inferring it from a
+  grazing view; the inference put the closet door mid-wall instead of near the corner.
 
 ## A nearby viewpoint of the whole room [experimental, E13]
 

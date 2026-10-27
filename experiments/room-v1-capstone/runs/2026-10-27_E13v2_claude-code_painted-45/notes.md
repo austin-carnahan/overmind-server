@@ -39,3 +39,21 @@ For a new viewpoint:
 - frame the convincing part.
 
 Open: softness and wear on painted elements; Poisson-blend the copy seams.
+
+## User review (2026-10-27): partial pass
+
+- **Room edges don't line up.** Walls and ceiling are all over the place; this is the biggest flaw. Each
+  plane was warped on its own, from a camera that is only approximate on the far walls, and the painted
+  bases came from separate quads. Nothing forced the layers to share edges, and I didn't check them
+  against a common wireframe.
+- **The near room looks extended.** The shifted copies of the floor and left wall read as a mixed,
+  stretched room near the camera. Shifted copies only work on surfaces that stay far away.
+- **The door is in the wrong place.** The closet door is near the corner, not mid-wall. Its position was
+  inferred from a grazing view; the user's knowledge of the room beats that.
+- **The ceiling fan is gone.** It went with the hidden photo ceiling. Fixtures on a repainted surface need
+  to be cut out and re-placed first.
+- **Worked:** pillows as upright sprites (no longer flat).
+
+Next time: wireframe first, every layer fitted and checked against it; no extension near the camera
+(frame or paint plainly); fixtures cut out before repainting; ask about unseen layout (door position)
+rather than infer it from a grazing view.

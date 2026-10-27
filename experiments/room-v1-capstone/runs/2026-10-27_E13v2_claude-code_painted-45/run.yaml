@@ -1,7 +1,7 @@
 experiment: E13
 run_id: 2026-10-27_E13v2_claude-code_painted-45
 condition: exploratory             # revision of 2026-10-27_E13_claude-code_camera-shift at the user's direction
-status: pass                       # a convincing 45-degree view (framed); visible seams documented
+status: partial                    # user review 2026-10-27: pillows solved; geometry and fills sloppy (see user_review)
 started: 2026-10-27T07:20
 finished: 2026-10-27T08:55
 
@@ -68,6 +68,19 @@ beyond_buckminster:
     tradeoffs: "everything else here is shared-tool work"
 interventions:
   - "User direction after E13 v1 (see instruction)."
+user_review:   # 2026-10-27, verdict: partial pass
+  - "Walls and ceiling don't line up: the room's edges are all over the place (the biggest flaw)."
+  - "Near the camera the room looks extended: floor and left-wall fills are weird and mixed."
+  - "The closet door is near the corner, not mid-wall (hard to see in the photo; known to the user)."
+  - "The ceiling fan was erased."
+  - "Good: the pillows aren't flat any more."
+revisit:
+  - "One room wireframe (floor, ceiling and corner lines from the camera model) drawn first; every surface layer fitted to it; checked with the wireframe overlaid before anything else. Each plane was warped independently here, so nothing forced shared edges."
+  - "Near the camera, no shifted-texture extension: frame tighter, or paint the plane plainly and let the crop hide it."
+  - "Door at the corner end of the right wall (user knowledge beats inference from a grazing view)."
+  - "Keep ceiling fixtures: the fan as a sprite cut from the photo, re-anchored on the ceiling, before the ceiling is repainted."
+  - "Earlier list: graphic door, floor seam and duplicated vent, white stroke on the back wall, straight-cut bed edges."
+
 observations:
   worked: "Faking it in layers: unseen walls painted from their sampled colour + gradient, a door painted front-on and warped into place, textures continued by shifted copies, furniture as boxes and sprites, then framing."
   failed: "Unbounded perspective warps can hang GIMP for minutes and exhaust memory; reorder positions inside groups are easy to get wrong; brightness/contrast on a dark painted surface washes it out."
