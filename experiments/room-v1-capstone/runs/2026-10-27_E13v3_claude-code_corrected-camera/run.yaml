@@ -1,0 +1,92 @@
+experiment: E13
+run_id: 2026-10-27_E13v3_claude-code_corrected-camera
+condition: exploratory             # third pass at the user's request ("one more crack ... just for fun"); final attempt
+status: pass                       # pending the user's review; remaining flaws listed below
+started: 2026-10-27T10:05
+finished: 2026-10-27T11:40
+
+agent:
+  name: Claude Code
+  harness: "Claude Code VS Code extension 2.1.308"
+  model: claude-opus-5-5
+skills:
+  revision: a3c29ed
+  loaded: [gimp, interior-scene-editing]
+capabilities:
+  gimp_agent_mcp: "0.5.0 (38 tools, Python off)"
+  gimp: "3.2.6"
+  overmind_gimp_plugin: a23557b
+  cerebrate_mcp: "291e3c9, image sha256:8718726f4c13"
+  extra: ["Python + NumPy on the Mac: camera calibration, 3D clipping, 3x3 matrices and quads (tools/rotation/view45_v3.py)", "PIL: planning previews, line measurement on columns, the final crop", "shell on the Mac"]
+
+inputs:
+  scene: bedroom_v1
+  assets: []
+  instruction: >-
+    After the v2 review (walls and ceiling misaligned; near room looks extended; closet door belongs near the
+    corner; ceiling fan erased; pillows fixed): take one more crack at the 45-degree view. Mid-run tip: a
+    ceiling fan looks alike from any angle, so it is an easy place to cheat.
+
+outputs:   # ~/DesignStudio/workspaces/room-v1-capstone/runs/2026-10-27_E13_claude-code_camera-shift/v3/
+  xcf: view45-v3.xcf               # 4000x3000: groups Room (45° view) / Right wall / Furniture (45° view); sources hidden
+  framed: view45-v3-framed.png     # 4:3 crop (0,0,3460,2595): the presented view
+  full: attempt3-full.png
+  attempts: [attempt1.png, attempt2.png, attempt3.png]
+  previews: [preview-a.png, preview-b.png, crop-door.png]   # PIL planning previews with the wireframe
+  texture: room-texture-v3.png     # bg-room-clean + fan inpainted + nightstand ghost removed (sources-v3.xcf)
+  casing: casing.png               # the painted casing, front-on
+  geometry: [geom.py, view.json, preview.py, prep1.py, prep2.py, build.py]
+
+how:
+  camera: >-
+    Re-derived. v1/v2 took the vanishing points from the baseboards' top and bottom edges, ~90 px apart, so they
+    were badly off (f 2393, the ceiling at 1.16-1.49 camera heights depending on where it was measured). v3 takes
+    each wall's VP from its floor line and ceiling line (back (2,1180), left (3327,1192)): f 1598, tilt ~11 deg;
+    the ceiling comes out at 1.685-1.703 everywhere on both walls, and the predicted vertical VP (1971,9661) matches
+    the one measured from the door casing and window trim (~1910,10285).
+  view: "turned 45 deg (yaw -45) about the room, standing inside it at (1.5, 0.0) against the near wall; v2's orbit had put the camera 0.8 units outside the room"
+  planes: "each room rectangle clipped in 3D to the new view and then to the photo's view: its source polygon and its target share the model's edges, so walls, ceiling and floor meet by construction"
+  doorway: "the photo's grazing strip of the right wall, warped, holds the real closet doorway (casing, open slab, strap hinges, knob) near the back corner; kept inside the door quad, wall painted around it, a crisp casing painted front-on (trim colour) and warped over the opening edges"
+  fan: "SAM 2.1 (box) candidate 1 + two chain polygons; MI-GAN removed it from the ceiling texture (its ceiling shadow kept); re-placed as one upright sprite anchored at its canopy, scaled by distance"
+  furniture: "v2's hand-fitted boxes carried over through their image corners into the new camera; faces warped, except faces nearly edge-on to the new camera (cos < 0.3), which are painted; pillows as sprites, nudged 40 px onto the bed"
+  texture_cleanup: "nightstand ghost: wall part MI-GAN, floor part shifted along the floor plane, baseboard band mapped band-to-band from measured edges (the lens bends them)"
+  framing: "4:3 crop that drops the unphotographed right-edge strip"
+
+attempts:
+  - {n: 0, what: "camera check: ceiling height at the three ceiling corners", result: "1.16 / 1.30 / 1.49 with the old camera: the cause of v2's misalignment; recalibrated from floor+ceiling lines"}
+  - {n: 0.5, what: "planning previews (PIL, same matrices): camera at x 1.15 then 1.5", result: "1.5 keeps the bed in frame and the unseen area to a thin right-edge strip"}
+  - {n: 1, what: "full GIMP build", result: "room coherent; white strokes on the back wall, a stretched plank on the bed's side, pillows at the bed's far edge, a dark fragment on the stool"}
+  - {n: 2, what: "edge-on faces painted; pillows nudged; stool trimmed", result: "strokes remain (not from the side face); side face beige (sample included rug/floor)"}
+  - {n: 3, what: "bed cut reduced to its main outline (stray islands were flung across the wall); edge-on colour sampled inside the bed outline", result: "chosen"}
+
+remaining:
+  - "the bed's edge-on right side still reads a bit like a plank (flat painted face)"
+  - "the bed's foot face is the photo's skirt, stretched; the bed reads large and slab-like"
+  - "the doorway interior is stretched (grazing source); the casing is clean"
+  - "the right wall is flat paint, slightly warmer than the photographed walls (it is the colour the photo shows there)"
+  - "a sliver of painted ceiling at the top-right corner of the frame"
+  - "a faint skirt ghost on the floor in front of the rug (bg-room-clean residue)"
+interfaces:
+  mcp_tools: ["gimp_open, gimp_new_image, gimp-file-load-layer, gimp-item-transform-matrix, gimp-item-transform-perspective, gimp-image-select-polygon, gimp-selection-grow/feather, gimp_layer_mask, gimp_draw, gimp-drawable-edit-gradient-fill, gimp_apply_filter (noise, blur), gimp_measure, gimp_render, gimp_export, gimp_close_image", "overmind-publish, overmind-import-artifact", "cerebrate segment_region (SAM 2.1, candidates), inpaint (MI-GAN) x2"]
+  models: ["SAM 2.1 box-refinement@quality: fan", "MI-GAN: fan off the ceiling; nightstand ghost off the wall"]
+  scripts_or_direct: ["NumPy: calibration, 3D clipping, homographies (geom.py)", "PIL: previews, column gradients for the baseboard edges, crop"]
+beyond_buckminster:
+  - step: "camera calibration + matrices"
+    capability: "NumPy"
+    why: "VPs from line pairs, focal length, 3D clipping of planes to two frusta, homographies"
+    mcp_alternative: "a camera primitive (VPs in, camera out) + the quad-to-quad warp primitive from the digest"
+    tradeoffs: "with those two, the GIMP side of this run is shared-tool work"
+  - step: "baseboard edge measurement"
+    capability: "NumPy on pixels"
+    why: "fitted lines were off by ~10 px locally (lens distortion)"
+    mcp_alternative: "gimp_measure along a line / an edge finder"
+    tradeoffs: "by eye on grid crops is possible but slow"
+interventions:
+  - "User request for a third pass after the v2 review."
+  - "Mid-run tip: the fan can be placed at any angle (it looks alike from all sides)."
+  - "User: make this the final attempt."
+observations:
+  worked: "Checking the camera against itself (one ceiling height everywhere, the vertical VP predicted) found v2's real flaw; 3D-clipped planes then line up with no hand-fitting. A grazing photographed surface still carries usable detail (the doorway). Rotationally symmetric fixtures (the fan) are free sprites."
+  failed: "Plane-shift copies across a lit wall show as rectangles (use MI-GAN on plain wall); faces near edge-on and stray cut islands fling slivers far across the view; gimp-image-delete and gimp_close_image fail on an image with a window."
+  follow_up: "Paint the bed side with a skirt-stripe texture rather than flat; a skirt ghost on the floor; wear on the casing."
+skill_updates: []

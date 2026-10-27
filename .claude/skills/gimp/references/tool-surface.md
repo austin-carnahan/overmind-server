@@ -77,7 +77,7 @@ your client prefixes them (`gimp_gimp_*` in OpenClaw, `mcp__gimp__gimp_*` in Cla
 - **A call times out or the response is lost.** The operation may still have completed. Inspect
   (`gimp_image_info`, `gimp_render`) before repeating anything; Overmind's own procedures also keep an
   operation journal (`overmind-op-status`).
-- **`gimp_close_image` doesn't close an image that has a window** in GIMP 3.2. Leave it, or ask the
+- **`gimp_close_image` (and `gimp-image-delete`) don't close an image that has a window** in GIMP 3.2. Leave it, or ask the
   person to close it.
 - **Unsaved images block quitting GIMP** with a dialog. Save or confirm before any restart.
 - **Some GEGL operations aren't usable as filters** (e.g. `gegl:seamless-clone` is "hidden"); the

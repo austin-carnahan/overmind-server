@@ -186,13 +186,23 @@ with the group. Limit: it is the shadow of the old spot, including other objects
 
 [scene and objects](scene-and-objects.md) · [surface reconstruction](surface-reconstruction.md)
 
-## A nearby viewpoint, faked in GIMP [experimental, E13 v2: partial]
+## A nearby viewpoint, faked in GIMP [demonstrated, E13 v3]
 
 Aim for a convincing picture, not a correct render. Every element is a layer:
 
-0. **Wireframe first:** draw the room's floor, ceiling and corner lines for the new view from one camera
-   model, as their own layer. Fit every surface layer to it and check it overlaid before anything else.
-   Planes warped independently left walls and ceiling visibly misaligned (E13 v2's biggest flaw).
+0. **A camera you have checked, then a wireframe:**
+   - Take each wall's vanishing point from **widely separated** lines: its floor line and ceiling line. Lines a
+     few dozen pixels apart, like a baseboard's top and bottom, put the vanishing point far off.
+   - Verify before warping anything. The ceiling must come out at one height at every corner, and the vertical
+     vanishing point the camera predicts must match measured verticals (door casings, window trim). E13 v2
+     skipped this; its ceiling sat at 1.16–1.49 camera heights and the room came apart.
+   - Clip each room rectangle **in 3D**, to the new view and to the photo's view. The source and target
+     polygons then share the model's edges, and the room meets at its corners by construction. Check the
+     result against a wireframe overlay.
+   - **Keep the new camera inside the room.** An orbit about the room centre from a doorway leaves the room
+     (E13 v2: 0.8 units behind the near wall, which read as an "extended room"). Turn the view, and stand
+     against a wall.
+   - A quick preview with the same matrices (any image library) picks the position before the slow build.
 1. **What the photo saw:** each room surface warped by one 3×3 matrix (`gimp-item-transform-matrix`);
    furniture as box faces (E05) and upright sprites (pillows, lamps, stools: scaled by depth, anchored where
    they rest). Cut pillows out of the bed's top before warping it, or they lie flat.
@@ -215,6 +225,17 @@ mapped toward the horizon hung GIMP for minutes and exhausted memory.
   sprites; hiding the photo ceiling erased the fan.
 - **Ask where unseen fixtures are** (which end of a wall a door is at) instead of inferring it from a
   grazing view; the inference put the closet door mid-wall instead of near the corner.
+- **Reuse grazing detail before painting.** The photo's sliver of the right wall, warped, held the real doorway
+  (casing, slab, hinges, knob). Keep it inside the door's outline, paint the wall around it, and lay a crisp
+  casing (painted front-on, in the trim colour) over the opening edges.
+- **Rotationally symmetric fixtures are free:** a ceiling fan (or a round lamp shade) looks alike from any side.
+  Mask it, inpaint it off the ceiling (keep its shadow), and re-place it as one sprite at its canopy, scaled by
+  distance.
+- **Faces nearly edge-on to the new camera** (cos of the viewing angle < ~0.3): paint them in the object's
+  colour sampled *inside its outline*. Warping them smears their texture into planks.
+- **Drop stray islands from object cuts** before warping. Under a steep homography they land far away as thin
+  strokes.
+- **Nudge sprites onto their support** if they rest at an edge (pillows 40 px forward onto the bed).
 
 ## A nearby viewpoint of the whole room [experimental, E13]
 

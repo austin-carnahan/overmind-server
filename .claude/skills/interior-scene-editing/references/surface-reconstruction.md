@@ -69,3 +69,13 @@ Feathering them into the main piece is simpler and was good enough. [experimenta
 ## Related
 
 [scene and objects](scene-and-objects.md) · [placement and compositing](placement-and-compositing.md)
+
+## Ghosts on a lit wall with a baseboard [demonstrated, E13 v3]
+
+A residue patch spanning wall, baseboard and floor (where furniture was removed):
+- **Plain wall: MI-GAN.** A copy shifted along the wall carries a different light level and shows as a rectangle.
+- **Floor: a copy shifted along the floor plane**, feathered ~40 px.
+- **Baseboard: map the band onto the band.** Use a 4-point warp whose corners sit on the baseboard's top and
+  bottom edges, **measured on pixel columns** on both sides of the patch. Fitted room lines are ~10 px off
+  locally (lens bending), which shows as steps at the joins.
+

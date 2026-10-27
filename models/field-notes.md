@@ -120,7 +120,18 @@ these notes say otherwise.
     segment parts that need their own layers separately. The two-model union
     becomes the fallback.
 
+- **2026-10-27, bedroom.jpg, the ceiling fan (SAM 2.1, one box, candidates).** Candidate 1 (score 0.88) was the
+  whole fan: blades with their motion blur, motor, the light shades (with small holes in the bright glass, which
+  can be ignored). The other candidates were the motor, or a fan with a smeared halo. The pull chains weren't
+  included; draw them as thin polygons.
+
 ### Inpainting (MI-GAN)
+- **2026-10-27, bedroom.jpg, E13 v3.**
+  - **The ceiling fan** (grown 12 px, an 887×780 patch; blades, light shades, motor, chains): a clean ceiling
+    with the fan's cast shadow kept. The chains had to be masked from the motor down; a first, shorter chain
+    mask left a pale stroke and a bluish blob under the light cluster.
+  - **The nightstand's ghost on a plain wall** (380×350): clean. A plane-shifted copy of the wall there showed as
+    a darker rectangle, because the window light changes along the wall.
 - **2026-10-26, completing a hidden part of an object** (the bed skirt behind
   the rug): it filled the gap with floor. MI-GAN removes objects; it doesn't
   complete them. Continue the object's own visible texture instead (see

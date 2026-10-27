@@ -19,3 +19,15 @@ target quad (computing the homography itself), so an agent needs only corner coo
 - `render.py` — E13's 2.5D ray-caster: a new camera (orbit about a pivot) casts a ray per pixel into the planes,
   box furniture and upright billboards; colour from the original photo where that surface point was visible,
   a hole elsewhere; one RGBA layer per element for GIMP. `render.py <out> <theta> <A|B|C> <room texture> <photo.npy> <masks.npz> [step]`.
+
+- `view45_v3.py` — E13 v3: the bedroom camera **re-derived** from each wall's floor and ceiling lines
+  (`configure((2, 1180), (3327, 1192), (2000, 1500))`, f 1598), a view turned 45° and kept inside the room, and
+  per-plane photo→view matrices whose polygons are clipped in 3D to both views. Also carries v2's boxes into the
+  new camera and marks faces near edge-on. `view45_v3.py <yaw> <x> <y> <out.json>` (v3 used `-45 1.5 0.0`).
+
+**Note on `camera.py`'s built-in vanishing points:** they come from the baseboards' top and bottom edges, which
+are too close together; the resulting camera puts the ceiling at different heights in different corners. It was
+good enough for E05/E06/E08 (local rectangles), not for re-projecting the whole room. Verify a camera before
+relying on it: one ceiling height everywhere, and a predicted vertical vanishing point that matches measured
+verticals.
+
