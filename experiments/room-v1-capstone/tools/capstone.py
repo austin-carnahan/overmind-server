@@ -137,6 +137,9 @@ class Session:
 async def hud(s, image_id, title, status, group=None):
     """Create or update the experiment HUD: a top group of native text layers, through MCP tools only.
     Returns {"group", "title", "status", "backing"} ids. Hide it before publishing or clean exports."""
+    saved = s.run_dir / "hud.json"
+    if group is None and saved.exists():                     # this run already made one: reuse it
+        group = json.load(open(saved))
     if group is None:
         g = (await s.pdb("gimp-group-layer-new", image=image_id, name=HUD_NAME))[0]["id"]
         await s.pdb("gimp-image-insert-layer", image=image_id, layer=g, position=0)
@@ -150,7 +153,10 @@ async def hud(s, image_id, title, status, group=None):
         ids = {"group": g, "backing": back_id, "title": _id(t), "status": _id(st)}
         for k in ("title", "status"):
             await s.gimp("gimp_layer", action="reorder", layer_id=ids[k], parent_id=g, position=0)
+        json.dump(ids, open(saved, "w"))
         return ids
+    if title:
+        await s.gimp("gimp_text", layer_id=group["title"], text=title)
     await s.gimp("gimp_text", layer_id=group["status"], text=status)
     return group
 

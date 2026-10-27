@@ -51,4 +51,4 @@ observations:
   worked: "HUD as native text layers in a top group, entirely through MCP tools (group via PDB, gimp_layer new/reorder, gimp_text create/edit). Status updates are one gimp_text call."
   failed: "Publishing the canvas (overmind-publish without source) with the HUD visible leaks it: 253,569 px of the HUD area differ. Hidden: 0 px. source=Room: 0 px."
   follow_up: "Rule for every run: hide the HUD group before any canvas publish or clean export, or publish a specific group (source=)."
-skill_updates: []
+skill_updates: [9bfc5d9]   # adapter: overlays in canvas publishes

@@ -1,0 +1,89 @@
+experiment: E01
+run_id: 2026-10-26_E01_claude-code_wall-sage
+condition: exploratory
+status: pass
+started: 2026-10-26T19:55
+finished: 2026-10-26T21:05
+
+agent:
+  name: Claude Code
+  harness: "Claude Code VS Code extension 2.1.308"
+  model: claude-opus-5-5
+skills:
+  revision: 3a4f8b5
+  loaded: [gimp, interior-scene-editing]
+capabilities:
+  gimp_agent_mcp: "0.5.0 (38 tools, Python off)"
+  gimp: "3.2.6"
+  overmind_gimp_plugin: a23557b
+  cerebrate_mcp: "291e3c9, image sha256:8718726f4c13"
+  extra: ["Python + bridge client on the Mac", "shell on the Mac"]
+
+inputs:
+  scene: bedroom_v1
+  assets: [paint_clary_sage, paint_evergreen_fog, paint_goldenrod, paint_neutral_control]
+  instruction: "Repaint the back wall a muted sage green; test a mustard alternative."
+
+outputs:   # ~/DesignStudio/workspaces/room-v1-capstone/runs/2026-10-26_E01_claude-code_wall-sage/
+  xcf: working.xcf                 # Room > Back wall paint > Attempt 3: lightness lift + LCh colour > 3 variants
+  before: before.png
+  clean: [after-clean-clary-sage.png, after-clean-evergreen-fog.png, after-clean-goldenrod.png]
+  annotated: after-annotated.png
+  attempts: [after-clean-clary-sage.png (1, replaced by 4), attempt2-clary-sage.png, attempt3-clary-sage.png, attempt3b-*.png, attempt4-*.png]
+  calls: calls.jsonl
+
+attempts:
+  - n: 1
+    method: "albedo swap: Multiply + Divide layer pair, colour = new paint / old paint per channel (old = neutral sampled near the window)"
+    result: "math exact (GIMP blends these in linear light: matched predictions within 1 level); colours read tan, not sage; glow at trim/baseboard/nightstand edges"
+  - n: 2
+    method: "albedo swap referenced to the wall's measured median (80, 62, 39)"
+    result: "blown out (ratios up to 11x): the photo's warm cast makes per-channel ratios explode"
+  - n: 3
+    method: "grey Divide lift (median wall luminance -> swatch luminance) + LCh Color layer"
+    result: "right hue but washed out: matching a dim room to a paint chip over-exposes"
+  - n: "3b"
+    method: "same, lift = luminance ratio new paint / old paint (x1.91 Clary Sage, x1.42 Evergreen Fog, x2.33 Goldenrod)"
+    result: "reads as the intended colours with the photo's shading; edge halo from a 4 px keep-out, ragged corner"
+  - n: 4
+    method: "mask refinement: corner strip to the ceiling line, keep-out 2 px, 2 px feather, cut 8 px above the baseboard"
+    result: "clean corner, trim, nightstand and baseboard edges -- chosen"
+
+interfaces:
+  mcp_tools:
+    - "cerebrate detect_by_text (OWLv2: wall/window/door boxes)"
+    - "cerebrate segment_region (SAM 2.1 @quality, candidates): back wall upper box, lower box, window, stool"
+    - "cerebrate segment_by_text (EfficientSAM3 'wall': returned the side wall)"
+    - "gimp_pdb_call: gimp-image-select-polygon (ring replay, ~300 calls), select-item, selection grow/feather/save, group layers, overmind-publish"
+    - "gimp_layer (new/set mode multiply, divide, lch-color, pass-through/reorder/delete), gimp_layer_mask, gimp_draw fill_layer"
+    - "gimp_measure histogram on Room (original) with the wall selected (the wall's median colour)"
+    - "gimp_render, gimp_text (HUD), gimp_export"
+  models: ["OWLv2 B/16", "SAM 2.1 (box-refinement@quality)", "EfficientSAM3"]
+  scripts_or_direct: ["Python MCP client (all tool calls)", "NumPy/PIL: candidate overlays, render comparisons, colour arithmetic, ceiling-line fit", "cp of the reference XCF"]
+beyond_buckminster:
+  - step: "choosing among mask candidates"
+    capability: "local overlays of candidate masks on a render (NumPy/PIL)"
+    why: "fast side-by-side judgement of 3 candidates x 4 boxes"
+    mcp_alternative: "import each candidate's mask_png as a layer (overmind-import-artifact) and gimp_render it; slower but available"
+    tradeoffs: "same decision, more calls"
+  - step: "checking the composite colour"
+    capability: "reading pixels from renders (NumPy)"
+    why: "gimp_measure(kind=color) reads one layer (the selected one), not the composite"
+    mcp_alternative: "a composite option for gimp_measure would close this; meanwhile gimp_render + view_image by eye"
+    tradeoffs: "without it, the linear-light check isn't possible; visual judgement still is"
+  - step: "paint fill colours (sRGB<->linear ratios)"
+    capability: "Python arithmetic"
+    why: "exact values"
+    mcp_alternative: "the agent can compute them; a small 'paint ratio' helper would remove the error risk"
+    tradeoffs: "a wrong colour space gives visibly wrong results (attempts 1-3 show how sensitive this is)"
+  - step: "ceiling line near the corner"
+    capability: "fitting a line to the mask's top edge (NumPy)"
+    why: "SAM's masks stopped short of the corner"
+    mcp_alternative: "read two points off a gimp_render with grid overlay; good enough for a polygon"
+    tradeoffs: "a few px less precise"
+interventions: []
+observations:
+  worked: "Recolour = grey Divide lift by the paint-to-paint luminance ratio + LCh Color layer with the swatch, masked to the wall, one pass-through group per colour. Keeps all shading; three variants toggle."
+  failed: "Per-channel albedo swaps carry the photo's colour cast (tan instead of sage) or explode (11x); masks overlapping bright trim glow when brightened."
+  follow_up: "gimp_measure can't read the composite. SAM splits a wall where the light changes: segment large surfaces with more than one box."
+skill_updates: [9bfc5d9]
