@@ -71,4 +71,4 @@ observations:
   worked: "A camera from two baseboards + boxes for furniture gives a coherent nearby view up to ~25 deg and geometrically consistent rooms to 45 deg; one layer per element keeps it editable."
   failed: "Anything not photographed (near wall, ceiling beyond frame) is a hole -- 26-51% of the frame; flat-painted parts of objects (pillows) and billboards break by ~33 deg; per-plane homographies can't handle surfaces behind the camera."
   follow_up: "Fill large holes with a generative model (not available: MI-GAN smears furniture-sized holes); model pillows as their own boxes; render at full resolution in chunks. Mac sleep can kill long runs: use caffeinate."
-skill_updates: []
+skill_updates: [64e5b88]
