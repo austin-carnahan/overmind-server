@@ -68,4 +68,4 @@ observations:
   worked: "One model, several prompts: SAM 2.1 on a whole-object box for the soft parts plus tight boxes for thin wooden parts; MI-GAN for a thin occluder across a cushion; hiding a cropped base behind a nearer object."
   failed: "Whole-box candidates fragment thin frames; holes-only cable masks miss the parts the segmenter included; text segmenters found nothing."
   follow_up: "A small grey wall fleck inside the right arm; the source's flash lighting is flatter than the room's."
-skill_updates: []
+skill_updates: [c525d2c]
