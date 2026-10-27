@@ -64,4 +64,4 @@ observations:
   worked: "Wall decor via a nearby real rectangle on the same wall: rectify it (true aspect from its own vanishing points + focal length), place the item in those coordinates, warp with transform-perspective, light by Multiply, soft appended shadow."
   failed: "A guessed rectangle ratio stretches the art."
   follow_up: "Optional window-dressing variant not repeated (done in E06). Revisit E06 with the measured 1.57 ratio."
-skill_updates: []
+skill_updates: [4ec2baf]
