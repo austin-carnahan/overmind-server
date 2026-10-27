@@ -1,0 +1,185 @@
+#!/usr/bin/env python3
+"""Record an app window on the Mac worker and cut it into a watchable demo.
+
+Records the app's *window*, not a screen region (`screencapture -v -l<id>`),
+so it captures the right pixels even when other windows cover it. Passive: it
+needs only Screen Recording permission and never activates, clicks, or connects
+to the app, so it is safe to run while an agent is driving GIMP. Editing needs
+ffmpeg (Homebrew).
+
+  demo-record window [--app gimp]            show the window that would be recorded
+  demo-record start NAME [--app gimp]
+  demo-record stop NAME
+  demo-record tighten NAME [--min-idle 1.5] [--hold 2.5] [--width 1920] [--crop x,y,w,h]
+  demo-record sheet NAME [--every 5]         contact sheet of the tightened demo
+
+Output: ~/DesignStudio/demos/NAME/{raw.mov, demo.mp4, sheet.png, recording.log}
+"""
+import argparse
+import json
+import os
+import re
+import signal
+import subprocess
+import sys
+import time
+from pathlib import Path
+
+DEMOS = Path.home() / "DesignStudio" / "demos"
+FFMPEG = "/opt/homebrew/bin/ffmpeg"
+
+
+def die(msg):
+    print(f"FAIL: {msg}", file=sys.stderr)
+    sys.exit(1)
+
+
+def app_window(app):
+    """Largest on-screen window owned by an app whose name matches `app`.
+
+    Uses CoreGraphics' window list (via JXA), which needs no Accessibility
+    permission and does not touch the app.
+    """
+    jxa = r'''
+ObjC.import("CoreGraphics");
+const l = ObjC.deepUnwrap(ObjC.castRefToObject($.CGWindowListCopyWindowInfo(
+  $.kCGWindowListOptionOnScreenOnly | $.kCGWindowListExcludeDesktopElements, $.kCGNullWindowID)));
+JSON.stringify(l.map(w => ({id: w.kCGWindowNumber, owner: w.kCGWindowOwnerName || "",
+  layer: w.kCGWindowLayer, title: w.kCGWindowName || "", b: w.kCGWindowBounds})));'''
+    out = subprocess.run(["osascript", "-l", "JavaScript", "-e", jxa], capture_output=True, text=True)
+    if out.returncode:
+        die(f"window list failed: {out.stderr.strip()}")
+    wins = [w for w in json.loads(out.stdout)
+            if re.search(app, w["owner"], re.I) and w["layer"] == 0]
+    if not wins:
+        die(f"no on-screen window for app matching {app!r}")
+    w = max(wins, key=lambda w: w["b"]["Width"] * w["b"]["Height"])
+    b = w["b"]
+    return {"id": int(w["id"]), "owner": w["owner"], "title": w["title"],
+            "x": int(b["X"]), "y": int(b["Y"]), "w": int(b["Width"]), "h": int(b["Height"])}
+
+
+def cmd_window(args):
+    print(json.dumps(app_window(args.app), indent=2))
+
+
+def cmd_start(args):
+    d = DEMOS / args.name
+    if (d / "recording.pid").exists():
+        die(f"{args.name} is already recording")
+    d.mkdir(parents=True, exist_ok=True)
+    win = app_window(args.app)
+    (d / "raw.mov").unlink(missing_ok=True)
+    log = open(d / "recording.log", "w")
+    # -l: this window only (captured even when covered); -o: no shadow; -x: no sound.
+    proc = subprocess.Popen(
+        ["screencapture", "-v", "-x", "-o", f"-l{win['id']}", str(d / "raw.mov")],
+        stdin=subprocess.DEVNULL, stdout=log, stderr=log, start_new_session=True)
+    (d / "recording.pid").write_text(str(proc.pid))
+    (d / "window.json").write_text(json.dumps({**win, "started": time.time()}, indent=2))
+    time.sleep(2)
+    if proc.poll() is not None:
+        (d / "recording.pid").unlink()
+        die(f"screencapture exited immediately; see {d / 'recording.log'}")
+    print(json.dumps({"recording": args.name, "window_id": win["id"], "window": win["title"][:80], "pid": proc.pid}, indent=2))
+
+
+def cmd_stop(args):
+    d = DEMOS / args.name
+    pidf = d / "recording.pid"
+    if not pidf.exists():
+        die(f"{args.name} is not recording")
+    pid = int(pidf.read_text())
+    try:
+        os.kill(pid, signal.SIGINT)  # screencapture finalizes the movie on SIGINT
+        for _ in range(100):
+            time.sleep(0.2)
+            os.kill(pid, 0)
+    except ProcessLookupError:
+        pass
+    pidf.unlink()
+    print(json.dumps({"stopped": args.name, "raw": str(d / "raw.mov"), "seconds": duration(d / "raw.mov")}, indent=2))
+
+
+def duration(path):
+    out = subprocess.run(["ffprobe", "-v", "error", "-show_entries", "format=duration", "-of", "csv=p=0", str(path)],
+                         capture_output=True, text=True).stdout.strip()
+    return round(float(out), 1) if out else None
+
+
+def cmd_tighten(args):
+    d = DEMOS / args.name
+    raw = d / "raw.mov"
+    total = duration(raw)
+    if not total:
+        die(f"no usable {raw}")
+    # Find stretches where nothing on screen changes for at least --min-idle seconds.
+    fd = subprocess.run(
+        ["nice", "-n", "10", FFMPEG, "-hide_banner", "-i", str(raw), "-vf",
+         f"scale=480:-2,freezedetect=n=0.002:d={args.min_idle}", "-an", "-f", "null", "-"],
+        capture_output=True, text=True).stderr
+    starts = [float(x) for x in re.findall(r"freeze_start: ([\d.]+)", fd)]
+    ends = [float(x) for x in re.findall(r"freeze_end: ([\d.]+)", fd)]
+    ends += [total] * (len(starts) - len(ends))  # still frozen at the end
+    keep, t = [], 0.0
+    for s, e in zip(starts, ends):
+        if s > t:
+            keep.append((t, s))
+        keep.append((s, min(e, s + args.hold)))  # short pause instead of the whole idle stretch
+        t = e
+    if t < total:
+        keep.append((t, total))
+    keep = [(a, b) for a, b in keep if b - a > 0.05]
+    expr = "+".join(f"between(t,{a:.3f},{b:.3f})" for a, b in keep) or "1"
+    crop = ""
+    if args.crop:  # fractions of the window: x,y,w,h (e.g. 0.3,0.3,0.4,0.4 zooms on the centre)
+        x, y, w, h = (float(v) for v in args.crop.split(","))
+        crop = f"crop=iw*{w}:ih*{h}:iw*{x}:ih*{y},"
+    # Window capture only emits frames when the window changes, so make the
+    # rate constant first; otherwise the "hold" pauses contain no frames.
+    (d / "filter.txt").write_text(f"fps=30,select='{expr}',setpts=N/30/TB,{crop}scale={args.width}:-2")
+    r = subprocess.run(
+        ["nice", "-n", "10", FFMPEG, "-hide_banner", "-loglevel", "error", "-i", str(raw),
+         "-filter_script:v", str(d / "filter.txt"), "-an", "-c:v", "h264_videotoolbox", "-b:v", "8M",
+         "-movflags", "+faststart", "-y", str(d / "demo.mp4")], capture_output=True, text=True)
+    if r.returncode:
+        die(r.stderr.strip()[-400:])
+    print(json.dumps({"raw_seconds": total, "idle_stretches": len(starts),
+                      "demo_seconds": duration(d / "demo.mp4"), "demo": str(d / "demo.mp4")}, indent=2))
+
+
+def cmd_sheet(args):
+    d = DEMOS / args.name
+    src = d / "demo.mp4" if (d / "demo.mp4").exists() else d / "raw.mov"
+    secs = duration(src) or 0
+    n = max(1, int(secs // args.every))
+    cols = 4
+    rows = -(-n // cols)
+    r = subprocess.run(
+        [FFMPEG, "-hide_banner", "-loglevel", "error", "-i", str(src), "-vf",
+         f"fps=1/{args.every},scale=480:-2,drawtext=text='%{{pts\\:hms}}':x=8:y=8:fontsize=20:fontcolor=white:box=1:boxcolor=black@0.6,tile={cols}x{rows}",
+         "-frames:v", "1", "-y", str(d / "sheet.png")], capture_output=True, text=True)
+    if r.returncode:
+        die(r.stderr.strip()[-400:])
+    print(json.dumps({"sheet": str(d / "sheet.png"), "frames": n, "source": src.name}, indent=2))
+
+
+def main():
+    p = argparse.ArgumentParser(description=__doc__.splitlines()[0])
+    sub = p.add_subparsers(dest="cmd", required=True)
+    s = sub.add_parser("window"); s.add_argument("--app", default="gimp")
+    s = sub.add_parser("start"); s.add_argument("name"); s.add_argument("--app", default="gimp")
+    s = sub.add_parser("stop"); s.add_argument("name")
+    s = sub.add_parser("tighten"); s.add_argument("name"); s.add_argument("--min-idle", type=float, default=1.5)
+    s.add_argument("--hold", type=float, default=2.5); s.add_argument("--width", type=int, default=1920)
+    s.add_argument("--crop", help="x,y,w,h as fractions of the window, to zoom in on the canvas")
+    s = sub.add_parser("sheet"); s.add_argument("name"); s.add_argument("--every", type=float, default=5)
+    args = p.parse_args()
+    if not re.fullmatch(r"[A-Za-z0-9._-]+", getattr(args, "name", "x") or "x"):
+        die("name: letters, digits, . _ - only")
+    {"window": cmd_window, "start": cmd_start, "stop": cmd_stop,
+     "tighten": cmd_tighten, "sheet": cmd_sheet}[args.cmd](args)
+
+
+if __name__ == "__main__":
+    main()

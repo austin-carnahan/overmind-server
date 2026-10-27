@@ -52,6 +52,23 @@ SSD.
   `GIMP Agent Bridge.app`, which opens GIMP through LaunchServices with the
   bridge on. Use it instead of `gimp_launch`, which ties GIMP's lifetime to
   the node host.
+- [`demo-record`](demo-record) runs **on the Mac**. It records the GIMP
+  window as a demo video (`start`/`stop`) and cuts it down (`tighten`):
+  - **Window capture.** It uses `screencapture -v -l<window id>`, not a
+    screen region, so it records GIMP even when other windows cover it.
+    Region capture recorded the VS Code window in front instead.
+  - **Safe during agent runs.** It is passive and needs only Screen
+    Recording permission (no Accessibility), so it is safe to run while an
+    agent drives GIMP.
+  - **Trimming.** `tighten` finds idle stretches with `freezedetect`, keeps
+    a short hold (`--hold`, 2.5 s) of each, and can zoom in on the canvas
+    (`--crop x,y,w,h` as fractions).
+  - **Constant frame rate first.** Window capture only emits frames when the
+    window changes, so `tighten` converts to 30 fps before cutting; without
+    that, the holds come out empty.
+  - **`sheet`** builds a contact sheet, so an agent can review the cut.
+  - **Example.** Verified 2026-10-26: 3 minutes of a capstone run became
+    15 s. Output goes to `~/DesignStudio/demos/<name>/`.
 - [`install-gimp-plugins`](install-gimp-plugins) runs **on the Mac** (no
   sudo). It installs [`gimp-plugins/`](gimp-plugins/) into the GIMP profile;
   restart GIMP after a first install or a new procedure or argument. Today
