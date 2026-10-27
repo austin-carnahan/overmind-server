@@ -36,6 +36,8 @@ your client prefixes them (`gimp_gimp_*` in OpenClaw, `mcp__gimp__gimp_*` in Cla
   `gimp_layer(action="reorder", layer_id=…, parent_id=<group>, position=0)`.
 - `gimp-item-transform-flip-simple` and other transforms act on the **selection** if one is active (they
   float it): `gimp-selection-none` first when you mean the whole item.
+- Procedures taking a **drawables array** (e.g. `plug-in-tile`) fail through `gimp_pdb_call` on GIMP 3.2
+  (`set_core_object_array` error): find another route (tiling = duplicate the layer at offsets).
 - **Bringing a file in as a layer:** `gimp_pdb_call("gimp-file-load-layer", {"image": id, "file": path})`,
   then `gimp-image-insert-layer`. To hand a cutout from one image to another, hide the other layers,
   `gimp_export` it as PNG (alpha is kept) and load that.

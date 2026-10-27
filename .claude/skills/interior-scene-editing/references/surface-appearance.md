@@ -78,3 +78,17 @@ differences:
   pixels), and a mask exactly at an edge leaves a fringe.
 - **Cap the lift** (about 0.5-1.3): patterned fabric clips if lifted far.
 
+## Replacing a material or pattern [experimental, E03 partial]
+
+1. Scale the texture to its real repeat at the object's depth (px per cm from a calibrated object).
+2. Don't tile flat across a 3D object: warp a tiled strip onto **each face** with
+   `gimp-item-transform-perspective` (corners read off a gridded render), clearing the selection first.
+   Mask the back face to the whole surface and the front face to its part, so no seam opens between them.
+3. **Shading:** a desaturated copy of the object, `gegl:median-blur` (radius ~9-16 at 4000 px) to remove
+   its old pattern while keeping broad light, in Multiply; a grey Divide layer at the surface's median
+   brightness keeps the overall level.
+4. Do it in the pristine copy (as for recolouring).
+
+Limit: the print doesn't follow individual folds, so fabric looks stiffer; a displacement by the
+shading map would be the next step, and isn't available through the current tools.
+
