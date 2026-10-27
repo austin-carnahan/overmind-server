@@ -116,12 +116,26 @@ SSD.
   `openclaw nodes invoke ... file.fetch`, so the worker never needs SSH access
   to Overmind.
 
-## Agent capabilities: named operations, never code
+## Agent capabilities: code on Overmind, named operations in GIMP
 
-Agents call named GIMP operations with parameters. They never send code to
-run. When an agent needs a capability GIMP lacks, it becomes a reviewed
-plug-in procedure in [`gimp-plugins/`](gimp-plugins/), like the artifact
-import and publish.
+Agents call named GIMP operations with parameters; they never send code to
+GIMP. Computation is different: Buckminster writes and runs its own Python
+on Overmind and passes the results to those operations (for example, the
+corners for `gimp-item-transform-perspective`).
+
+- **Python on Overmind (since 2026-10-27):** `/mnt/substrate/design-studio/python`,
+  a uv project on the SSD work surface, group `openclaw` and group-writable:
+  - a uv-managed CPython 3.12 with numpy, scipy, OpenCV (headless), Pillow,
+    scikit-image and shapely (definition and lock in
+    [`buckminster/python/`](buckminster/python/));
+  - its `bin/uv` wrapper keeps the cache and interpreter there, so Buckminster
+    can `uv add` a package itself.
+
+  Its runbook is [`buckminster/python.md`](buckminster/python.md). Install it
+  with `sudo bash install-buckminster-python`, which links it into the
+  workspace and adds a pointer to `AGENTS.md`.
+- **Pixel operations GIMP lacks** become reviewed plug-in procedures in
+  [`gimp-plugins/`](gimp-plugins/), like the artifact import and publish.
 
 - **Python plug-ins are still allowed.** GIMP runs fixed, installed code
   (the bridge, our plug-ins) with its bundled Python.

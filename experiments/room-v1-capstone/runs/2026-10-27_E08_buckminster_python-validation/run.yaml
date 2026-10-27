@@ -1,0 +1,28 @@
+experiment: E08
+run_id: 2026-10-27_E08_buckminster_python-validation
+condition: capability-validation    # Buckminster's Overmind-hosted Python, applied through GIMP MCP
+status: pending                     # waiting for Buckminster's run
+started: 2026-10-27T13:00
+finished: null
+
+agent:
+  name: Buckminster
+  harness: OpenClaw (built-in runtime)
+  model: null                       # fill from the session
+skills:
+  revision: null                    # Buckminster's installed runbooks; the capstone skills are not installed for it yet
+capabilities:
+  gimp_agent_mcp: "0.5.0 via the macbook-m1 node (gimp_gimp_*)"
+  python: "/mnt/substrate/design-studio/python: CPython 3.12.14 (uv-managed), numpy 2.5.4, scipy 1.18.1, opencv-python-headless 5.0.0.93, pillow 13.0.0, scikit-image 0.26.0, shapely 2.2.0 (uv.lock in services/design-studio/buckminster/python/)"
+  exec: "OpenClaw exec on the Gateway host as openclaw (no sudo)"
+
+inputs:
+  scene: bedroom_v1                 # working.xcf = a copy of the reference (hash 85160e7c… unchanged)
+  assets: [wall_art]                # art-cutout.png from the E08 run
+  instruction: prompt.md
+  numbers: expected.json            # what E08 recorded and what the reference script gives
+
+outputs: {}                         # filled after the run
+interfaces: {}
+results: {}
+observations: {}

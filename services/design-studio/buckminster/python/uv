@@ -1,0 +1,8 @@
+#!/usr/bin/env bash
+# uv for the design-studio Python environment: shared cache, managed CPython and project, all on the SSD work surface.
+#   /mnt/substrate/design-studio/python/bin/uv run script.py      # run with the environment
+#   /mnt/substrate/design-studio/python/bin/uv add <package>      # add a package (updates pyproject + lock)
+here=$(cd "$(dirname "$0")/.." && pwd)
+umask 002
+export UV_CACHE_DIR="$here/.uv-cache" UV_PYTHON_INSTALL_DIR="$here/cpython" UV_PROJECT="$here" UV_PYTHON_PREFERENCE=only-managed
+exec "$here/bin/uv-real" "$@"

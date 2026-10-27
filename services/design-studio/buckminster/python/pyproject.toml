@@ -1,0 +1,16 @@
+[project]
+name = "design-studio-python"
+version = "0.1.0"
+description = "Buckminster's Python environment on Overmind: image and geometry computation (results go to GIMP through MCP)"
+requires-python = "==3.12.*"
+dependencies = [
+    "numpy>=2.2",
+    "scipy>=1.15",
+    "opencv-python-headless>=4.11",
+    "pillow>=11",
+    "scikit-image>=0.25",
+    "shapely>=2.1",
+]
+
+[tool.uv]
+package = false

@@ -1,0 +1,34 @@
+#!/usr/bin/env bash
+# Give Buckminster its Python runbook: copy buckminster/python.md next to the environment it describes
+# (/mnt/substrate/design-studio/python, set up as the user with bin/uv sync), link it into the OpenClaw
+# workspace (owned by `openclaw`, hence sudo), and point AGENTS.md at it once. Workspace files are read at
+# session start: no Gateway restart needed.
+#
+#   sudo bash <checkout>/services/design-studio/install-buckminster-python
+set -euo pipefail
+
+src=$(cd "$(dirname "$0")" && pwd)/buckminster/python.md
+env=/mnt/substrate/design-studio/python
+ws=/home/openclaw/.openclaw/agents/buckminster/workspace
+pointer='- **Python on Overmind** (geometry, measuring pixels, mask arithmetic: any step that needs computation): write and run it yourself with `exec`; follow `runbooks/python.md`. Apply the results in GIMP through its named procedures.'
+
+[ "$(id -u)" = 0 ] || { echo "run with sudo" >&2; exit 1; }
+[ -x "$env/.venv/bin/python" ] || { echo "no environment at $env (run bin/uv sync there first)" >&2; exit 1; }
+[ -f "$ws/AGENTS.md" ] || { echo "no $ws/AGENTS.md" >&2; exit 1; }
+
+install -m 664 -o "$(stat -c %U "$env")" -g openclaw "$src" "$env/README.md"
+install -d -o openclaw -g openclaw "$ws/runbooks"
+ln -sfn "$env/README.md" "$ws/runbooks/python.md"
+chown -h openclaw:openclaw "$ws/runbooks/python.md"
+echo "linked $ws/runbooks/python.md -> $env/README.md"
+
+if grep -qF 'runbooks/python.md' "$ws/AGENTS.md"; then
+    echo "AGENTS.md already points at it; unchanged"
+else
+    cp -p "$ws/AGENTS.md" "$ws/AGENTS.md.bak-$(date +%Y%m%d-%H%M%S)"
+    printf '\n%s\n' "$pointer" >> "$ws/AGENTS.md"
+    chown openclaw:openclaw "$ws/AGENTS.md"
+    echo "appended to AGENTS.md:"
+    tail -n 2 "$ws/AGENTS.md"
+fi
+sudo -u openclaw "$env/.venv/bin/python" -c 'import numpy, cv2, scipy, PIL, skimage, shapely; print("as openclaw: numpy", numpy.__version__, "| opencv", cv2.__version__)'

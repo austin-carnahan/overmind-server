@@ -1,0 +1,53 @@
+{
+ "source": "runs/2026-10-27_E08_claude-code_wall-art (attempt 2, the accepted result)",
+ "image": "bedroom-v1 (4000x3000)",
+ "trim_corners": [
+  [
+   2099,
+   935
+  ],
+  [
+   2512,
+   895
+  ],
+  [
+   2497,
+   1240
+  ],
+  [
+   2099,
+   1232
+  ]
+ ],
+ "focal_px": 2393,
+ "principal_point": [
+  2000,
+  1500
+ ],
+ "art": {
+  "u0": 2.16,
+  "v0": -0.04,
+  "width": 1.7,
+  "ratio": 1.579646017699115
+ },
+ "expected_corners_e08": [
+  [
+   2686.6,
+   863.0
+  ],
+  [
+   3382.9,
+   792.2
+  ],
+  [
+   2662.4,
+   1256.0
+  ],
+  [
+   3318.8,
+   1271.9
+  ]
+ ],
+ "aspect_override": 1.61,
+ "note": "E08 measured the trim's aspect (1.608) and placed the art with it rounded to 1.61; aspect_override reproduces that placement"
+}
