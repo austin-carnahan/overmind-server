@@ -1,5 +1,4 @@
-# Fill each file, source_page, rights, size and SHA-256 after downloading.
-# No third-party image bytes are included in this starter pack.
+# Sourced 2026-10-26 (capstone Phase 0). No image bytes are in the repository.
 # Files live outside the repository, under ASSET_ROOT (relative `file:` paths resolve there):
 #   ~/DesignStudio/workspaces/room-v1-capstone/assets/
 # Never edit a downloaded original; derivatives go in a run's output folder.
@@ -16,85 +15,136 @@ scenes:
     cerebrate_path: /mnt/substrate/design-studio/projects/bedroom/sources/5d94a32ec35ac179cb69b4222e1d09940dbf30960548d0a0b37fb1a3870e1deb.jpg
 
 assets:
+  # Furniture and room photos: Wikimedia Commons (licence and author from the file page's metadata).
+  # Attribution licences (CC BY / BY-SA) need the credit below wherever an image is shown outside this
+  # internal experiment; BY-SA derivatives must stay BY-SA.
   nightstand_symmetric:
-    status: to_source
+    status: sourced
     kind: furniture_photo
     target: "simple approximately symmetrical nightstand, top/feet visible"
-    file: null
-    source_page: null
-    rights: null
-    sha256: null
+    file: nightstand_symmetric.jpg
+    size_px: [4993, 3745]
+    sha256: 9b6be6c85311c1fc7b336800955742dd0ab6fef383995780dbeb85468d8e9925
+    source_page: "https://commons.wikimedia.org/wiki/File:Nightstand_(49875913303).jpg"
+    creator: "Ajay Suresh (Flickr, via Commons)"
+    rights: "CC BY 2.0 (https://creativecommons.org/licenses/by/2.0)"
     physical_dimensions_cm: null
+    used_by: [E04, E05, E07, E11]
+    notes: "modern three-drawer, three-quarter view; camera at about tabletop height (top barely visible) vs the bedroom's standing-height view; right edge meets a bed frame"
   nightstand_asymmetric:
-    status: to_source
+    status: sourced
     kind: furniture_photo
     target: "asymmetric nightstand for viewpoint stress test"
-    file: null
-    source_page: null
-    rights: null
-    sha256: null
+    file: nightstand_asymmetric.jpg
+    size_px: [1200, 1600]
+    sha256: cac46d247f4647194fe71fe0495fae753384e8ec3d49e47c19473f51678bd897
+    source_page: "https://commons.wikimedia.org/wiki/File:Aanightstand2.jpg"
+    creator: "Andrewa (own work)"
+    rights: "CC BY-SA 3.0 (https://creativecommons.org/licenses/by-sa/3.0)"
     physical_dimensions_cm: null
+    used_by: [E05]
+    notes: "wooden cabinet, door open on the right; seen from above; low resolution"
   chair_catalog:
-    status: to_source
+    status: sourced
     kind: furniture_photo
     target: "chair clean product photo, feet visible, compatible viewing angle"
-    file: null
-    source_page: null
-    rights: null
-    sha256: null
+    file: chair_catalog.tif
+    size_px: [5792, 8206]
+    sha256: 52290109a901090e80338f2cabdfb15adffd554fd6e1726ef97befc911296a14
+    source_page: "https://commons.wikimedia.org/wiki/File:Rokoko_l%C3%A4nstol_av_snidad_och_polerad_valn%C3%B6t,_kl%C3%A4dd_med_gr%C3%B6n_halvsidendamast,_1700-talets_mitt_-_Hallwylska_museet_-_108444.tif"
+    creator: "Hallwyl Museum (photographer unknown)"
+    rights: "Public domain (as marked on Commons)"
     physical_dimensions_cm: null
+    used_by: [E10, E11]
+    notes: "Rococo walnut armchair, green damask, on white; slender legs (hard matte); 142 MB uncompressed TIFF original -- work from a derived copy"
   chair_room_photo:
-    status: to_source
+    status: sourced
     kind: furnished_room_photo
     target: "chair in a furnished room with partial clutter or occlusion"
-    file: null
-    source_page: null
-    rights: null
-    sha256: null
+    file: chair_room_photo.jpg
+    size_px: [3456, 2304]
+    sha256: 370d4ad3381c3b378cca9eff6412eb536dd15e847c27a60d210cd4cd6f81f0de
+    source_page: "https://commons.wikimedia.org/wiki/File:The_Internet_armchair_(100930179).jpg"
+    creator: "Andy / Andrew Fogg (Flickr, via Commons)"
+    rights: "CC BY 2.0 (https://creativecommons.org/licenses/by/2.0)"
+    used_by: [E12]
+    notes: "wooden armchair with cushions, bookshelves, computer, cable across the seat; seen from above"
   window_dressing:
-    status: to_source
+    status: sourced
     kind: drapery_photo
     target: "curtain or shade with visible folds"
-    file: null
-    source_page: null
-    rights: null
-    sha256: null
+    file: window_dressing.jpg
+    size_px: [2560, 1920]
+    sha256: 3c9cf2e22f480375310d079bbc8a22e3341adae17bc6bce3f987e926a674a84b
+    source_page: "https://commons.wikimedia.org/wiki/File:Gordijnen_aan_venster.JPG"
+    creator: "Nieuw (Commons user)"
+    rights: "CC BY-SA 3.0 (https://creativecommons.org/licenses/by-sa/3.0)"
+    used_by: [E06, E08]
+    notes: "two cream checked panels on a rod with tie-backs, near straight-on"
   fabric_pattern_a:
-    status: to_source
+    status: sourced
     kind: texture
     target: "repeatable linen or woven textile pattern"
-    file: null
-    source_page: null
-    rights: null
-    sha256: null
+    file: fabric_pattern_a.jpg
+    size_px: [2048, 2052]
+    sha256: e71016e08dfebea1dd4e8a2a675e3b617a889a782af782f1abb795906f4db1b4
+    source_page: "https://polyhaven.com/a/rough_linen"
+    creator: "colormass (photography), Rico Cilliers (processing) -- Poly Haven"
+    rights: "CC0 (https://polyhaven.com/license)"
+    physical_size_mm: [271, 271]
+    used_by: [E03]
+    notes: "Rough Linen, diffuse map 2k; blue; seamless tile"
   fabric_pattern_b:
-    status: to_source
+    status: sourced
     kind: texture
     target: "floral, stripe or contrasting textile print"
-    file: null
-    source_page: null
-    rights: null
-    sha256: null
+    file: fabric_pattern_b.jpg
+    size_px: [2048, 3106]
+    sha256: 2c9af7d2a223df245f33cc8acd8362a0faff90aec507cc06a5c46c815016fb62
+    source_page: "https://polyhaven.com/a/floral_jacquard"
+    creator: "colormass (photography), Rico Cilliers (processing) -- Poly Haven"
+    rights: "CC0 (https://polyhaven.com/license)"
+    physical_size_mm: [253, 384]
+    used_by: [E03]
+    notes: "Floral Jacquard, diffuse map 2k; dark grey floral; seamless tile"
   wall_art:
-    status: to_source
+    status: sourced
     kind: artwork
     target: "rectangular print or framed graphic with clear usage rights"
-    file: null
-    source_page: null
-    rights: null
-    sha256: null
+    file: wall_art.jpg
+    size_px: [4000, 2569]
+    sha256: 00c1bd2d2aa79d45431dd14a78078e02eb27587b41b9a4469ac26f84fa3b842d
+    source_page: "https://commons.wikimedia.org/wiki/File:William_M._Lemos_-_Framed_wooded_landscape_painting.jpg"
+    creator: "William M. Lemos (1861-1942), painting"
+    rights: "Public domain (as marked on Commons)"
+    used_by: [E08]
+    notes: "oil landscape in a plain dark rectangular frame, photographed straight on with background"
+  # Paint swatches: screen approximations from Sherwin-Williams' published RGB, not physical paint.
   paint_clary_sage:
     kind: paint_color
     name: "Sherwin-Williams Clary Sage SW 6178"
     source_page: "https://www.sherwin-williams.com/en-us/color/color-family/green-paint-colors/SW6178-clary-sage"
-    hex_approx: null
+    rgb: [172, 173, 151]
+    hex_approx: "#ACAD97"
+    used_by: [E01]
   paint_evergreen_fog:
     kind: paint_color
     name: "Sherwin-Williams Evergreen Fog SW 9130"
     source_page: "https://www.sherwin-williams.com/en-us/color/color-family/green-paint-colors/sw9130"
-    hex_approx: null
+    rgb: [149, 151, 138]
+    hex_approx: "#95978A"
+    used_by: [E01]
   paint_goldenrod:
     kind: paint_color
     name: "Sherwin-Williams Goldenrod SW 6677"
     source_page: "https://www.sherwin-williams.com/en-us/color/color-family/yellow-paint-colors/SW6677-goldenrod"
-    hex_approx: null
+    rgb: [242, 175, 70]
+    hex_approx: "#F2AF46"
+    used_by: [E01]
+  paint_neutral_control:
+    kind: paint_color
+    name: "the bedroom's own wall, as photographed"
+    source: "median of bedroom.jpg (GIMP decode) over x 1750-2050, y 1150-1400 (back wall, left of the lamp)"
+    rgb: [128, 128, 122]
+    hex_approx: "#80807A"
+    used_by: [E01, E02]
