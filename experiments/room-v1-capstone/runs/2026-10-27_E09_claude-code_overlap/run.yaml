@@ -1,0 +1,64 @@
+experiment: E09
+run_id: 2026-10-27_E09_claude-code_overlap
+condition: exploratory
+status: pass                       # ordering and protection pass; one placement collided (documented)
+started: 2026-10-27T05:50
+finished: 2026-10-27T06:15
+
+agent:
+  name: Claude Code
+  harness: "Claude Code VS Code extension 2.1.308"
+  model: claude-opus-5-5
+skills:
+  revision: 953618a
+  loaded: [gimp, interior-scene-editing]
+capabilities:
+  gimp_agent_mcp: "0.5.0 (38 tools, Python off)"
+  gimp: "3.2.6"
+  overmind_gimp_plugin: a23557b
+  cerebrate_mcp: "291e3c9, image sha256:8718726f4c13"
+  extra: ["Python on the Mac (pixel comparisons only)", "shell on the Mac"]
+
+inputs:
+  scene: bedroom_v1
+  assets: []
+  instruction: "Overlap or reorder bed, rug and nightstand; try moving several groups together."
+
+outputs:   # ~/DesignStudio/workspaces/room-v1-capstone/runs/2026-10-27_E09_claude-code_overlap/
+  xcf: working.xcf                 # final: bed at P3
+  before: before.png
+  clean: after-clean.png
+  annotated: after-annotated.png
+  placements: [P1-on-rug.png, P2-past-nightstand.png, P3-partly-on-rug.png, P4-on-rug-front.png]
+
+checks:
+  correct_ordering: "pass in P2-P4: bed in front of the nightstand when nearer; in front of the rug when its front is ahead of the rug's front edge (P4); rug kept over the hem when about equally near (P3, the 5% tie margin) -- matches the photo"
+  protected_stationary_pixels: "pass: the composite with the bed hidden changed by 0 px across all four placements (numeric)"
+  undoable_group_move: "covered by Experiment 3 (four groups in one gimp_edit_batch, one Ctrl+Z verified by the user); overmind-place-on-floor is one undo step by design. No undo operation exists in the MCP tools to test it programmatically."
+
+placements:
+  - {id: P1, destination: [2010, 1935], scale: 0.878, stacking: "in front of Nightstand, behind Rug", result: "collision: the bed occupies the nightstand's floor space (the lamp floats over the bed). Ordering can't fix this; placement has no free-space check."}
+  - {id: P2, destination: [2060, 2120], scale: 1.045, stacking: "in front of Rug and Nightstand", result: "plausible"}
+  - {id: P3, destination: [1640, 1995], scale: 0.945, stacking: "in front of Nightstand; Rug same depth (order kept: rug over the hem)", result: "plausible; chosen as the final state"}
+  - {id: P4, destination: [1700, 2150], scale: 1.085, stacking: "in front of Rug and Nightstand", result: "plausible: the rug hidden under the bed"}
+
+attempts:
+  - {n: 1, method: "P1 + P2", result: "P2 right; P1 collided with the nightstand"}
+  - {n: 2, method: "P3 + P4 aimed at the rug question, clear of the nightstand", result: "both plausible"}
+
+interfaces:
+  mcp_tools: ["gimp_pdb_call overmind-place-on-floor x5", "gimp_layer set visible", "gimp_render", "gimp_image_info"]
+  models: []
+  scripts_or_direct: ["NumPy: protected-pixel comparison (verification only)"]
+beyond_buckminster:
+  - step: "protected-pixel check"
+    capability: "NumPy comparison of renders"
+    why: "proof"
+    mcp_alternative: "gimp_snapshot (bed hidden) + gimp_render_compare diff"
+    tradeoffs: "none for the result"
+interventions: []
+observations:
+  worked: "Depth stacking by floor anchor (with the 5% tie rule) gave the right order in every non-colliding case; moving a group never touched stationary pixels."
+  failed: "No collision check: a destination can put an object inside another (P1)."
+  follow_up: "Candidate primitive (observation): overmind-place-on-floor could warn when the placed object's footprint overlaps another object group's floor footprint. Meanwhile: before placing, render the destination with a points overlay and check the footprint is free."
+skill_updates: []

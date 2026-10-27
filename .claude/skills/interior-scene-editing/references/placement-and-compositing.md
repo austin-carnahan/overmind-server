@@ -29,6 +29,12 @@ Objects it supports (a lamp on a nightstand) move with it.
     0.9 px of their scaled offsets, sizes plausible against the nightstand.
 - The horizon itself comes from the room's geometry ([surface reconstruction](surface-reconstruction.md)) **[gap]**.
 
+**Check the floor is free first** [demonstrated, E09]: placement doesn't detect collisions. A destination
+inside another object's footprint puts one object into the other (a lamp left floating over a bed). Render
+the destination with `gimp_render(points=[...])` and check the whole footprint is clear. Depth stacking was
+right in every collision-free case, and a rug that is about as near as the object keeps its order (the tie
+margin), which matched the photo.
+
 **Limits** [demonstrated]: a uniformly scaled cutout keeps the side it showed in the photo, so long moves
 look wrong; the horizon's tilt is the weakest input (a 2° tilt made a 1% size error on a sideways move);
 depth order compares lowest points, which says little for objects at about the same depth; supported
