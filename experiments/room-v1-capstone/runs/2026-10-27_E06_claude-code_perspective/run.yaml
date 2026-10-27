@@ -65,4 +65,4 @@ observations:
   worked: "Use a real rectangle on the same plane (the window trim) as the plane's reference: place items in its rectified coordinates, warp with gimp-item-transform-perspective."
   failed: "The global camera from short baseboard lines is off by ~4 deg on the far left wall; linear interpolation along lines (A) ignores foreshortening."
   follow_up: "Light match by Multiply needs softening next to a light source (window)."
-skill_updates: []
+skill_updates: [19129aa]
