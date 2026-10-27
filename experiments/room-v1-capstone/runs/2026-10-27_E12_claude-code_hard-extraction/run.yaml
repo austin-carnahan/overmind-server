@@ -1,0 +1,71 @@
+experiment: E12
+run_id: 2026-10-27_E12_claude-code_hard-extraction
+condition: exploratory
+status: pass
+started: 2026-10-27T07:05
+finished: 2026-10-27T07:55
+
+agent:
+  name: Claude Code
+  harness: "Claude Code VS Code extension 2.1.308"
+  model: claude-opus-5-5
+skills:
+  revision: fe7c867
+  loaded: [gimp, interior-scene-editing]
+capabilities:
+  gimp_agent_mcp: "0.5.0 (38 tools, Python off)"
+  gimp: "3.2.6"
+  overmind_gimp_plugin: a23557b
+  cerebrate_mcp: "291e3c9, image sha256:8718726f4c13"
+  extra: ["Python + NumPy/OpenCV on the Mac (mask union, hole filling, colour mask for the cable, islands)", "shell on the Mac"]
+
+inputs:
+  scene: bedroom_v1
+  assets: [chair_room_photo]
+  instruction: "Extract a furniture object from an already furnished room photo, then place it in our bedroom."
+
+outputs:   # ~/DesignStudio/workspaces/room-v1-capstone/runs/2026-10-27_E12_claude-code_hard-extraction/
+  xcf: working.xcf                 # "Armchair" object group (cutout + room light) behind the bed
+  source_xcf: source-v3.xcf        # the asset with the cable patch and the extracted layer
+  extracted_object: armchair-cutout-v3.png
+  before: before.png
+  clean: after-clean.png
+  annotated: after-annotated.png
+  attempts: [armchair-cutout.png, armchair-cutout-v2.png, armchair-cutout-v3.png, placed-light50.png, placed2-light50.png, cable-removed*.png]
+
+challenges: "cluttered surroundings (bookshelves, desk, bin), a white cable across the seat, the bin in front of the front-left leg, the legs cropped by the frame's bottom edge, high camera angle"
+model_comparison:
+  owlv2: "'an armchair' / 'a wooden armchair with cushions': box 0.69 (949,545)-(2294,2304)"
+  sam21_whole_box: "c0 0.86 fragments the cushions; c1 0.85 cushions + pillow, frame partial; c2 0.50 the wooden frame only (speckled)"
+  sam21_part_boxes: "tight boxes on the right arm, left post, front rail, back post: c0 each clean (0.80-0.94)"
+  edgesam: "0.91: cushions + pillow only, no frame"
+  efficientsam3: "'armchair' presence 0.87, 'chair' 0.89 -- no instance at the default threshold"
+  chosen: "SAM 2.1: whole-box c1 (soft parts) + part-box c0 x4 (frame); one model, several prompts"
+  inpaint: "MI-GAN 512 for the cable: clean cushion texture"
+
+attempts:
+  - {n: 1, method: "whole-box c1 u c2; cable = enclosed holes in the seat zone; MI-GAN on those; cut", result: "frame speckled/fragmented at the arms; cable stub left (only SAM's holes were inpainted)"}
+  - {n: 2, method: "frame from tight part boxes (c0 each); cable mask from colour (near-white within the seat zone); islands removed", result: "frame clean; grey holes left where the plug end wasn't caught, and one in the pillow"}
+  - {n: 3, method: "fill enclosed holes < 8000 px (the arm gaps, 54k/59k px, stay open); seat holes added to the inpaint mask", result: "clean extraction -- chosen"}
+  - {n: 4, method: "placed behind the bed, sized at the nightstand's depth (90 cm, 88% visible), Multiply light 50%", result: "floating: the cropped leg ends showed above the bed"}
+  - {n: 5, method: "destination moved nearer (y 1895) so the bed's top edge hides the leg ends, still behind the bed's back edge", result: "plausible -- chosen"}
+
+interfaces:
+  mcp_tools:
+    - "cerebrate detect_by_text (OWLv2), segment_region (SAM 2.1 candidates x5 boxes; EdgeSAM), segment_by_text (EfficientSAM3), inpaint (MI-GAN) x3"
+    - "gimp_pdb_call: overmind-publish (image, selection), overmind-import-artifact (snapshot, op-id), select-polygon, gimp-file-load-layer, overmind-make-object-group, overmind-place-on-floor"
+    - "gimp_layer (duplicate/merge_down/add_alpha/crop/scale/set/new/reorder), gimp_layer_mask, gimp_measure histogram, gimp_export, gimp_render"
+  models: ["OWLv2 B/16", "SAM 2.1", "EdgeSAM", "EfficientSAM3", "MI-GAN 512"]
+  scripts_or_direct: ["NumPy/OpenCV: union of candidate masks, enclosed-hole analysis and filling, colour threshold for the cable, connected components (islands), mask -> polygons", "PIL overlays"]
+beyond_buckminster:
+  - step: "combining masks and cleaning them (union, holes, islands, colour-based cable mask)"
+    capability: "per-pixel mask arithmetic (NumPy/OpenCV)"
+    why: "the clean result needed set operations plus hole/island rules the GIMP selection ops express only partly"
+    mcp_alternative: "mostly expressible in GIMP: replay each mask's rings with add/subtract (union), gimp-selection-flood (fill holes -- all of them, so real gaps would need re-subtracting), gimp_select mode=color within a rectangle (the cable), selection shrink/grow (islands); a 'mask set operations' helper on the Cerebrate side would make it reliable"
+    tradeoffs: "the GIMP route is slower and fills real gaps too; same result achievable with care"
+interventions: []
+observations:
+  worked: "One model, several prompts: SAM 2.1 on a whole-object box for the soft parts plus tight boxes for thin wooden parts; MI-GAN for a thin occluder across a cushion; hiding a cropped base behind a nearer object."
+  failed: "Whole-box candidates fragment thin frames; holes-only cable masks miss the parts the segmenter included; text segmenters found nothing."
+  follow_up: "A small grey wall fleck inside the right arm; the source's flash lighting is flatter than the room's."
+skill_updates: []

@@ -66,6 +66,18 @@ EfficientSAM3 from text found neither "a nightstand" nor "a table lamp" (presenc
 "bed skirt" worked (presence 0.88, nearly as good as SAM 2.1; E02). Try
 another model when one misses, and say which one you used.
 
+## Hard extractions (cluttered photos) [demonstrated, E12]
+
+- **One model, several prompts:** a whole-object box gets the broad parts (cushions); thin parts (wooden
+  arms, posts, rails) come out clean only from **tight boxes of their own**. Union the candidates you pick
+  (still one model; the two-model union stays a fallback).
+- **Thin occluders across the object** (a cable over a cushion): mask them (the segmenter's holes plus a
+  colour selection, since it swallows parts of them) and inpaint with Cerebrate's `inpaint` through the
+  snapshot flow. A thin occluder on a uniform surface is what MI-GAN does best.
+- **Fill only small enclosed holes:** gaps under an armrest are large and real.
+- **A base cut off by the photo's edge** has no floor contact: place the object where something nearer
+  hides its bottom (behind a bed), or it floats.
+
 ## Recover before generating [demonstrated]
 
 Pixels a mask missed are still in the photo: fix the mask and cut them as "(recovered pixels)". Only
