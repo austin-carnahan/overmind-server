@@ -60,3 +60,11 @@ go into its OpenClaw workspace (its `skills/` directory; confirm OpenClaw's skil
 install), with the tool-contract adapter linked as today by `install-buckminster-cerebrate-runbook`.
 
 Frozen revisions: none yet.
+
+## Revisit later
+
+Experiments closed short of good enough, kept for a later enhancement pass:
+
+| Run | Status | What would improve it |
+| --- | --- | --- |
+| [E03 material replacement](runs/2026-10-27_E03_claude-code_pattern/run.yaml) | partial (accepted 2026-10-27) | The print doesn't follow the folds: a displace-by-map operation (shading as the map) — `gegl:displace` needs an aux input `gimp_apply_filter` can't pass. Also the faint face line and the rim at the blanket edge. |
