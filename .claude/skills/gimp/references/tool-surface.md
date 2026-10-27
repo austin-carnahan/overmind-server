@@ -37,6 +37,11 @@ your client prefixes them (`gimp_gimp_*` in OpenClaw, `mcp__gimp__gimp_*` in Cla
 - **Working on a copy of a document:** there is no file-copy tool. Open the original, `gimp_export` it
   to the copy's `.xcf` path before editing, and from then on export only to that path. GIMP's title bar
   may still show the original's name: never save with GIMP's own Save there.
+- `gimp_measure` reads **one layer** (the selected one unless you pass `layer_id`), not the composite: to
+  check what the canvas shows, render it. `kind="histogram"` respects the selection, which makes it the
+  way to measure a region's colour (mean/median per channel).
+- Multiply, Divide and the LCh modes blend in linear light (verified to within 1 level), so colours for
+  such layers should be computed in linear light too.
 - A selection made from polygons is antialiased: expect a 1–2 px soft edge. Account for it when you
   compare pixels "outside" a region.
 

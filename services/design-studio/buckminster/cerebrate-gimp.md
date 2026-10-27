@@ -28,7 +28,8 @@ points or an artifact URL. Don't fetch, base64 or view image bytes just to move 
   tool; with `mode: "image"` results are in document coordinates. Other modes: `selection` (the
   inpainting window around the selection, ≥ 512 px), `bounds` (the selection's box plus `margin`),
   `region` (`x, y, width, height`). `source` publishes one layer's or group's own composite instead of
-  the canvas.
+  the canvas. The canvas includes **every visible layer**, annotations and status overlays too: hide them
+  or publish a group, or the models will see them.
 
 Results carry `artifact://` URIs and `url`s; either can go back in as an input (e.g. a mask to `inpaint`).
 URLs expire with their artifacts (24 h): call again rather than reuse an old one.

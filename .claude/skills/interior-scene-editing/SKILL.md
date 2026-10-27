@@ -25,9 +25,11 @@ partly; **[gap]** needs a capability the shared MCP tools don't have yet (see
 3. **Protect what stays**, especially where it touches what moves. [Scene and objects](references/scene-and-objects.md#protection)
 4. **Rebuild what the move reveals** from the room's own surfaces, then blend.
    [Surface reconstruction](references/surface-reconstruction.md)
-5. **Place and integrate**: move or place on the floor, depth order, hidden parts, contact shadow.
+5. **Change appearance** (repaint a wall, recolour or retexture a surface) without moving it.
+   [Surface appearance](references/surface-appearance.md)
+6. **Place and integrate**: move or place on the floor, depth order, hidden parts, contact shadow.
    [Placement and compositing](references/placement-and-compositing.md)
-6. **Verify**, then report what's demonstrated and what's approximate. [Verification](#verification)
+7. **Verify**, then report what's demonstrated and what's approximate. [Verification](#verification)
 
 ## Principles
 
