@@ -128,13 +128,35 @@ corners for `gimp-item-transform-perspective`).
   - a uv-managed CPython 3.12 with numpy, scipy, OpenCV (headless), Pillow,
     scikit-image and shapely (definition and lock in
     [`buckminster/python/`](buckminster/python/));
-  - its `bin/uv` wrapper keeps the cache and interpreter there. Packages are
-    added by the operator (`bin/uv add`, then copy `pyproject.toml` and
-    `uv.lock` back here, and precompile with `compileall`). Buckminster's
-    `AGENTS.md` keeps it from writing under `/mnt/substrate/design-studio/`,
-    so it asks instead.
+  - its `bin/uv` wrapper keeps the cache and interpreter there.
+  - **Owned by `openclaw`.** Buckminster adds packages itself (`bin/uv add`);
+    its `AGENTS.md` names this directory as the one exception to "no writes
+    under `/mnt/substrate/design-studio/`". To carry its additions into the
+    repository, copy `pyproject.toml` and `uv.lock` back here. Operator
+    changes go through `sudo -u openclaw .../bin/uv`.
   - Buckminster keeps its scripts in its workspace (validated 2026-10-27:
     [E08 rerun](../../experiments/room-v1-capstone/runs/2026-10-27_E08_buckminster_python-validation/notes.md)).
+- **Pixels back into GIMP (co-editing):**
+  [`buckminster/python/overmind-artifact`](buckminster/python/overmind-artifact)
+  (`bin/` in the environment). `get` downloads a signed artifact URL, and `put`
+  uploads a PNG or JPEG with Buckminster's own upload token. That token is for
+  Cerebrate host `buckminster`; it lives in `.secrets/` in the environment,
+  readable by `openclaw` only. The loop:
+  1. `overmind-publish` a region of the live document;
+  2. `get`;
+  3. compute;
+  4. `put`;
+  5. `overmind-import-artifact` with `snapshot=`.
+
+  Because of `snapshot=`, a result computed before someone edited that region
+  is refused, not silently applied. Tested 2026-10-27 on a disposable copy of
+  the bedroom:
+  - a 1000×700 region round trip took 25 s (publish 16 s);
+  - the Canny-edge layer landed registered to the pixel;
+  - an import after an edit to the region was refused.
+
+  Revoke the token with `docker exec cerebrate-mcp python -m
+  cerebrate_mcp.uploads revoke buckminster`.
 
   Its runbook is [`buckminster/python.md`](buckminster/python.md). Install it
   with `sudo bash install-buckminster-python`, which links it into the

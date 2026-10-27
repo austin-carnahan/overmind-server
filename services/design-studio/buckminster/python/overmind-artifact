@@ -1,0 +1,51 @@
+#!/usr/bin/env python3
+"""Move images between Buckminster's Python on Overmind and GIMP, through Cerebrate's artifact service.
+
+  overmind-artifact get <signed-url> <out-file>
+      Download an artifact, e.g. overmind-publish's image-url or mask-url, or a Cerebrate result.
+  overmind-artifact put <file.png|file.jpg> [name]
+      Upload an image you computed. Prints JSON: {"uri", "url", "width", "height", "format"}. Pass "url" to
+      GIMP's overmind-import-artifact (with snapshot= when it was computed from a published snapshot).
+
+Both go to the service on Overmind's loopback (127.0.0.1:8002). The signed URLs it returns name
+artifacts.home.arpa, which is what GIMP's plug-in accepts. Uploads: PNG or JPEG, up to 32 MB, kept 24 h,
+create-only. Standard library only.
+"""
+import json, os, sys, urllib.error, urllib.request
+from pathlib import Path
+
+SERVICE = os.environ.get("OVERMIND_ARTIFACT_SERVICE", "http://127.0.0.1:8002")
+PUBLIC = "http://artifacts.home.arpa/artifacts/"
+TOKEN = Path(os.environ.get("OVERMIND_ARTIFACT_TOKEN", Path(__file__).resolve().parent.parent / ".secrets" / "cerebrate-upload-token"))
+
+
+def get(url, out):
+    if not url.startswith(PUBLIC):
+        sys.exit(f"not an artifact URL (expected {PUBLIC}…)")
+    local = SERVICE + "/artifacts/" + url[len(PUBLIC):]
+    with urllib.request.urlopen(local, timeout=60) as r, open(out, "wb") as f:
+        f.write(r.read())
+    print(json.dumps({"file": str(Path(out).resolve()), "bytes": Path(out).stat().st_size}))
+
+
+def put(path, name=None):
+    body = Path(path).read_bytes()
+    name = (name or Path(path).stem).lower()
+    req = urllib.request.Request(f"{SERVICE}/artifacts/upload?name={urllib.request.quote(name)}", data=body, method="POST",
+                                 headers={"Authorization": "Bearer " + TOKEN.read_text().strip(),
+                                          "Content-Type": "application/octet-stream"})
+    with urllib.request.urlopen(req, timeout=120) as r:
+        print(json.dumps(json.load(r)))
+
+
+if __name__ == "__main__":
+    a = sys.argv[1:]
+    try:
+        if a[:1] == ["get"] and len(a) == 3:
+            get(a[1], a[2])
+        elif a[:1] == ["put"] and len(a) in (2, 3):
+            put(a[1], a[2] if len(a) == 3 else None)
+        else:
+            sys.exit(__doc__)
+    except urllib.error.HTTPError as e:
+        sys.exit(f"{e.code}: {e.read().decode(errors='replace').strip()}")
