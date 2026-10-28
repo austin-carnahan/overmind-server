@@ -40,7 +40,8 @@ grant() {
     now=$(date '+%Y-%m-%d %H:%M:%S')
     until=$(date -d "+$hours hours" '+%Y-%m-%d %H:%M:%S')
 
-    install -m 0755 -o root -g root "$(readlink -f "$0")" "$SBIN"
+    # Refresh the root-owned copy, unless this already is it (`sudo agent-sudo grant` runs it from $SBIN).
+    [ "$(readlink -f "$0")" = "$SBIN" ] || install -m 0755 -o root -g root "$(readlink -f "$0")" "$SBIN"
     umask 0337
     cat > "$TMP" <<EOF
 # Temporary, from agent-sudo: granted $now for $user, expires $until.

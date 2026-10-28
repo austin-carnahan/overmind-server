@@ -252,6 +252,20 @@ reliably crashes the USB controller without it under real write load.
   app state are live on it. Swap (`swapfile`), Docker/containerd storage, and
   `~austin/.cache` are on it too. Docker refuses to start without the SSD; see
   [storage](../../design-notes/storage-layout.md#logical-paths-and-physical-disks).
+- **`/tmp` is RAM (tmpfs, 3.9 GB). Don't put large files there.** Its contents
+  take memory and are pushed to swap when RAM is short. On 2026-10-27, 2.7 GB of
+  leftover model-conversion staging in `/tmp` had filled the 4 GB swap
+  completely, leaving no headroom for a compile or a Python job.
+  - **Large scratch** (models, conversions, datasets, anything over ~100 MB): use a
+    working directory on the SSD, for example under `/mnt/disks/ssd1` or the
+    substrate. Delete it when the work is done.
+  - **Check:** `df -h /tmp` and `free -h`.
+- **The OpenClaw Gateway's memory warning is expected.** It logs
+  `memory pressure: level=warning reason=rss_threshold` every 5 minutes because
+  it runs at a steady ~1.8 GiB, over OpenClaw's default 1.5 GiB warning line.
+  - Not a leak: flat all day, with a normal garbage-collection cycle, and back at
+    the same level after a restart.
+  - Act only on `level=critical` or usage that keeps climbing.
 
 ## Intended first roles
 
