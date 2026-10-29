@@ -88,14 +88,20 @@ app for a person to resolve.
 
 ## RPC login
 
-`rpc-authentication-required` is on. Radarr and Sonarr connect to
-`gluetun:9091` with the RPC username and password set on their download
-client.
+The login comes from `USER` and `PASS` in this service's `.env` (git-ignored,
+mode 660). At every start, the linuxserver image sets
+`rpc-authentication-required` to true and writes them into `settings.json` when
+both are set. **When either is missing, it sets the login off**, whatever
+`settings.json` says. That was the cause of the RPC login being off until
+2026-10-28. Radarr and Sonarr connect to `gluetun:9091` with the same username
+and password, stored on their download client.
 
 To change the password:
 
-1. Change it in the WebUI (or RPC `session-set`), not in the file of a
-   running daemon. It's saved on shutdown and hashed when loaded.
+1. Change `PASS` in `.env`, then recreate the container:
+   `docker compose -f /opt/overmind/services/compose.yaml up -d --no-deps transmission`.
+   A plain restart doesn't re-read `.env`, and a change made in the WebUI is
+   overwritten from `.env` at the next start.
 2. Update it in Radarr and Sonarr (Settings → Download Clients), and run their
    **Test** there.
 
