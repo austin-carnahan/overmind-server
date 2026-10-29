@@ -1,0 +1,96 @@
+#!/usr/bin/env bash
+# Stop, start or restart any container deployed from /opt/overmind/services, as root through one
+# sudoers line, so Kerrigan (the `openclaw` user) can run the server without the Docker socket.
+#
+#   sudo overmind-svc status [name]               every deployed container (or one): state, health
+#   sudo overmind-svc stop|start|restart <name>   then wait (up to 2 min) for running/healthy
+#
+# "Deployed from /opt/overmind/services" means the container's compose labels name a compose file under
+# that directory, so new services are covered with no list to maintain. Only stop/start/restart of the
+# existing container: never create, recreate, exec or run, so images, mounts and commands can't change.
+# Containers sharing another's network (Transmission inside gluetun) follow it: restarting or starting
+# gluetun restarts them afterwards; stopping it stops them first.
+#
+# Installed as a root-owned copy (install-overmind-svc); sudoers points at /usr/local/sbin/overmind-svc,
+# never at the checkout, which openclaw can write. Every action is logged: journalctl -t overmind-svc.
+set -euo pipefail
+
+ROOT=/opt/overmind/services
+WAIT=120
+
+die() { echo "overmind-svc: $*" >&2; exit 2; }
+log() { logger -t overmind-svc "${SUDO_USER:-$(id -un)}: $*"; }
+
+deployed() {   # true when the container's compose file lives under $ROOT
+    local files
+    files=$(docker inspect "$1" --format '{{index .Config.Labels "com.docker.compose.project.config_files"}}' 2>/dev/null) || return 1
+    [ -n "$files" ] || return 1
+    local f
+    for f in ${files//,/ }; do
+        case "$(realpath -m "$f")" in "$ROOT"/*) ;; *) return 1 ;; esac
+    done
+}
+
+dependents() {   # containers using this one's network namespace (network_mode: service:<it>)
+    local id
+    id=$(docker inspect "$1" --format '{{.Id}}')
+    docker ps -a --format '{{.Names}}' | while read -r c; do
+        [ "$(docker inspect "$c" --format '{{.HostConfig.NetworkMode}}')" = "container:$id" ] && echo "$c"
+    done
+}
+
+state() {
+    docker inspect "$1" --format '{{.State.Status}}{{if .State.Health}} ({{.State.Health.Status}}){{end}}'
+}
+
+wait_ready() {
+    local c=$1 t=0 s
+    while [ $t -lt $WAIT ]; do
+        s=$(state "$c")
+        case "$s" in
+            "running"|"running (healthy)") echo "$c: $s"; return 0 ;;
+            exited*|dead*) break ;;
+        esac
+        sleep 3; t=$((t + 3))
+    done
+    echo "$c: not ready after ${t}s: $(state "$c")" >&2
+    docker logs --tail 15 "$c" >&2 || true
+    return 1
+}
+
+status() {
+    local c
+    for c in $(docker ps -a --format '{{.Names}}' | sort); do
+        if [ -n "${1:-}" ] && [ "$c" != "$1" ]; then continue; fi
+        deployed "$c" && printf '%-22s %s\n' "$c" "$(state "$c")"
+    done
+}
+
+act() {
+    local op=$1 c=$2 rc=0 d deps
+    [[ $c =~ ^[A-Za-z0-9][A-Za-z0-9_.-]*$ ]] || die "not a container name: $c"
+    docker inspect "$c" >/dev/null 2>&1 || die "no container named $c"
+    deployed "$c" || die "$c isn't deployed from $ROOT"
+    mapfile -t deps < <(dependents "$c")
+
+    if [ "$op" = stop ]; then
+        for d in "${deps[@]}"; do docker stop "$d" >/dev/null && echo "$d: stopped (shares $c's network)"; done
+        docker stop "$c" >/dev/null && echo "$c: stopped"
+        log "stop $c${deps[*]:+ (and ${deps[*]})}"
+        return
+    fi
+    docker "$op" "$c" >/dev/null
+    wait_ready "$c" || rc=1
+    for d in "${deps[@]}"; do              # a restarted network owner leaves its dependents without a network
+        docker restart "$d" >/dev/null
+        wait_ready "$d" || rc=1
+    done
+    log "$op $c${deps[*]:+ (then restarted ${deps[*]})}: $([ $rc = 0 ] && echo ok || echo NOT READY)"
+    return $rc
+}
+
+case ${1:-} in
+    status) status "${2:-}" ;;
+    stop|start|restart) [ $# -eq 2 ] || die "usage: overmind-svc $1 <container>"; act "$1" "$2" ;;
+    *) sed -n '5,6p' "$0"; exit 2 ;;
+esac

@@ -1,0 +1,74 @@
+#!/usr/bin/env bash
+# One-off root tasks, written by an agent (or anyone in group `overmind`), reviewed and run by a person.
+#
+#   sudo-queue                     list pending tasks (no sudo needed)
+#   sudo sudo-queue run <task>     show the task in full, ask, run it as root, archive it
+#
+# A task is a shell script in /var/lib/overmind/sudo-queue/pending/. Its first comment lines say what it
+# does, why, and how to undo it. Reusable tools and installers don't belong here: those live in the
+# repo (scripts/, and next to what they install). Rule of thumb: would we need to run it again to rebuild
+# Overmind? Then it's an installer, not a task.
+#
+# `run` takes a root-owned copy first, shows that copy, and runs exactly it, so the file can't change
+# between review and run. Output is kept with the copy in done/ (pruned after 30 days); the journal keeps
+# a line per run with its SHA-256 (journalctl -t sudo-queue).
+#
+# Run the root-owned copy (/usr/local/sbin/sudo-queue, installed by hosts/overmind-01/setup-shared-access),
+# not the checkout's: agents can edit the checkout, and this one runs often without a fresh review.
+set -euo pipefail
+
+QUEUE=/var/lib/overmind/sudo-queue
+KEEP_DAYS=30
+
+die() { echo "sudo-queue: $*" >&2; exit 2; }
+
+list() {
+    local f n=0
+    for f in "$QUEUE"/pending/*; do
+        [ -f "$f" ] || continue
+        n=$((n + 1))
+        printf '%-40s %-10s %s\n  %s\n' "$(basename "$f")" "$(stat -c %U "$f")" "$(date -r "$f" '+%Y-%m-%d %H:%M')" \
+            "$(grep -m1 -E '^#[^!]' "$f" | sed 's/^# *//')"
+    done
+    [ $n -gt 0 ] || echo "nothing pending in $QUEUE/pending"
+}
+
+run() {
+    local name=$1
+    [ "$(id -u)" = 0 ] || die "run it with sudo: sudo sudo-queue run $name"
+    [[ $name =~ ^[A-Za-z0-9][A-Za-z0-9_.-]*$ ]] || die "not a task name: $name"
+    local src="$QUEUE/pending/$name"
+    [ -f "$src" ] && [ ! -L "$src" ] || die "no task $name in $QUEUE/pending"
+
+    local work stamp copy sum answer
+    work=$(mktemp -d /run/sudo-queue.XXXXXX)          # root-only (mode 700)
+    copy="$work/$name"
+    install -m 0500 -o root -g root "$src" "$copy"
+    sum=$(sha256sum "$copy" | cut -d' ' -f1)
+
+    { echo "== $name  (by $(stat -c %U "$src"), $(date -r "$src" '+%Y-%m-%d %H:%M'), sha256 ${sum:0:16}…)"; cat -n "$copy"; } |
+        if [ -t 1 ]; then less -R -F -X; else cat; fi
+    read -r -p "Run this as root? Type yes: " answer
+    [ "$answer" = yes ] || { rm -rf "$work"; echo "not run; still pending"; exit 1; }
+
+    stamp=$(date '+%Y%m%d-%H%M%S')
+    local log="$QUEUE/done/$stamp-$name.log" rc=0
+    set +e
+    bash "$copy" 2>&1 | tee "$log"
+    rc=${PIPESTATUS[0]}
+    set -e
+    install -m 0444 -o root -g root "$copy" "$QUEUE/done/$stamp-$name"
+    chown root:root "$log"; chmod 0444 "$log"
+    if cmp -s "$copy" "$src"; then rm -f "$src"; else echo "note: $src changed after review; left in pending" | tee -a "$log"; fi
+    rm -rf "$work"
+    logger -t sudo-queue "${SUDO_USER:-root} ran $name sha256=$sum exit=$rc (done/$stamp-$name)"
+    find "$QUEUE/done" -type f -mtime +$KEEP_DAYS -delete 2>/dev/null || true
+    echo "== exit $rc; script and output kept in $QUEUE/done/$stamp-$name{,.log}"
+    return $rc
+}
+
+case ${1:-} in
+    ""|list) list ;;
+    run) [ $# -eq 2 ] || die "usage: sudo sudo-queue run <task>"; run "$2" ;;
+    *) sed -n '4,5p' "$0"; exit 2 ;;
+esac

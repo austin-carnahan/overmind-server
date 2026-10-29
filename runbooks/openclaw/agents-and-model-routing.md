@@ -20,6 +20,17 @@ deployed repo checkout). Kerrigan is expected to inspect both canonical repo
 state and live host state before durable infrastructure changes — not trust
 either alone.
 
+Since 2026-10-28 she can make those changes durable herself:
+
+- **Containers:** she stops, starts and restarts any deployed container with
+  `sudo /usr/local/sbin/overmind-svc`.
+- **The repo:** she edits and commits in `/opt/overmind` under her own git
+  identity, and `austin` pushes.
+- **Service settings:** through the service's API where it has one; for
+  Transmission that now persists.
+
+See [Permissions and host administration](deployment-and-gateway.md#permissions-and-host-administration).
+
 ### Soma (`soma`)
 
 **Role:** fitness, nutrition, and health-data coach.
@@ -65,10 +76,19 @@ messaging tools.
     `services/design-studio/buckminster/python.md`.
   - Validated by an E08 rerun:
     `experiments/room-v1-capstone/runs/2026-10-27_E08_buckminster_python-validation/`.
-- **Limits enforced by the system:** `/opt/overmind` isn't writable by
-  `openclaw`, and the Gateway denies `system.run` on every node, so it has no
-  shell on the Mac.
+- **Sweet Home 3D (since 2026-10-27):** `sweethome3d_*`, published by the
+  `macbook-m1` node from the Sweet Home 3D MCP plug-in, edits the open
+  project live. Allowed for Buckminster only, and every other agent denies it.
+  - Runbook: `runbooks/sweethome3d.md` (from
+    `services/design-studio/buckminster/sweethome3d.md`).
+  - Setup and limits: `services/design-studio/README.md`, "Sweet Home 3D on
+    the worker".
+- **Limits enforced by the system:** the Gateway denies `system.run` on
+  every node, so it has no shell on the Mac. (`/opt/overmind` was read-only
+  for `openclaw` until 2026-10-28; it's now a shared work area, see
+  [Permissions](deployment-and-gateway.md#permissions-and-host-administration).)
 - **Limits that are policy only (its `AGENTS.md`):**
+  - no changes to `/opt/overmind` or to services: that's Kerrigan's job;
   - checkpoints only through `design-checkpoint`, never by hand;
   - git is local only, with no push and no borrowed credentials;
   - stay out of other agents' workspaces and OpenClaw state.

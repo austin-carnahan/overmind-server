@@ -1,0 +1,24 @@
+#!/usr/bin/env bash
+# Install overmind-svc as a root-owned copy in /usr/local/sbin and the sudoers line that lets `openclaw`
+# run it (sudoers.d/openclaw-services). The sudoers file is validated with visudo before it goes live,
+# and the whole configuration again after. Idempotent; re-run after changing overmind-svc.
+#
+#   sudo bash <checkout>/hosts/overmind-01/install-overmind-svc
+#
+# Revert: sudo rm /etc/sudoers.d/openclaw-services /usr/local/sbin/overmind-svc
+set -euo pipefail
+
+here=$(cd "$(dirname "$0")" && pwd)
+[ "$(id -u)" = 0 ] || { echo "run with sudo" >&2; exit 1; }
+
+install -m 0755 -o root -g root "$here/overmind-svc" /usr/local/sbin/overmind-svc
+echo "installed /usr/local/sbin/overmind-svc"
+
+tmp=/etc/sudoers.d/.openclaw-services.tmp          # sudo ignores names with a dot: never live half-written
+install -m 0440 -o root -g root "$here/sudoers.d/openclaw-services" "$tmp"
+visudo -c -f "$tmp" >/dev/null || { rm -f "$tmp"; echo "sudoers file didn't validate; nothing changed" >&2; exit 1; }
+mv -f "$tmp" /etc/sudoers.d/openclaw-services
+visudo -c >/dev/null || { rm -f /etc/sudoers.d/openclaw-services; echo "sudoers didn't validate with it; removed" >&2; exit 1; }
+echo "installed /etc/sudoers.d/openclaw-services"
+
+sudo -u openclaw sudo -n /usr/local/sbin/overmind-svc status transmission

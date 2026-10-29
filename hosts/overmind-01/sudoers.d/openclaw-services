@@ -1,0 +1,5 @@
+# Kerrigan (openclaw) may stop, start and restart any container deployed from
+# /opt/overmind/services, through the root-owned copy only (the checkout is
+# writable by openclaw). See hosts/overmind-01/overmind-svc. Installed by
+# install-overmind-svc.
+openclaw ALL=(root) NOPASSWD: /usr/local/sbin/overmind-svc

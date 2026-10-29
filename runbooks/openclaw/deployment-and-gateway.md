@@ -145,6 +145,44 @@ Real grants on `overmind-01`:
   so any genuinely root-level action (systemctl restarts of *other* services,
   package installs, sudoers/AppArmor file edits) has to be run by the human
   directly, not scripted by an assistant through this grant.
+- `/etc/sudoers.d/openclaw-services` (since 2026-10-28) — `openclaw` may run
+  `/usr/local/sbin/overmind-svc` as root. That's
+  `status`/`stop`/`start`/`restart` of any container deployed from
+  `/opt/overmind/services`, so Kerrigan can run the server without hand
+  restarts.
+  - It never creates, recreates, execs or runs containers, so images, mounts
+    and commands can't change through it.
+  - Restarting gluetun also restarts Transmission, which uses gluetun's
+    network.
+  - Every action is logged: `journalctl -t overmind-svc`.
+  - The sudoers line names the root-owned copy, never the checkout. Source:
+    [hosts/overmind-01/overmind-svc](../../hosts/overmind-01/overmind-svc),
+    installed by `install-overmind-svc`.
+- **Shared work areas** (since 2026-10-28,
+  [setup-shared-access](../../hosts/overmind-01/setup-shared-access)):
+  - The group `overmind` holds `austin` and `openclaw`. `/opt/overmind` and
+    `/mnt/substrate` belong to it, with set-group-ID directories.
+  - The Gateway runs with `UMask=0002`, so a file either of them creates is
+    editable by both. Private files (tokens) and read-only checkpoints keep
+    their modes.
+  - **The agents can write the repo checkout.** Kerrigan commits locally
+    there under her own identity (`includeIf` for `/opt/overmind`); `austin`
+    reviews and pushes. When deploying, pull with rebase so her unpushed
+    commits are kept.
+  - **Deliberate:** scripts in the checkout are still run with sudo by a
+    person (installers, `agent-sudo grant`). Because the agents can edit
+    them, that's a supervised path for Kerrigan to prepare privileged
+    changes for a person to run. Read a script's diff before running it with
+    sudo.
+  - The one hard rule: **nothing runs code from the checkout as root without
+    a person.** Sudoers lines, systemd units and timers point at root-owned
+    copies. Checked 2026-10-28: no unit, cron job or privileged container
+    executes checkout files. `containernursery`, the only container with the
+    Docker socket, reads only a routing table from it.
+  - All agents share the `openclaw` user, so this applies to Buckminster and
+    Soma too (accepted 2026-10-28). Their limits on repo and service changes
+    are policy in their `AGENTS.md`, and `sudo` from `exec` needs OpenClaw's
+    elevated mode, which only Kerrigan has.
 - `systemd-journal` group membership for `openclaw` — read-only log access
   without broader privilege.
 - rootless Podman, not Docker-group membership, for sandbox isolation (see

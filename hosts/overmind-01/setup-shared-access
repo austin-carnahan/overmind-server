@@ -1,0 +1,59 @@
+#!/usr/bin/env bash
+# Shared work areas for the operator (austin) and the agents (openclaw): whoever creates a file, both can
+# edit it.
+#   - group `overmind` with austin and openclaw;
+#   - the OpenClaw Gateway (all agents) runs with UMask=0002, like austin's logins, so files the agents
+#     create are group-writable (systemd's default 0022 made them owner-only);
+#   - in each shared area: group `overmind` throughout, set-group-ID on directories (new files join the
+#     group), and group write wherever the owner can write and the group can already read. Private files
+#     (tokens, mode 600/700) stay private; read-only files (design checkpoints, 444/555) stay read-only;
+#   - /opt/overmind: git core.sharedRepository=group, and commits by openclaw there are signed Kerrigan
+#     (includeIf, so the agents' own workspace repos keep their own identities).
+# Container state under /var/lib/overmind is left alone (e.g. Postgres refuses group-accessible data).
+#
+#   sudo bash <checkout>/hosts/overmind-01/setup-shared-access
+#   then restart the Gateway soon after: it picks up the new group and umask only on restart, and until
+#   then agents lose group access to the areas whose group changed (e.g. the design studio's folders).
+#
+# Idempotent. Revert: rm the systemd drop-in + daemon-reload + Gateway restart; the group changes are
+# harmless to keep (or chgrp back: /opt/overmind was austin:austin, /mnt/substrate/design-studio austin:openclaw).
+set -euo pipefail
+
+AREAS=(/opt/overmind /mnt/substrate)
+DROPIN=/etc/systemd/system/openclaw-gateway.service.d/umask.conf
+
+[ "$(id -u)" = 0 ] || { echo "run with sudo" >&2; exit 1; }
+
+groupadd -f overmind
+usermod -aG overmind austin
+usermod -aG overmind openclaw
+echo "group overmind: $(getent group overmind | cut -d: -f4)"
+
+install -d "$(dirname "$DROPIN")"
+printf '%s\n' "# Agents' files group-writable, like austin's (hosts/overmind-01/setup-shared-access)." \
+    "[Service]" "UMask=0002" > "$DROPIN"
+systemctl daemon-reload
+echo "Gateway umask: $(systemctl show openclaw-gateway -p UMask --value) (applies at the next Gateway restart)"
+
+for area in "${AREAS[@]}"; do
+    chgrp -hR overmind "$area"
+    find "$area" -xdev -type d -exec chmod g+s {} +
+    find "$area" -xdev -type d -perm -u+w -perm -g+rx ! -perm -g+w -exec chmod g+w {} +
+    find "$area" -xdev -type f -perm -u+w -perm -g+r ! -perm -g+w -exec chmod g+w {} +
+    echo "shared: $area ($(stat -c '%U:%G %A' "$area"))"
+done
+
+# The sudo queue: one-off root tasks written by agents, reviewed and run by a person (scripts/sudo-queue).
+install -d -m 2775 -o austin -g overmind /var/lib/overmind/sudo-queue /var/lib/overmind/sudo-queue/pending
+install -d -m 3775 -o austin -g overmind /var/lib/overmind/sudo-queue/done    # sticky: entries stay put
+install -m 0755 -o root -g root "$(cd "$(dirname "$0")/../.." && pwd)/scripts/sudo-queue" /usr/local/sbin/sudo-queue
+echo "sudo queue: /var/lib/overmind/sudo-queue, runner /usr/local/sbin/sudo-queue"
+
+sudo -u austin git -C /opt/overmind config core.sharedRepository group
+cfg=/home/openclaw/.gitconfig-overmind
+printf '%s\n' "[user]" "    name = Kerrigan" "    email = kerrigan@overmind-01" > "$cfg"
+chown openclaw:openclaw "$cfg"
+oc_git() { sudo -u openclaw HOME=/home/openclaw git config --global "$@"; }
+oc_git --get-all safe.directory | grep -qx /opt/overmind || oc_git --add safe.directory /opt/overmind
+oc_git includeIf.gitdir:/opt/overmind/.path "$cfg"
+echo "openclaw in /opt/overmind commits as: $(cd /opt/overmind && sudo -u openclaw HOME=/home/openclaw git config user.name)"
