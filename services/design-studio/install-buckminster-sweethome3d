@@ -1,0 +1,87 @@
+#!/usr/bin/env bash
+# Give Buckminster the Sweet Home 3D tools that the Mac node publishes (nodeHost.mcp.servers.sweethome3d,
+# see services/design-studio/README.md), and its runbook:
+# - copy buckminster/sweethome3d.md into the workspace's runbooks/ and point AGENTS.md at it once;
+# - tool policy, appended to what each agent already has (never replaced): "sweethome3d_*" (node tools
+#   take one underscore) added to Buckminster's tools.alsoAllow, and to every other agent's tools.deny,
+#   since node tools are visible to all agents by default.
+# openclaw.json is backed up first. Agent tool policy and workspace files apply without a Gateway
+# restart. Idempotent.
+#
+#   sudo bash <checkout>/services/design-studio/install-buckminster-sweethome3d      (ASSUME_YES=1 skips the prompt)
+#
+# Rollback: remove "sweethome3d_*" from the agents' tools lists (or restore the backup it prints), delete
+# runbooks/sweethome3d.md and the AGENTS.md line (an AGENTS.md.bak-* copy is kept).
+set -euo pipefail
+
+src=$(cd "$(dirname "$0")" && pwd)/buckminster/sweethome3d.md
+ws=/home/openclaw/.openclaw/agents/buckminster/workspace
+cfg=/home/openclaw/.openclaw/openclaw.json
+allow_agents=${ALLOW_AGENTS:-buckminster}
+pointer='- **Sweet Home 3D** (rooms in 3D on the Mac, edited live while the person watches: walls, furniture, layouts, renders): follow `runbooks/sweethome3d.md`. Checkpoint before every change set; compute geometry in Python first.'
+
+[ "$(id -u)" = 0 ] || { echo "run with sudo" >&2; exit 1; }
+[ -f "$ws/AGENTS.md" ] || { echo "no $ws/AGENTS.md" >&2; exit 1; }
+oc() { sudo -u openclaw bash -lc "cd && openclaw $*"; }
+
+install -d -o openclaw -g openclaw "$ws/runbooks"
+install -m 644 -o openclaw -g openclaw "$src" "$ws/runbooks/sweethome3d.md"
+echo "installed $ws/runbooks/sweethome3d.md"
+if grep -qF 'runbooks/sweethome3d.md' "$ws/AGENTS.md"; then
+    echo "AGENTS.md already points at it; unchanged"
+else
+    cp -p "$ws/AGENTS.md" "$ws/AGENTS.md.bak-$(date +%Y%m%d-%H%M%S)"
+    printf '\n%s\n' "$pointer" >> "$ws/AGENTS.md"
+    chown openclaw:openclaw "$ws/AGENTS.md"
+    echo "appended to AGENTS.md"
+fi
+
+echo "== tool policy"
+if ! agents_out=$(oc config get agents.entries --json 2>&1); then
+    echo "openclaw config get agents.entries --json failed:"; echo "$agents_out"; exit 1
+fi
+ops_text=$(ALLOW="$allow_agents" AGENTS="$agents_out" python3 - <<'EOF'
+import json, os, sys
+allow = set(os.environ["ALLOW"].split())
+text = os.environ["AGENTS"]
+start = text.find("{")          # the CLI may print a banner before the JSON
+agents, _ = json.JSONDecoder().raw_decode(text[start:])
+for agent_id, a in sorted(agents.items()):
+    tools = (a or {}).get("tools") or {}
+    if agent_id in allow:
+        if not tools.get("profile"):
+            continue  # no allowlist profile: node tools are already visible to it
+        key = "alsoAllow"
+    else:
+        key = "deny"
+    cur = list(tools.get(key) or [])
+    if "sweethome3d_*" not in cur:
+        print(f"agents.entries.{agent_id}.tools.{key}\t{json.dumps(cur + ['sweethome3d_*'])}\t{agent_id}")
+EOF
+)
+ops=()
+[ -n "$ops_text" ] && mapfile -t ops <<<"$ops_text"
+if [ ${#ops[@]} -eq 0 ]; then
+    echo "nothing to change"
+else
+    for op in "${ops[@]}"; do
+        IFS=$'\t' read -r path value id <<<"$op"
+        echo "  $id: $path = $value"
+        out=$(oc config set "'$path'" "'$value'" --strict-json --dry-run 2>&1) || { echo "dry run failed for $path:"; echo "$out"; exit 1; }
+    done
+    if [ "${ASSUME_YES:-}" != 1 ]; then
+        read -r -p "Apply these ${#ops[@]} change(s)? [y/N] " answer
+        [ "$answer" = y ] || { echo "not applied"; exit 1; }
+    fi
+    backup="$cfg.bak-sweethome3d-$(date +%Y%m%d-%H%M%S)"
+    cp -p "$cfg" "$backup" && echo "backup: $backup"
+    for op in "${ops[@]}"; do
+        IFS=$'\t' read -r path value id <<<"$op"
+        out=$(oc config set "'$path'" "'$value'" --strict-json 2>&1) || { echo "config set failed for $path:"; echo "$out"; exit 1; }
+    done
+    echo "applied (agent tool policy hot-applies; no Gateway restart)"
+fi
+
+echo "== Mac node (Sweet Home 3D must be open there)"
+n=$(oc nodes describe --node macbook-m1 --json 2>/dev/null | grep -o '"sweethome3d_[a-z_]*"' | sort -u | wc -l || true)
+echo "sweethome3d_* tools published by macbook-m1: $n (43 expected: 46 minus the 3 excluded at the node)"

@@ -186,6 +186,47 @@ corners for `gimp-item-transform-perspective`).
 - **Operator access stays.** The bridge's own `exec` is not an agent tool. It
   needs the bridge's local token.
 
+## Sweet Home 3D on the worker (since 2026-10-27)
+
+Sweet Home 3D (floor plans, furniture, 3D views, renders) runs on the Mac next to GIMP. The
+[sweethome3d-mcp-server](https://github.com/grimashevich/sweethome3d-mcp-server) plug-in (GPL-2.0)
+runs an MCP server inside the app. Its calls edit the open project on the app's interface thread, so
+the person sees every change live.
+
+- **Install:** [`install-sweethome3d-worker`](install-sweethome3d-worker) `app`, `plugin` and `node`, on
+  the Mac as the GIMP user.
+  - Sweet Home 3D 7.6.1 comes from SourceForge, the download linked from sweethome3d.com. The script
+    checks its SHA-1 and notarization. Its Developer ID is AI Photo Editor Lab SRL, the company that also
+    publishes it on the Mac App Store. Don't use the App Store build: its sandbox can't open the port.
+  - The plug-in (v1.2.0, commit `026d602`) is built with `javac` against the installed app's jars. That's
+    the same Java 8 target as upstream's Maven build, without running its tests or build plug-ins.
+  - On first launch, answer the onboarding screen with "Continue with the SourceForge version".
+- **Endpoint:** `127.0.0.1:9878/mcp` (`sh3d-mcp.properties`). 9877 is GIMP's bridge.
+  - A bearer token is required. The plug-in keeps it in its plugins folder (mode 600), and the Mac node
+    reads a copy from `~/.openclaw/.env` (`SH3D_MCP_TOKEN`).
+  - The plug-in also checks Host and Origin on every request.
+  - After rotating the token in **Tools → MCP Server…**, run `node` again.
+- **Publishing:** `nodeHost.mcp.servers.sweethome3d` on the Mac node (`url`, `streamable-http`).
+  - No bridge process, and no Gateway MCP config or Gateway restart.
+  - The tools appear as `sweethome3d_*` while the node is connected and the app is open.
+  - The node excludes `clear_scene`, `load_home` (it replaces the open scene without asking) and
+    `delete_level`.
+- **Agents:** [`install-buckminster-sweethome3d`](install-buckminster-sweethome3d) on Overmind (sudo):
+  - copies the runbook [`buckminster/sweethome3d.md`](buckminster/sweethome3d.md) into Buckminster's
+    workspace and adds its `AGENTS.md` pointer;
+  - adds `sweethome3d_*` to Buckminster's `alsoAllow` and to every other agent's `deny`.
+- **Tested 2026-10-27, directly against the plug-in:**
+  - 401 without the token; 46 tools with it.
+  - A 300×380 cm room was built with a bed, a bedside table, a door and a window fitted into the walls.
+  - A low-quality 800×600 render came back inline in 12 s.
+  - `restore_checkpoint` returned the scene to empty.
+- **Limits:**
+  - **Undo:** agent edits aren't on Sweet Home 3D's Edit → Undo. Checkpoints (in memory, lost on quit) are
+    the way back.
+  - **Furniture:** catalogue items (about 180) and generated shapes only; no model import.
+  - **Sessions:** idle sessions expire after 30 min. The node reconnects, but the call that finds the
+    expired session fails once.
+
 ## Lost responses and plug-in crashes
 
 **Lost responses.** A call's response can be lost: a dropped connection, or a

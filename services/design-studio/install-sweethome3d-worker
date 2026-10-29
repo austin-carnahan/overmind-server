@@ -1,0 +1,92 @@
+#!/usr/bin/env bash
+# Set up Sweet Home 3D with its MCP plug-in on the Mac design worker and publish the plug-in's tools to the
+# Gateway through the worker's OpenClaw node. Runs on the worker as the GIMP user; no sudo. Idempotent:
+# each step is skipped when already done.
+#
+#   install-sweethome3d-worker app      # 1. Sweet Home 3D, verified download (skipped if this version is installed)
+#   install-sweethome3d-worker plugin   # 2. build the plug-in from a pinned commit, install it with its settings
+#   (start Sweet Home 3D once: the plug-in then creates its token; first launch shows an onboarding screen,
+#    answer "Continue with the SourceForge version")
+#   install-sweethome3d-worker node     # 3. token into ~/.openclaw/.env, server into nodeHost.mcp.servers, node restart
+#
+# Plug-in: grimashevich/sweethome3d-mcp-server, built with javac against the installed app's jars (the
+# same Java 8 target as its Maven build; its tests and build plug-ins are not run). It listens on
+# 127.0.0.1 only. Port 9878 because GIMP's agent bridge owns 9877; bearer token required.
+set -euo pipefail
+
+SH3D_VERSION=7.6.1
+SH3D_SHA1=38d82be430917db55760954081242cc079b88a19      # SourceForge's listing for the macOS .dmg
+PLUGIN_REPO=https://github.com/grimashevich/sweethome3d-mcp-server
+PLUGIN_COMMIT=026d602bdb5bdd0d5d1a56e788167c67840f2dfa   # v1.2.0
+PORT=9878
+APP="/Applications/Sweet Home 3D.app"
+PLUGINS=${SH3D_PLUGINS:-"$HOME/Library/Application Support/eTeks/Sweet Home 3D/plugins"}
+OC_DIR=${OPENCLAW_DIR:-"$HOME/.openclaw"}
+EXCLUDE='["clear_scene", "load_home", "delete_level"]'   # replace or wipe the person's open work
+work=${TMPDIR:-/tmp}/sweethome3d-worker
+
+app() {
+    local have
+    have=$(/usr/libexec/PlistBuddy -c "Print CFBundleShortVersionString" "$APP/Contents/Info.plist" 2>/dev/null || true)
+    [ "$have" = "$SH3D_VERSION" ] && { echo "Sweet Home 3D $have already installed"; return; }
+    mkdir -p "$work" && cd "$work"
+    local dmg="SweetHome3D-$SH3D_VERSION-macosx.dmg"
+    curl -fsSL -o "$dmg" "https://downloads.sourceforge.net/project/sweethome3d/SweetHome3D/SweetHome3D-$SH3D_VERSION/$dmg"
+    [ "$(shasum -a 1 "$dmg" | cut -d' ' -f1)" = "$SH3D_SHA1" ] || { echo "SHA-1 mismatch for $dmg" >&2; exit 1; }
+    hdiutil attach -nobrowse -readonly -mountpoint ./mnt "$dmg" >/dev/null
+    spctl -a -t exec "mnt/Sweet Home 3D.app"           # notarized Developer ID (AI Photo Editor Lab SRL, 5ZL37D89B3)
+    ditto "mnt/Sweet Home 3D.app" "$APP"
+    hdiutil detach ./mnt >/dev/null
+    echo "installed Sweet Home 3D $SH3D_VERSION"
+}
+
+plugin() {
+    local jars="$APP/Contents/app" src="$work/plugin"
+    rm -rf "$src" && git clone -q "$PLUGIN_REPO" "$src" && git -C "$src" checkout -q "$PLUGIN_COMMIT"
+    mkdir -p "$src/out/classes"
+    # shellcheck disable=SC2046
+    javac --release 8 -encoding UTF-8 -nowarn -d "$src/out/classes" \
+        -cp "$jars/SweetHome3D.jar:$jars/j3dcore.jar:$jars/j3dutils.jar:$jars/vecmath.jar" \
+        $(find "$src/src/main/java" -name '*.java')
+    cp -R "$src/src/main/resources/." "$src/out/classes/"
+    mkdir -p "$PLUGINS"
+    (cd "$src/out/classes" && jar --create --file "$PLUGINS/sh3d-mcp-plugin-1.2.0.sh3p" .)
+    if [ ! -f "$PLUGINS/sh3d-mcp.properties" ]; then
+        printf '%s\n' "# Overmind design studio: 9877 is GIMP's agent bridge, so this plug-in uses $PORT." \
+            "sh3d.mcp.port=$PORT" "sh3d.mcp.autoStart=true" "sh3d.mcp.requireToken=true" > "$PLUGINS/sh3d-mcp.properties"
+    fi
+    echo "installed plug-in $PLUGIN_COMMIT -> $PLUGINS (restart Sweet Home 3D to load it)"
+}
+
+node() {
+    local token="$PLUGINS/sh3d-mcp.token"
+    [ -s "$token" ] || { echo "no $token yet: start Sweet Home 3D once with the plug-in" >&2; exit 1; }
+    curl -fsS -m 5 "http://127.0.0.1:$PORT/health" >/dev/null || { echo "plug-in not answering on $PORT" >&2; exit 1; }
+    local backup; backup="$OC_DIR/backups/$(date +%Y%m%d-%H%M%S)"
+    mkdir -p "$backup" && cp -p "$OC_DIR/openclaw.json" "$backup/" && { [ ! -f "$OC_DIR/.env" ] || cp -p "$OC_DIR/.env" "$backup/"; }
+    echo "backup: $backup"
+    (umask 077; touch "$OC_DIR/.env"
+     { grep -v '^SH3D_MCP_TOKEN=' "$OC_DIR/.env" || true; printf 'SH3D_MCP_TOKEN=%s\n' "$(cat "$token")"; } > "$OC_DIR/.env.new"
+     mv "$OC_DIR/.env.new" "$OC_DIR/.env")
+    PORT=$PORT EXCLUDE=$EXCLUDE python3 - "$OC_DIR/openclaw.json" <<'EOF'
+import json, os, sys
+path = sys.argv[1]
+c = json.load(open(path))
+c.setdefault("nodeHost", {}).setdefault("mcp", {}).setdefault("servers", {})["sweethome3d"] = {
+    "url": f"http://127.0.0.1:{os.environ['PORT']}/mcp",
+    "transport": "streamable-http",
+    "headers": {"Authorization": "Bearer ${SH3D_MCP_TOKEN}"},   # from ~/.openclaw/.env
+    "requestTimeoutMs": 300000,                                  # renders can take minutes
+    "toolFilter": {"exclude": json.loads(os.environ["EXCLUDE"])},
+}
+json.dump(c, open(path, "w"), indent=2)
+EOF
+    openclaw config validate
+    openclaw node restart
+    echo "published as sweethome3d_* once the node reconnects; scope them with install-buckminster-sweethome3d on Overmind"
+}
+
+case ${1:-} in
+    app|plugin|node) "$1" ;;
+    *) sed -n '2,13p' "$0"; exit 2 ;;
+esac
