@@ -1,15 +1,19 @@
 {
   "download-dir": "/downloads/complete",
+  "idle-seeding-limit": 1440,
+  "idle-seeding-limit-enabled": true,
   "incomplete-dir": "/downloads/incomplete",
   "incomplete-dir-enabled": true,
   "peer-port": 51413,
+  "ratio-limit": 1.25,
+  "ratio-limit-enabled": true,
   "rpc-authentication-required": true,
   "rpc-bind-address": "0.0.0.0",
   "rpc-enabled": true,
+  "rpc-host-whitelist-enabled": false,
+  "rpc-password": "CHANGE_ME",
   "rpc-port": 9091,
   "rpc-username": "CHANGE_ME",
-  "rpc-password": "CHANGE_ME",
   "rpc-whitelist-enabled": false,
-  "rpc-host-whitelist-enabled": false,
   "umask": 2
 }

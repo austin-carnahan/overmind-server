@@ -18,9 +18,13 @@ services:
       PGID: "1000"
       TZ: "Etc/UTC"
     volumes:
-      # Copy settings.example.json to settings.json (git-ignored once it holds
-      # a real rpc password) before first run.
-      - ./settings.json:/config/settings.json
+      # Transmission's whole state: settings.json, resume files, queue, DHT.
+      # A directory, never a single-file mount: Transmission saves by writing
+      # settings.json.tmp.* and renaming it over settings.json, and Docker
+      # refuses that rename on a file bind mount, so settings changed at run
+      # time were silently lost on every restart (until 2026-10-28). Seed
+      # settings.json from settings.example.json before first run.
+      - ${TRANSMISSION_CONFIG_ROOT}:/config
       - ${TRANSMISSION_DOWNLOAD_ROOT}:/downloads
       - ${TRANSMISSION_ROMSETS_STAGING_ROOT}:/romsets-staging
     restart: unless-stopped
