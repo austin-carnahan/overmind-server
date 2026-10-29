@@ -1,0 +1,11 @@
+[Unit]
+Description=Relaunch cerebrate-pixel6's Debian VM if Android killed it
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+User=austin
+RuntimeDirectory=pixel-vm-watchdog
+RuntimeDirectoryPreserve=yes
+ExecStart=/usr/local/bin/pixel-vm-watchdog
