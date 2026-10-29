@@ -143,35 +143,12 @@ reliably crashes the USB controller without it under real write load.
   during any deliberate supervisor swap**, or it relaunches the old binary
   in the middle of the swap: `sudo systemctl stop pixel-supervisor-watchdog.timer`.
 
-  ```ini
-  # /etc/systemd/system/pixel-supervisor-watchdog.service
-  [Unit]
-  Description=Restart cerebrate-pixel6's cerebrate-supervisor if it isn't running
-  After=network-online.target pixel-adb-reconnect.service
-  Wants=network-online.target
-
-  [Service]
-  Type=oneshot
-  User=austin
-  RuntimeDirectory=pixel-supervisor-watchdog
-  RuntimeDirectoryPreserve=yes
-  TimeoutStartSec=15min
-  ExecStart=/usr/local/bin/pixel-supervisor-watchdog
-  ```
-
-  ```ini
-  # /etc/systemd/system/pixel-supervisor-watchdog.timer
-  [Unit]
-  Description=Check cerebrate-pixel6's cerebrate-supervisor every minute
-
-  [Timer]
-  OnBootSec=3min
-  OnUnitActiveSec=60s
-  AccuracySec=5s
-
-  [Install]
-  WantedBy=timers.target
-  ```
+  The units are in the repo too:
+  [`pixel-supervisor-watchdog.service`](../cerebrate-pixel6/cerebrate-supervisor/pixel-supervisor-watchdog.service)
+  and [`.timer`](../cerebrate-pixel6/cerebrate-supervisor/pixel-supervisor-watchdog.timer)
+  (extracted 2026-10-28, identical to the installed ones), installed to
+  `/etc/systemd/system/` and enabled with `systemctl enable --now
+  pixel-supervisor-watchdog.timer`.
 
 - SSD mounted (ext4, `noatime`, `nofail`) at `/mnt/disks/ssd1` — numbered
   rather than matching the filesystem's own `overmind-ssd` label, since a

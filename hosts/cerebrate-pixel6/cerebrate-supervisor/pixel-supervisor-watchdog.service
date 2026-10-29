@@ -1,0 +1,12 @@
+[Unit]
+Description=Restart cerebrate-pixel6's cerebrate-supervisor if it isn't running
+After=network-online.target pixel-adb-reconnect.service
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+User=austin
+RuntimeDirectory=pixel-supervisor-watchdog
+RuntimeDirectoryPreserve=yes
+TimeoutStartSec=15min
+ExecStart=/usr/local/bin/pixel-supervisor-watchdog
