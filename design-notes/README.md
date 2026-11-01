@@ -51,6 +51,11 @@ not restate what the label already means.
   acceleration matched to each model's architecture (CNNs on the TPU as int8,
   transformers on the GPU as float, CPU fallback). PARTIAL; Step 1
   (general-purpose ONNX graph worker) done and deployed, Step 2 next.
+- [Agent ecosystem roadmap](2026-11-01-agent-ecosystem-roadmap.md) — the
+  agreed direction for Overmind's agents: Buckminster's design expansion first
+  (Pinterest via Composio, Bright Data, Sweet Home 3D), then a cross-domain
+  Coach with a goals ledger, Logseq and Observable pilots, then personal and
+  professional specialists. PROPOSED.
 - [Romset curation pipeline](romset-curation-pipeline.md) — archive tier →
   library tier curation design: ScreenScraper hash identification across the
   full archive, ranked candidates enriched with a second IGDB rating, and a
