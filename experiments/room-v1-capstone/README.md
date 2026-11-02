@@ -1,11 +1,13 @@
 # Room V1 capstone
 
-Thirteen decorating experiments on the bedroom scene (E01–E13), run first by Claude Code and then,
-for a representative subset, by Buckminster, with the same skills and starting conditions. The
-experiments are defined in [experiments.yaml](experiments.yaml); the reasoning and per-experiment
+Thirteen decorating experiments on the bedroom scene (E01–E13), run by Claude Code to develop the
+shared GIMP skills. The experiments are defined in [experiments.yaml](experiments.yaml); the reasoning and per-experiment
 detail are in [plan.md](plan.md). This folder is the authoritative record.
 
 **Status (2026-10-27):** all 13 experiments run by Claude Code; summary in [DIGEST.md](DIGEST.md).
+A planned baseline replay by Buckminster, comparing the two agents on frozen skills, was dropped on
+2026-11-02 for simplicity: the skills stay live, and Buckminster loads them directly from this
+repository.
 
 ## Where things live
 
@@ -16,7 +18,7 @@ detail are in [plan.md](plan.md). This folder is the authoritative record.
 | Downloaded assets (originals, never edited) | `~/DesignStudio/workspaces/room-v1-capstone/assets/` |
 | Run outputs (working XCF, before/clean/annotated renders) | `~/DesignStudio/workspaces/room-v1-capstone/runs/<run_id>/` |
 | Shared skills | [`.claude/skills/gimp`](../../.claude/skills/gimp/SKILL.md), [`.claude/skills/interior-scene-editing`](../../.claude/skills/interior-scene-editing/SKILL.md) |
-| Tool contracts (Cerebrate, `overmind-*`) | [`services/design-studio/buckminster/cerebrate-gimp.md`](../../services/design-studio/buckminster/cerebrate-gimp.md) |
+| Tool contracts (Cerebrate, `overmind-*`) | [`services/design-studio/buckminster/skills/cerebrate-gimp/SKILL.md`](../../services/design-studio/buckminster/skills/cerebrate-gimp/SKILL.md) |
 | Earlier bedroom experiments (1–4) | [`models/field-notes.md`](../../models/field-notes.md) |
 
 ## A run
@@ -40,28 +42,6 @@ GIMP procedures, workspace files and memory, `view_image`, `file_fetch`, and a n
 Overmind (not on the Mac that runs GIMP). Claude Code has the same MCP tools plus its development
 environment (shell and Python on the Mac, including direct bridge access). Neither is restricted to
 match the other; the records show what each needed.
-
-## Comparison protocol
-
-1. **Exploratory (Claude Code).** Runs may update the skills. Each update is its own commit, so every
-   run's `skills.revision` identifies exactly what it saw.
-2. **Freeze.** Tag the skills to compare: `git tag skills-baseline-1 <commit>`. Record the tag here.
-3. **Baseline replay.** Both agents run the same subset (from `experiments.yaml`) from the same pinned
-   scene and assets, with the tagged skills, `condition: baseline`. Don't fold new findings into the
-   skills between the two agents' baseline runs.
-4. **Compare.** Attribute differences carefully: missing skill knowledge vs tool access vs planning vs
-   visual judgment vs execution. Use the `beyond_buckminster` entries.
-5. **Revise.** Improvements come after the baseline, as a new tag; reruns with them are
-   `condition: revised-skill`.
-
-**Installing a pinned revision for an agent:** export the tagged skills into a read-only directory,
-e.g. `git archive skills-baseline-1 .claude/skills | tar -x -C <dir>`, and point the agent at that
-copy, not at a working tree that keeps changing. Claude Code reads `.claude/skills/` of the checkout it
-runs in: for a baseline run, check out the tag (a worktree) and open that. For Buckminster, the skills
-go into its OpenClaw workspace (its `skills/` directory; confirm OpenClaw's skill loading on that
-install), with the tool-contract adapter linked as today by `install-buckminster-cerebrate-runbook`.
-
-Frozen revisions: none yet.
 
 ## Revisit later
 

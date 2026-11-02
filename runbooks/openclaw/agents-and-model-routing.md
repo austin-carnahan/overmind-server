@@ -53,7 +53,24 @@ exploration). Added 2026-10-23 for the
 
 Workspace: `/home/openclaw/.openclaw/agents/buckminster/workspace`
 (`AGENTS.md`, `SOUL.md` loosely after Buckminster Fuller, `IDENTITY.md`,
-`USER.md`, `MEMORY.md`, `runbooks/gimp-worker.md`).
+`USER.md`, `MEMORY.md`, and `skills/`).
+
+**Skills, not runbooks (since 2026-11-02).** Its procedures and verified tool
+knowledge are skills, symlinked into `skills/` from this repository by
+[`install-buckminster-skills`](../../services/design-studio/install-buckminster-skills),
+so they're always the version `/opt/overmind` has pulled:
+
+- its own, in [`services/design-studio/buckminster/skills/`](../../services/design-studio/buckminster/skills/):
+  `gimp-worker`, `cerebrate-gimp`, `sweethome3d`, `design-python`,
+  `reference-research` (with the Composio notes as a reference file);
+- the shared GIMP skills Claude Code also uses: `gimp` and
+  `interior-scene-editing` from `.claude/skills/`.
+
+Third-party skills (`composio-cli`, `interior-design-expert`) are copies in
+the same folder. OpenClaw follows the symlinks because both repo roots are in
+`skills.load.allowSymlinkTargets`. Buckminster reads these but doesn't edit
+them: lessons go to the user (or its Skill Workshop), and the operator
+updates the repo.
 
 **This is the first agent scoped to only its own tools.** It uses
 `tools.profile: "minimal"` plus `alsoAllow: ["group:fs", "group:memory",
@@ -72,15 +89,13 @@ Workspace: `/home/openclaw/.openclaw/agents/buckminster/workspace`
   - It computes on Overmind and applies the results in GIMP through named
     procedures; GIMP's code evaluators stay blocked.
   - Its scripts live in its workspace.
-  - Runbook: `runbooks/python.md`, linked from
-    `services/design-studio/buckminster/python.md`.
+  - Skill: `design-python`.
   - Validated by an E08 rerun:
     `experiments/room-v1-capstone/runs/2026-10-27_E08_buckminster_python-validation/`.
 - **Sweet Home 3D (since 2026-10-27):** `sweethome3d_*`, published by the
   `macbook-m1` node from the Sweet Home 3D MCP plug-in, edits the open
   project live. Allowed for Buckminster only, and every other agent denies it.
-  - Runbook: `runbooks/sweethome3d.md` (from
-    `services/design-studio/buckminster/sweethome3d.md`).
+  - Skill: `sweethome3d`.
   - Setup and limits: `services/design-studio/README.md`, "Sweet Home 3D on
     the worker".
 - **Composio (since 2026-11-01):** the `composio` CLI (0.6.0), installed for
@@ -93,8 +108,7 @@ Workspace: `/home/openclaw/.openclaw/agents/buckminster/workspace`
     `AGENTS.md` sets the policy: read and search freely, ask before Pinterest
     writes, Gmail and Calendar only for an authorized task, approval for
     sends, money and deletions. Behavioral, not enforced.
-  - Runbook: `runbooks/composio.md` (from
-    `services/design-studio/buckminster/composio.md`).
+  - Notes: `references/composio.md` in the `reference-research` skill.
   - Composio's own search toolkit stays switched off: web search goes
     through Brave instead (next item). Bright Data is paid, so it's used only
     with the user's approval.
@@ -103,10 +117,9 @@ Workspace: `/home/openclaw/.openclaw/agents/buckminster/workspace`
   wide range of sources, Pinterest among them. Pinterest Pin pages read as
   plain HTML, so no browser or Bright Data is needed. Overmind has no
   Chromium, so OpenClaw's browser tool doesn't run.
-  - Runbook: `runbooks/reference-research.md` (from
-    `services/design-studio/buckminster/reference-research.md`): sources,
-    provenance, and a handful of lookups per brief rather than crawling
-    (Pinterest's robots.txt disallows unlisted bots).
+  - Skill: `reference-research`: sources, provenance, and a handful of
+    lookups per brief rather than crawling (Pinterest's robots.txt
+    disallows unlisted bots).
 - **Interior design skill (since 2026-11-01):** `interior-design-expert` from
   `curiositech/some_claude_skills` (commit `88a60e3`), in Buckminster's
   workspace `skills/`, so no other agent sees it. Markdown only: color

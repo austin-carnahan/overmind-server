@@ -1,20 +1,19 @@
 #!/usr/bin/env bash
-# Give Buckminster its Python environment and runbook:
-# - copy buckminster/python.md next to the environment it describes (/mnt/substrate/design-studio/python,
+# Give Buckminster its Python environment:
+# - copy its design-python skill next to the environment as README.md (/mnt/substrate/design-studio/python,
 #   set up first as the operator with bin/uv sync);
 # - hand the environment to `openclaw`, so Buckminster can add packages (bin/uv add) and read its artifact
 #   upload token (.secrets/);
-# - link the runbook into the OpenClaw workspace (owned by `openclaw`, hence sudo);
-# - point AGENTS.md at it once, with the one exception to "no writes under /mnt/substrate/design-studio/".
+# - add the one exception to "no writes under /mnt/substrate/design-studio/" to AGENTS.md once.
+# The skill itself is linked into the workspace by install-buckminster-skills.
 # Workspace files are read at session start: no Gateway restart needed. Idempotent.
 #
 #   sudo bash <checkout>/services/design-studio/install-buckminster-python
 set -euo pipefail
 
-src=$(cd "$(dirname "$0")" && pwd)/buckminster/python.md
+src=$(cd "$(dirname "$0")" && pwd)/buckminster/skills/design-python/SKILL.md
 env=/mnt/substrate/design-studio/python
 ws=/home/openclaw/.openclaw/agents/buckminster/workspace
-pointer='- **Python on Overmind** (geometry, measuring pixels, mask arithmetic: any step that needs computation): write and run it yourself with `exec`; follow `runbooks/python.md`. Apply the results in GIMP through its named procedures.'
 exception='- **Your Python environment** (`/mnt/substrate/design-studio/python/`) is yours to manage: add packages there (`bin/uv add`). It is the one exception to "no direct writes under /mnt/substrate/design-studio/"; project folders stay `design-checkpoint`'"'"'s.'
 
 [ "$(id -u)" = 0 ] || { echo "run with sudo" >&2; exit 1; }
@@ -24,23 +23,14 @@ exception='- **Your Python environment** (`/mnt/substrate/design-studio/python/`
 install -m 664 -g openclaw "$src" "$env/README.md"
 chown -R openclaw:openclaw "$env"
 echo "environment owned by openclaw: $env"
-install -d -o openclaw -g openclaw "$ws/runbooks"
-ln -sfn "$env/README.md" "$ws/runbooks/python.md"
-chown -h openclaw:openclaw "$ws/runbooks/python.md"
-echo "linked $ws/runbooks/python.md -> $env/README.md"
-
-backup_done=
-for line in "$pointer" "$exception"; do
-    key=$( [ "$line" = "$pointer" ] && echo 'runbooks/python.md' || echo 'Your Python environment' )
-    if grep -qF "$key" "$ws/AGENTS.md"; then
-        echo "AGENTS.md already has: $key"
-    else
-        [ -n "$backup_done" ] || { cp -p "$ws/AGENTS.md" "$ws/AGENTS.md.bak-$(date +%Y%m%d-%H%M%S)"; backup_done=1; }
-        printf '\n%s\n' "$line" >> "$ws/AGENTS.md"
-        echo "appended to AGENTS.md: $key"
-    fi
-done
-chown openclaw:openclaw "$ws/AGENTS.md"
+if grep -qF 'Your Python environment' "$ws/AGENTS.md"; then
+    echo "AGENTS.md already has the environment exception"
+else
+    cp -p "$ws/AGENTS.md" "$ws/AGENTS.md.bak-$(date +%Y%m%d-%H%M%S)"
+    printf '\n%s\n' "$exception" >> "$ws/AGENTS.md"
+    chown openclaw:openclaw "$ws/AGENTS.md"
+    echo "appended to AGENTS.md: the environment exception"
+fi
 
 cd /tmp
 sudo -u openclaw "$env/.venv/bin/python" -c 'import numpy, cv2, scipy, PIL, skimage, shapely; print("as openclaw: numpy", numpy.__version__, "| opencv", cv2.__version__)'

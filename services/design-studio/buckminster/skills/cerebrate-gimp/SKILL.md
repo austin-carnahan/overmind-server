@@ -1,3 +1,8 @@
+---
+name: cerebrate-gimp
+description: Tool contracts between Cerebrate (cerebrate__*) and GIMP (gimp_gimp_*, Overmind's overmind-* procedures): exact calls, what they return, and what to do when one refuses. Use when finding or outlining objects, cutting them to layers, or removing them with inpaint patches.
+---
+
 # Cerebrate ⇄ GIMP: tool contracts
 
 How Cerebrate (`cerebrate__*`) and GIMP (`gimp_gimp_*`, plus Overmind's `overmind-*` PDB procedures)

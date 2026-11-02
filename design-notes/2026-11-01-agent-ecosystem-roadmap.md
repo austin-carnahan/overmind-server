@@ -138,7 +138,7 @@ Record only changes and the remaining failure points.
 
 **B3 — Create a reference workflow.** Given a user design brief, search selected sources, collect citation/URL metadata, keep image rights/attribution context, group references by themes, and persist a concise inspiration board or research dossier. Separate references from generated or user-owned artifacts.
 
-**B4 — Test the 3D modeling path.** Sweet Home 3D and its MCP plug-in are already installed and scoped to Buckminster ([setup](../services/design-studio/README.md), [runbook](../services/design-studio/buckminster/sweethome3d.md)). Exercise them through Buckminster:
+**B4 — Test the 3D modeling path.** Sweet Home 3D and its MCP plug-in are already installed and scoped to Buckminster ([setup](../services/design-studio/README.md), [runbook](../services/design-studio/buckminster/skills/sweethome3d/SKILL.md)). Exercise them through Buckminster:
 
 - open/create a room and change its dimensions;
 - place and edit objects;

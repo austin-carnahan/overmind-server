@@ -7,11 +7,12 @@
 
 Both are plain `SKILL.md` folders (frontmatter `name` + `description`, linked references loaded on
 demand), meant for any agent with the GIMP and Cerebrate MCP tools: Claude Code reads them from this
-directory; Buckminster gets the same content in its OpenClaw workspace
-([comparison protocol](../../experiments/room-v1-capstone/README.md#comparison-protocol)). Call
-contracts for Cerebrate and Overmind's GIMP procedures stay in
-[`services/design-studio/buckminster/cerebrate-gimp.md`](../../services/design-studio/buckminster/cerebrate-gimp.md),
-not in the skills.
+directory, and Buckminster loads the same files through symlinks in its OpenClaw workspace
+([`install-buckminster-skills`](../../services/design-studio/install-buckminster-skills)), so both
+always see the current version once `/opt/overmind` is pulled. Call contracts for Cerebrate and
+Overmind's GIMP procedures stay in Buckminster's
+[`cerebrate-gimp`](../../services/design-studio/buckminster/skills/cerebrate-gimp/SKILL.md) skill,
+not in these.
 
 ## Maintaining them
 
@@ -22,9 +23,9 @@ not in the skills.
   measurements and trial history stay in the run record.
 - Focused commits, one change each, so a run's `skills.revision` says exactly what it saw. Don't
   rewrite a skill wholesale after an experiment.
+- Changes reach Buckminster as soon as `/opt/overmind` is pulled; there's no pinned copy.
 - Steps that need more than the shared MCP tools (scripts, direct bridge access, image arrays) are
   marked **[gap]** or described as environment-dependent alternatives, never as universal steps.
-- Before a comparison, freeze a revision with a git tag and install that exact content for each agent.
 - `gimp` is adapted from an upstream project: record upstream changes you adopt in
   [gimp/UPSTREAM.md](gimp/UPSTREAM.md), and keep its LICENSE and NOTICE.
 

@@ -19,7 +19,7 @@ Verified 2026-11-01. Update this file as you learn real behavior.
 
 ## Web search: not through Composio
 
-Use `web_search` (Brave) and `web_fetch` for web research; they cost nothing per call. See `reference-research.md`.
+Use `web_search` (Brave) and `web_fetch` for web research; they cost nothing per call. See this skill's `SKILL.md`.
 
 - Composio's own search toolkit is switched off on purpose (`COMPOSIO_SEARCH_WEB` fails with "Toolkit 'composio_search' is disabled for this session"). Don't ask to enable it: it would spend Composio quota on what Brave already does.
 

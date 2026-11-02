@@ -251,7 +251,7 @@ The live smoke test then passed 7/7 against the deployed service:
 2. Caddy's `artifacts.home.arpa` site: `docker restart caddy`. A reload
    didn't see the pulled Caddyfile: single-file bind mount.
 3. DNS `artifacts.home.arpa` via `scripts/sync-dns-rewrites --apply`.
-4. Buckminster's recipe via `install-buckminster-cerebrate-runbook`.
+4. Buckminster's recipe: its `cerebrate-gimp` skill, linked by `install-buckminster-skills` (since 2026-11-02; originally `install-buckminster-cerebrate-runbook`).
 
 End to end on bedroom.jpg (4000×3000), photo passed by path:
 - RF-DETR → EdgeSAM → `inpaint` with the mask's URL as input → an 18.5 KB
@@ -350,7 +350,7 @@ The live run:
 ## GIMP handoff
 
 The call contracts are in
-[`services/design-studio/buckminster/cerebrate-gimp.md`](../design-studio/buckminster/cerebrate-gimp.md)
+[`services/design-studio/buckminster/skills/cerebrate-gimp/SKILL.md`](../design-studio/buckminster/skills/cerebrate-gimp/SKILL.md)
 (editing procedures: the `interior-scene-editing` skill):
 1. source path → Cerebrate;
 2. polygons → `gimp-image-select-polygon`;

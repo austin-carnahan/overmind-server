@@ -9,7 +9,7 @@ metadata:
 
 A room photo becomes an editable **scene**: each object and surface is a GIMP group, the original stays
 hidden underneath, and every change is a layer you can toggle. Use the **gimp** skill for GIMP technique
-and tool choice, and the integration adapter `services/design-studio/buckminster/cerebrate-gimp.md` for
+and tool choice, and the integration adapter `services/design-studio/buckminster/skills/cerebrate-gimp/SKILL.md` for
 the exact Cerebrate and `overmind-*` call contracts. This skill says what to do and why.
 
 Labels: **[demonstrated]** worked on a real room and was checked; **[experimental]** worked once or

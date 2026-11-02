@@ -104,13 +104,16 @@ SSD.
 
   The installer also runs
   [`patch-gimp-agent-bridge`](patch-gimp-agent-bridge) (below).
-- [`buckminster/cerebrate-gimp.md`](buckminster/cerebrate-gimp.md) is the
-  Cerebrate ⇄ GIMP tool-contract adapter: exact calls, returns, refusals.
-  What to edit and why is in the shared skills,
+- **Buckminster's skills** live in [`buckminster/skills/`](buckminster/skills/):
+  `gimp-worker`, `cerebrate-gimp` (the Cerebrate ⇄ GIMP tool contracts: exact
+  calls, returns, refusals), `sweethome3d`, `design-python` and
+  `reference-research`. What to edit and why is in the shared skills,
   [`.claude/skills/gimp`](../../.claude/skills/gimp/SKILL.md) and
   [`.claude/skills/interior-scene-editing`](../../.claude/skills/interior-scene-editing/SKILL.md).
-  Install the adapter into Buckminster's workspace with
-  `sudo bash install-buckminster-cerebrate-runbook` (on Overmind).
+  [`install-buckminster-skills`](install-buckminster-skills) (on Overmind;
+  it runs as `openclaw`) symlinks all of them into Buckminster's workspace `skills/`, so a
+  `git pull` of `/opt/overmind` updates them. Since 2026-11-02 these replace
+  the workspace `runbooks/` folder.
 - [`design-checkpoint`](design-checkpoint) runs **on Overmind as `openclaw`**
   and uses only the Python standard library. It pulls files with
   `openclaw nodes invoke ... file.fetch`, so the worker never needs SSH access
@@ -158,9 +161,10 @@ corners for `gimp-item-transform-perspective`).
   Revoke the token with `docker exec cerebrate-mcp python -m
   cerebrate_mcp.uploads revoke buckminster`.
 
-  Its runbook is [`buckminster/python.md`](buckminster/python.md). Install it
-  with `sudo bash install-buckminster-python`, which links it into the
-  workspace and adds a pointer to `AGENTS.md`.
+  Its skill is [`buckminster/skills/design-python`](buckminster/skills/design-python/SKILL.md),
+  linked by `install-buckminster-skills`. `sudo bash install-buckminster-python`
+  hands the environment to `openclaw`, copies the skill beside it as
+  `README.md`, and adds the environment exception to `AGENTS.md`.
 - **Pixel operations GIMP lacks** become reviewed plug-in procedures in
   [`gimp-plugins/`](gimp-plugins/), like the artifact import and publish.
 
@@ -211,9 +215,8 @@ the person sees every change live.
   - The tools appear as `sweethome3d_*` while the node is connected and the app is open.
   - The node excludes `clear_scene`, `load_home` (it replaces the open scene without asking) and
     `delete_level`.
-- **Agents:** [`install-buckminster-sweethome3d`](install-buckminster-sweethome3d) on Overmind (sudo):
-  - copies the runbook [`buckminster/sweethome3d.md`](buckminster/sweethome3d.md) into Buckminster's
-    workspace and adds its `AGENTS.md` pointer;
+- **Agents:** the [`sweethome3d`](buckminster/skills/sweethome3d/SKILL.md) skill is linked by
+  `install-buckminster-skills`. [`install-buckminster-sweethome3d`](install-buckminster-sweethome3d) on Overmind (sudo):
   - adds `sweethome3d_*` to Buckminster's `alsoAllow` and to every other agent's `deny`.
 - **Tested 2026-10-27, directly against the plug-in:**
   - 401 without the token; 46 tools with it.

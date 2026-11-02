@@ -1,3 +1,8 @@
+---
+name: design-python
+description: Run your own Python on Overmind for design computation: geometry, measuring pixels, mask arithmetic, numeric checks; the environment, adding packages, and moving images to and from GIMP. Use whenever a design step needs computation.
+---
+
 # Python on Overmind (computation for design work)
 
 You can write and run Python on Overmind with your `exec` tool. Use it whenever a step needs computation:

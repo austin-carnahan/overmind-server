@@ -1,3 +1,8 @@
+---
+name: reference-research
+description: Find reference images and ideas for a design brief across many sources (Pinterest, Are.na, design publications, licensed photo libraries, museum collections, makers' catalogs) with web_search and web_fetch, keep provenance, and use Pinterest and Bright Data through Composio. Use when gathering inspiration or references.
+---
+
 # Reference research
 
 How to find images and ideas for a design brief. Started 2026-11-01. This is a starting list, not a boundary: add good sources as you find them, and drop ones that disappoint.
@@ -7,7 +12,7 @@ How to find images and ideas for a design brief. Started 2026-11-01. This is a s
 - `web_search` (Brave, free plan with a monthly limit) to find pages. Plan a few strong queries per brief. `site:` narrows to one source, for example `japandi bedroom site:pinterest.com/pin` or `site:are.na`.
 - `web_fetch` (or `curl` from the shell) to read a page and pull its image URLs (`og:image` is usually the main image).
 - `view_image` to actually look at what you found before recommending it.
-- Composio Pinterest for the user's own boards (`composio-cli` skill, `composio.md`).
+- Composio Pinterest for the user's own boards (`composio-cli` skill, `references/composio.md`).
 
 ## Where to look
 
@@ -15,7 +20,7 @@ Match sources to the brief, and tell the user about ones they may not know.
 
 **Curated inspiration**
 
-- **Pinterest**: broad and popular, good for trends and the user's own boards. Pin pages read as plain HTML (`composio.md`, "Finding Pins by keyword").
+- **Pinterest**: broad and popular, good for trends and the user's own boards. Pin pages read as plain HTML (`references/composio.md`, "Finding Pins by keyword").
 - **Are.na**: slower, more thoughtful boards kept by designers, architects and artists; often less obvious than Pinterest. Has a public API.
 - **Cosmos** and **Savee**: visual bookmarking communities with a design-professional audience.
 
@@ -52,4 +57,4 @@ Match sources to the brief, and tell the user about ones they may not know.
 
 - A handful of lookups per brief, not crawling. Prefer a site's API when one exists.
 - Respect logins and paywalls: don't work around them. Instagram, for example, mostly needs a login.
-- Bright Data is paid: only with the user's approval (`composio.md`).
+- Bright Data is paid: only with the user's approval (`references/composio.md`).

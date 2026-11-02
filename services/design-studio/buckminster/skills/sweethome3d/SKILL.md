@@ -1,3 +1,8 @@
+---
+name: sweethome3d
+description: Build and edit rooms in 3D with Sweet Home 3D on the Mac (sweethome3d_* tools, which change the open project live): units and coordinates, walls, furniture, renders, saving and checkpoints. Use for 3D room layouts and renders.
+---
+
 # Sweet Home 3D: rooms in 3D, edited live on the Mac
 
 Sweet Home 3D is a floor-plan and 3D room editor running on the Mac next to GIMP. Its tools (`sweethome3d_*`)
@@ -45,7 +50,7 @@ work; ask the person to do these.
 
 ## Geometry: compute it, then send it
 
-Compute positions with your Python on Overmind (`runbooks/python.md`): walls from measured dimensions,
+Compute positions with your Python on Overmind (the `design-python` skill): walls from measured dimensions,
 furniture footprints, camera positions matching a photo. Print the result as the `commands` list for one
 `batch_commands` call. Keep the script and its inputs in your workspace, as for any computation.
 
