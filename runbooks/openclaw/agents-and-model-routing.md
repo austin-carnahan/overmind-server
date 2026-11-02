@@ -57,8 +57,8 @@ Workspace: `/home/openclaw/.openclaw/agents/buckminster/workspace`
 
 **This is the first agent scoped to only its own tools.** It uses
 `tools.profile: "minimal"` plus `alsoAllow: ["group:fs", "group:memory",
-"view_image", "gimp_gimp_*", "file_fetch", "exec"]`. It has no web or
-messaging tools.
+"view_image", "gimp_gimp_*", "file_fetch", "exec", "cerebrate__*",
+"sweethome3d_*", "web_search", "web_fetch"]`. It has no messaging tools.
 
 - **Shell (since 2026-10-23):** `exec` is `{host: "gateway", mode: "full"}`
   with no sudo (`elevated` unset), the same as Kerrigan and Soma. It is used
@@ -83,6 +83,50 @@ messaging tools.
     `services/design-studio/buckminster/sweethome3d.md`).
   - Setup and limits: `services/design-studio/README.md`, "Sweet Home 3D on
     the worker".
+- **Composio (since 2026-11-01):** the `composio` CLI (0.6.0), installed for
+  `openclaw` and logged in as the user's own Composio account, reaches
+  Pinterest and Bright Data (and Gmail and Calendar). It's a CLI plus the
+  `composio-cli` skill in Buckminster's workspace `skills/`, not an MCP
+  server, so no tool rules are involved.
+  - The skill loads for Buckminster only, but the login belongs to the
+    `openclaw` user, so any agent's shell could use it. Buckminster's
+    `AGENTS.md` sets the policy: read and search freely, ask before Pinterest
+    writes, Gmail and Calendar only for an authorized task, approval for
+    sends, money and deletions. Behavioral, not enforced.
+  - Runbook: `runbooks/composio.md` (from
+    `services/design-studio/buckminster/composio.md`).
+  - Composio's own search toolkit stays switched off: web search goes
+    through Brave instead (next item). Bright Data is paid, so it's used only
+    with the user's approval.
+- **Web research (since 2026-11-01):** `web_search` (Brave, the free plan
+  configured globally) and `web_fetch`, for reference images and ideas from a
+  wide range of sources, Pinterest among them. Pinterest Pin pages read as
+  plain HTML, so no browser or Bright Data is needed. Overmind has no
+  Chromium, so OpenClaw's browser tool doesn't run.
+  - Runbook: `runbooks/reference-research.md` (from
+    `services/design-studio/buckminster/reference-research.md`): sources,
+    provenance, and a handful of lookups per brief rather than crawling
+    (Pinterest's robots.txt disallows unlisted bots).
+- **Interior design skill (since 2026-11-01):** `interior-design-expert` from
+  `curiositech/some_claude_skills` (commit `88a60e3`), in Buckminster's
+  workspace `skills/`, so no other agent sees it. Markdown only: color
+  (Munsell, palettes), lighting, space planning and proportions, and style
+  guides that include materials. Its `AGENTS.md` notes that the skill's
+  Stability AI, Ideogram and SketchUp sections don't apply (Sweet Home 3D
+  and GIMP instead) and that its `/references/…` paths are relative to the
+  skill folder.
+- **Design self-review (since 2026-11-01):** its `AGENTS.md` requires one
+  review-and-revision pass before presenting: generate, inspect the rendered
+  result, evaluate against the brief, fix the 2–3 biggest weaknesses in one
+  revision, then present the rationale and remaining tradeoffs. No scoring or
+  extra reviewer. The Evaluate step also checks every dimension label against
+  the actual geometry, and lighting explicitly.
+  - **First test (2026-11-01, a 3.4 × 4.0 m Japandi bedroom):** it read the
+    skill and three references, drew a to-scale plan and a palette with
+    Python, and made one sensible revision. Two misses led to those two
+    checks:
+    - a "0.60 m" chair clearance measured to empty space, not to the bed;
+    - lighting wasn't considered, and the lighting reference wasn't read.
 - **Limits enforced by the system:** the Gateway denies `system.run` on
   every node, so it has no shell on the Mac. (`/opt/overmind` was read-only
   for `openclaw` until 2026-10-28; it's now a shared work area, see
@@ -130,6 +174,43 @@ call as turn-scoped instructions, specifically so children don't clone the
 parent's persona. This is why operational/delegation policy belongs in
 `AGENTS.md`, not `SOUL.md` — a Skill alone wouldn't reach subagents any more
 reliably, but `AGENTS.md` is guaranteed to.
+
+### Skills catalog (skills.sh)
+
+Since 2026-11-01, [skills.sh](https://skills.sh/) is the catalog agents use
+to discover skills, through the standard `skills` CLI. There's no custom
+registry or wrapper.
+
+- **`find-skills`** (from `vercel-labs/skills`, commit `92a9a34`) is
+  installed in OpenClaw's shared skills folder, `~/.openclaw/skills/`, so
+  every agent has it. It tells agents to search with `npx skills find
+  <query>`.
+- **CLI:** `npx -y skills@1.7.4`, pinned to the reviewed version; bump it on
+  purpose. A search takes about 6 seconds on the Pi.
+- **Where skills go:**
+  - shared: `npx -y skills@1.7.4 add <repo> --skill <name> --agent openclaw
+    -g --copy -y` installs to `~/.openclaw/skills/`, recorded in
+    `~/.agents/.skill-lock.json`;
+  - one agent: the same command without `-g`, run from that agent's
+    workspace, installs to `<workspace>/skills/`, recorded in
+    `<workspace>/skills-lock.json`.
+
+  `--copy` avoids symlinks into a `.agents/` folder.
+- **One shared rule, in `find-skills` itself.** An "Overmind rule" section at
+  the top of `~/.openclaw/skills/find-skills/SKILL.md` applies to every
+  agent, so no agent's own `AGENTS.md` repeats it:
+  - discovery and inspection (search, list, reading a skill's files) are
+    autonomous;
+  - installing needs the user's approval, after reading `SKILL.md`, the
+    references and any bundled scripts; unreviewed scripts are never run;
+  - installs go only into the requesting agent's workspace, never global
+    (`-g`, `--agent '*'`, `--all`); no overlapping skills.
+
+  It replaces upstream's step 6, which installed with `-g -y`. Upstream's
+  text is kept beside it as `SKILL.md.upstream-92a9a34`. **`npx skills
+  update` would overwrite the local rule:** re-apply it after any update.
+- **Preferred catalog:** skills.sh. OpenClaw's bundled `clawhub` skill
+  searches ClawHub, a different catalog, and is left enabled for every agent.
 
 ## Model routing and reasoning effort
 
