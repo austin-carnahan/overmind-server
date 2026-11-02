@@ -15,6 +15,11 @@ troubleshooting, infrastructure change.
 Workspace: `/home/openclaw/.openclaw/workspace`
 (`AGENTS.md`, `SOUL.md`, `USER.md`, `IDENTITY.md`, plus `memory/`).
 
+Skills, in [`agents/main/skills/`](../../agents/main/skills/) and linked into
+the workspace: `overmind-media-policy-audit`, `openclaw-browser-dictation`,
+`openclaw-talk-tool-confirmations`. Its Skill Workshop wrote them; they moved
+to the repo on 2026-11-02 (see [agents/README.md](../../agents/README.md)).
+
 Primary architectural source of truth: `/opt/overmind` (the canonical
 deployed repo checkout). Kerrigan is expected to inspect both canonical repo
 state and live host state before durable infrastructure changes — not trust
@@ -45,12 +50,12 @@ create/schedule). See
 [MCP Servers and Tool Access](sandboxing-and-trust.md#mcp-servers-and-tool-access)
 for the real sandboxing interaction.
 
-Skills: [`garmin-workouts`](../../agents/soma/skills/garmin-workouts/SKILL.md)
-(the raw workout model and read-back validation; `runbooks/garmin-workouts.md`
-until 2026-11-02), linked from the repo, plus four Garmin skills its Skill
-Workshop created (food logging, recipes, run/walk and strength workouts). The
-two workout skills point to `garmin-workouts`. See
-[agents/README.md](../../agents/README.md) for how skills are kept.
+Skills, all in [`agents/soma/skills/`](../../agents/soma/skills/) and linked
+into its workspace: `garmin-workouts` (the raw workout model and read-back
+validation; `runbooks/garmin-workouts.md` until 2026-11-02), plus four its
+Skill Workshop created and that moved to the repo on 2026-11-02: food logging,
+recipes, run/walk and strength workouts. The two workout skills point to
+`garmin-workouts`. See [agents/README.md](../../agents/README.md).
 
 ### Buckminster (`buckminster`)
 

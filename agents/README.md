@@ -51,7 +51,13 @@ the symlinks because `/opt/overmind/agents` is in
   `composio-cli`, which the Composio CLI generates rather than skills.sh
   (regenerate it with `composio setup skill codex` into a scratch `HOME`, and
   copy `.agents/skills/composio-cli` into the workspace's `.agents/skills/`).
-- [`soma/skills/`](soma/skills/): `garmin-workouts`.
+- [`soma/skills/`](soma/skills/): `garmin-workouts` (the raw workout model),
+  and from its Skill Workshop: `garmin-strength-workout-authoring`,
+  `garmin-run-walk-workout-authoring`, `garmin-recipe-authoring`,
+  `garmin-one-off-food-logging`.
+- [`main/skills/`](main/skills/) (Kerrigan; `main` is its agent ID), from its
+  Skill Workshop: `overmind-media-policy-audit`, `openclaw-browser-dictation`,
+  `openclaw-talk-tool-confirmations`.
 
 **Writing and changing them:**
 
@@ -65,9 +71,11 @@ the symlinks because `/opt/overmind/agents` is in
   history stay in the run record.
 - Agents read these skills but don't edit them. A lesson an agent learns goes
   to the user or its Skill Workshop, and the operator folds it in here.
-- **Skill Workshop skills are an inbox.** When one proves useful, review it
-  and move it into `<agent>/skills/` (current candidates: Soma's four Garmin
-  skills, Kerrigan's three).
+- **Skill Workshop skills are an inbox.** When one proves useful, review it,
+  copy it into `<agent>/skills/`, delete it from the Workshop folder (so there
+  aren't two), and run `install-agent-skills <agent>`. Once moved, the
+  Workshop can no longer edit it; changes go through the repo. Soma's four
+  and Kerrigan's three were moved on 2026-11-02.
 - `buckminster/skills/gimp` is adapted from an upstream project: record
   upstream changes you adopt in its `UPSTREAM.md`, and keep its LICENSE and
   NOTICE.
