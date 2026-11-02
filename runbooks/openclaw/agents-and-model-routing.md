@@ -44,18 +44,26 @@ Workspace: `/home/openclaw/.openclaw/agents/soma/workspace`
 (`AGENTS.md`, `SOUL.md`, `USER.md`, `IDENTITY.md`, `BOOTSTRAP.md`,
 `DREAMS.md`, plus `memory/`).
 
-Primary external capability: Garmin MCP (`mcp.servers.garmin`, 46 curated
-tools — health metrics, activities, training, nutrition read/write, workout
-create/schedule). See
+Primary external capability: Garmin MCP (`mcp.servers.garmin`, 57 curated
+tools as of 2026-11-02 — health metrics, activities, training, nutrition
+read/write, workout create/schedule; no blood pressure). See
 [MCP Servers and Tool Access](sandboxing-and-trust.md#mcp-servers-and-tool-access)
 for the real sandboxing interaction.
 
 Skills, all in [`agents/soma/skills/`](../../agents/soma/skills/) and linked
-into its workspace: `garmin-workouts` (the raw workout model and read-back
-validation; `runbooks/garmin-workouts.md` until 2026-11-02), plus four its
-Skill Workshop created and that moved to the repo on 2026-11-02: food logging,
-recipes, run/walk and strength workouts. The two workout skills point to
-`garmin-workouts`. See [agents/README.md](../../agents/README.md).
+into its workspace, in two layers (since 2026-11-02):
+
+- **Coaching, one skill per area:** `training`, `nutrition`, `health`. These
+  hold the domain judgment that used to be in its `AGENTS.md`, and are where
+  new coaching lessons go. `health` is deliberately thin and grows with use.
+- **Garmin, how to do it in Garmin:** `garmin-workouts` (the raw workout model,
+  read-back validation, and what the Forerunner 265S accepts), plus four its
+  Skill Workshop created: food logging, recipes, run/walk and strength
+  workouts. Tool names in them are the MCP's snake_case names.
+
+`AGENTS.md` keeps what applies to all of Soma's coaching (role, coaching
+principles, general Garmin data rules, memory, safety) and lists the three
+coaching skills. See [agents/README.md](../../agents/README.md).
 
 ### Buckminster (`buckminster`)
 

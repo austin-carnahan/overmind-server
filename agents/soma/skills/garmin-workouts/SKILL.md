@@ -88,6 +88,12 @@ Read-back: strength_training, one segment, one repeat step with repeat_count 2, 
 4. Call get_workout_by_id and compare sport, segment/group nesting, repeat count, child order, category/exerciseName, descriptions, conditions/values, and target fields where exposed. Treat omitted fields as unverified rather than assuming they survived.
 5. Only when asked, schedule a validated workout via schedule_workout. Scheduling creates a calendar entry, not watch delivery; Send to Device is a separate manual Connect step. Do not schedule validation tests unless specifically requested.
 
+## Watch delivery (Austin's Forerunner 265S, verified 2026-10-01)
+
+- **Do not create `walking`-sport-type structured workouts.** They create and read back fine through the MCP, but Garmin Connect reports them "incompatible" for Send to Device, and `walking` isn't offered in Connect's own manual workout builder on this device. For walk-style training, use another sport type (e.g. a run workout at an easy/Z2 effort).
+- Run and strength workouts (bodyweight exercises as repeat-group steps) are both confirmed Send-to-Device compatible.
+- **Scheduling and sending to the watch are separate actions, both useful.** schedule_workout puts the workout on Garmin Connect's Calendar view (confirmed visible there). One workout can be scheduled on several dates by calling schedule_workout again with the same workout id; each call creates its own scheduled entry. Scheduling does not push the workout to the watch: that needs a manual Send to Device in Garmin Connect, which this MCP has no tool for. When creating a workout for the user, offer both: schedule it for the intended date, and tell them to tap Send to Device. Don't imply scheduling alone gets it onto the watch.
+
 Primary references:
 - https://github.com/Taxuspt/garmin_mcp
 - https://github.com/cyberjunky/python-garminconnect/blob/master/garminconnect/workout.py

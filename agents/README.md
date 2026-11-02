@@ -51,10 +51,12 @@ the symlinks because `/opt/overmind/agents` is in
   `composio-cli`, which the Composio CLI generates rather than skills.sh
   (regenerate it with `composio setup skill codex` into a scratch `HOME`, and
   copy `.agents/skills/composio-cli` into the workspace's `.agents/skills/`).
-- [`soma/skills/`](soma/skills/): `garmin-workouts` (the raw workout model),
-  and from its Skill Workshop: `garmin-strength-workout-authoring`,
-  `garmin-run-walk-workout-authoring`, `garmin-recipe-authoring`,
-  `garmin-one-off-food-logging`.
+- [`soma/skills/`](soma/skills/): one coaching skill per area, `training`,
+  `nutrition` and `health` (moved out of its `AGENTS.md` on 2026-11-02), and
+  Garmin skills for doing the work in Garmin: `garmin-workouts` (the raw
+  workout model and watch delivery), and from its Skill Workshop:
+  `garmin-strength-workout-authoring`, `garmin-run-walk-workout-authoring`,
+  `garmin-recipe-authoring`, `garmin-one-off-food-logging`.
 - [`main/skills/`](main/skills/) (Kerrigan; `main` is its agent ID), from its
   Skill Workshop: `overmind-media-policy-audit`, `openclaw-browser-dictation`,
   `openclaw-talk-tool-confirmations`.

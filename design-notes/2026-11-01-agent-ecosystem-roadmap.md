@@ -18,10 +18,10 @@ Overmind will be a **modular, persistent multi-agent environment** for personal 
 1. **Buckminster design expansion:** Pinterest access and reference discovery; evaluate Composio and Bright Data; test an editable 3D modeling workflow and complete a design handoff.
 2. **Soma expansion:** evolve the existing fitness agent into the general-purpose personal coach, with fitness and health as one area of expertise. Add a lightweight goals/progress ledger, opt-in interactive accountability, a Logseq pilot for knowledge, and Observable-based progress views.
 3. **Personal ecosystem:** executive assistant (name shortlist: **Hermes, TARS, Finch**) and Saffron, reusing the access channels and data services that Buckminster and Soma establish.
-
-**Revision 1.1 (2026-11-01):** the standalone Behavioral Coach proposal is retired. Most of what it was meant to do (goals, consistency, compromise, progress, accountability, behavior change) is what Soma should do anyway, and one agent that sees behavioral patterns across domains is more useful than two coaching agents side by side. Soma keeps its name: physical wellbeing, emotional regulation, attention, behavior and personal development are interconnected.
 4. **Professional ecosystem:** dedicated coding, research, and business specialists coordinated with Buckminster and Kerrigan.
 5. **Shared Reading, Discovery & Reflection:** scheduled, cost-bounded source ingestion and retrospective exploration as a cross-cutting capability, introduced when useful.
+
+**Revision 1.1 (2026-11-01):** the standalone Behavioral Coach proposal is retired. Most of what it was meant to do (goals, consistency, compromise, progress, accountability, behavior change) is what Soma should do anyway, and one agent that sees behavioral patterns across domains is more useful than two coaching agents side by side. Soma keeps its name: physical wellbeing, emotional regulation, attention, behavior and personal development are interconnected.
 
 Harness evaluation, UX, voice dictation, authorization, and cost tuning occur **alongside** these phases, prompted by observed workflow limitations. There is **no Radar agent**; its former functions belong to existing roles or shared services.
 
@@ -58,7 +58,7 @@ Harness evaluation, UX, voice dictation, authorization, and cost tuning occur **
   - **GIMP:** via GIMP Agent MCP (`gimp_gimp_*`).
   - **Sweet Home 3D:** since 2026-10-27, via the `sweethome3d-mcp-server` plug-in (`sweethome3d_*`). Both tool sets are scoped to Buckminster.
   - **Checkpoints:** remote Mac execution and durable checkpoint/resume were demonstrated end to end on 2026-10-23 (Spikes A–E), with `design-checkpoint` storing verified checkpoints in `/mnt/substrate/design-studio`. See the [environment report](agentic-design-studio-environment.md), the [remote-worker pattern](remote-workers.md), and the [service docs](../services/design-studio/README.md). The Room V1 capstone has run on this foundation since.
-- **Soma:** existing fitness, nutrition and health-data coach, with a Garmin MCP (46 curated tools: health metrics, activities, training, nutrition, workouts). See [agents and model routing](../runbooks/openclaw/agents-and-model-routing.md#soma-soma).
+- **Soma:** existing fitness, nutrition and health-data coach, with a Garmin MCP (57 curated tools as of 2026-11-02: health metrics, activities, training, nutrition, workouts). See [agents and model routing](../runbooks/openclaw/agents-and-model-routing.md#soma-soma).
 - **Substrate + Git:** intended durable source-of-truth pattern for repository files, project records, decisions, and artifacts.
 - **Paperclip:** deployed as a container on Overmind. Its actual task and approval capabilities are unverified.
 - **Composio and Bright Data:** accounts set up (2026-11-01). Composio is connected to **Pinterest, Gmail, and Google Calendar**, and has a Bright Data integration.
@@ -191,14 +191,14 @@ Soma owns the **relationship and behavioral support**, not other agents' substan
 | Component | Kind | Responsibility |
 |---|---|---|
 | Soma core | Agent identity | Persistent relationship, behavioral support, coaching conversations |
-| Fitness | Skill | Garmin, exercise programming, recovery, nutrition |
+| Fitness & health | Skills | `training`, `nutrition`, `health` (one per area), on top of Garmin skills for doing the work in Garmin |
 | Executive function | Skill | Task initiation, Pomodoro, focus recovery, accountability |
 | Behavioral strategies | Skill | Reflection, motivational interviewing, habit formation |
 | Goal ledger | Service (§7.2) | Flexible targets, progress events, history and streaks |
 | Interventions | Service | Notifications, check-ins, timing, suppression and follow-ups |
 | Visualization | Service (§7.4) | Observable dashboards built from shared structured data |
 
-**Migration:** expand the existing Soma rather than starting fresh. Its Garmin access, workspace and memory carry over. Move today's fitness instructions out of the core into the fitness skill, and keep them working throughout.
+**Migration:** expand the existing Soma rather than starting fresh. Its Garmin access, workspace and memory carry over. Move today's fitness instructions out of the core into the fitness skills, and keep them working throughout. **Done 2026-11-02:** `training`, `nutrition` and `health` in `agents/soma/skills/`; `health` starts thin and grows with use.
 
 **Intervention design:** Start user-initiated. Later add limited, opt-in proactive invitations via a tested client (Telegram and/or ntfy are candidates). Favor interactive choices such as **start / adjust / snooze / skip** over repeated one-way reminders. Ensure quiet hours, frequency caps, simple disable controls, and logged consent. Never fabricate an external human obligation or pressure the user to maintain streaks.
 
