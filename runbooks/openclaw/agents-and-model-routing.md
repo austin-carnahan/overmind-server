@@ -45,6 +45,12 @@ create/schedule). See
 [MCP Servers and Tool Access](sandboxing-and-trust.md#mcp-servers-and-tool-access)
 for the real sandboxing interaction.
 
+Skills: four Garmin skills its Skill Workshop created (food logging, recipes,
+run/walk and strength workouts), plus `garmin-workouts` in its workspace
+`skills/`: the raw workout model and read-back validation. That was
+`runbooks/garmin-workouts.md` until 2026-11-02; the two workout skills now
+point to the skill. Soma's skills aren't kept in this repository.
+
 ### Buckminster (`buckminster`)
 
 **Role:** general-purpose design agent (image editing, layout, and design
