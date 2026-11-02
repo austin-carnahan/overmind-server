@@ -67,4 +67,4 @@ else
 fi
 
 echo "== $agent's workspace skills"
-oc skills list --agent "$agent" 2>/dev/null | grep -E "openclaw-workspace|openclaw-project" || true
+oc skills list --agent "$agent" 2>/dev/null | grep -E "openclaw-workspace|agents-skills-project" || true
