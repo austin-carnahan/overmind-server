@@ -16,6 +16,21 @@ the live knowledge collection.
 The proposed `/mnt/substrate/AGENTS.md` provides short surface guidance and points
 to the index; each runner must be explicitly connected to that entry point.
 
+## Shared OpenClaw skills
+
+[`skills/`](skills/) holds Overmind-owned skills that every OpenClaw agent
+loads: the Gateway's `skills.load.extraDirs` points at
+`/opt/overmind/agents/skills`. They change only when this repository is
+committed and pulled on the server. Since 2026-11-01:
+
+- [`skill-discovery`](skills/skill-discovery/SKILL.md): find and evaluate
+  skills on skills.sh; install only with the user's approval, into the
+  requesting agent's workspace. See
+  [Skills catalog](../runbooks/openclaw/agents-and-model-routing.md#skills-catalog-skillssh).
+
+Extra directories have the lowest precedence in OpenClaw, so a same-named
+skill anywhere else overrides one here. Give these skills unique names.
+
 The repository's [AGENTS.md](../AGENTS.md) governs infrastructure work.
 [services/paperclip](../services/paperclip/README.md) describes the orchestrator's
 proposed deployment. Its private database/history remains outside Substrate.

@@ -181,10 +181,16 @@ Since 2026-11-01, [skills.sh](https://skills.sh/) is the catalog agents use
 to discover skills, through the standard `skills` CLI. There's no custom
 registry or wrapper.
 
-- **`find-skills`** (from `vercel-labs/skills`, commit `92a9a34`) is
-  installed in OpenClaw's shared skills folder, `~/.openclaw/skills/`, so
-  every agent has it. It tells agents to search with `npx skills find
-  <query>`.
+- **`skill-discovery`** is an Overmind-owned skill in this repository,
+  [`agents/skills/skill-discovery/SKILL.md`](../../agents/skills/skill-discovery/SKILL.md),
+  loaded by every agent through `skills.load.extraDirs:
+  ["/opt/overmind/agents/skills"]`. It's based on Vercel's `find-skills`
+  (commit `92a9a34`), with Overmind's install rules built in. It replaced an
+  installed, locally patched `find-skills` on 2026-11-01, so `npx skills
+  update` has nothing of ours to overwrite.
+  - Extra directories have OpenClaw's lowest precedence: a same-named skill
+    anywhere else would override it. Don't reinstall Vercel's `find-skills`
+    alongside it (different name, but duplicate purpose).
 - **CLI:** `npx -y skills@1.7.4`, pinned to the reviewed version; bump it on
   purpose. A search takes about 6 seconds on the Pi.
 - **Where skills go:**
@@ -196,9 +202,8 @@ registry or wrapper.
     `<workspace>/skills-lock.json`.
 
   `--copy` avoids symlinks into a `.agents/` folder.
-- **One shared rule, in `find-skills` itself.** An "Overmind rule" section at
-  the top of `~/.openclaw/skills/find-skills/SKILL.md` applies to every
-  agent, so no agent's own `AGENTS.md` repeats it:
+- **One shared rule, in `skill-discovery`,** so no agent's own `AGENTS.md`
+  repeats it:
   - discovery and inspection (search, list, reading a skill's files) are
     autonomous;
   - installing needs the user's approval, after reading `SKILL.md`, the
@@ -206,9 +211,9 @@ registry or wrapper.
   - installs go only into the requesting agent's workspace, never global
     (`-g`, `--agent '*'`, `--all`); no overlapping skills.
 
-  It replaces upstream's step 6, which installed with `-g -y`. Upstream's
-  text is kept beside it as `SKILL.md.upstream-92a9a34`. **`npx skills
-  update` would overwrite the local rule:** re-apply it after any update.
+  Behavioral, not enforced: agents have a shell. Agents in the `overmind`
+  group can also edit `/opt/overmind`, so a change to the rule would show up
+  in git.
 - **Preferred catalog:** skills.sh. OpenClaw's bundled `clawhub` skill
   searches ClawHub, a different catalog, and is left enabled for every agent.
 
