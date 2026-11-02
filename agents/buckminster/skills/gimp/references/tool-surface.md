@@ -89,7 +89,7 @@ your client prefixes them (`gimp_gimp_*` in OpenClaw, `mcp__gimp__gimp_*` in Cla
 
 Overmind adds PDB procedures named `overmind-*` (artifact publish/import for Cerebrate, object groups,
 blending, floor placement, operation status). Their contracts and safety rules are in the integration
-adapter: `services/design-studio/buckminster/skills/cerebrate-gimp/SKILL.md` in the overmind-server repository.
+adapter: `agents/buckminster/skills/cerebrate-gimp/SKILL.md` in the overmind-server repository.
 
 ## Environment-dependent alternatives
 

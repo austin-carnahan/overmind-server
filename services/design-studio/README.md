@@ -104,16 +104,13 @@ SSD.
 
   The installer also runs
   [`patch-gimp-agent-bridge`](patch-gimp-agent-bridge) (below).
-- **Buckminster's skills** live in [`buckminster/skills/`](buckminster/skills/):
-  `gimp-worker`, `cerebrate-gimp` (the Cerebrate ⇄ GIMP tool contracts: exact
-  calls, returns, refusals), `sweethome3d`, `design-python` and
-  `reference-research`. What to edit and why is in the shared skills,
-  [`.claude/skills/gimp`](../../.claude/skills/gimp/SKILL.md) and
-  [`.claude/skills/interior-scene-editing`](../../.claude/skills/interior-scene-editing/SKILL.md).
-  [`install-buckminster-skills`](install-buckminster-skills) (on Overmind;
-  it runs as `openclaw`) symlinks all of them into Buckminster's workspace `skills/`, so a
-  `git pull` of `/opt/overmind` updates them. Since 2026-11-02 these replace
-  the workspace `runbooks/` folder.
+- **Buckminster's skills** live in [`agents/buckminster/skills/`](../../agents/buckminster/skills/):
+  `gimp` and `interior-scene-editing` (what to edit and why), `gimp-worker`,
+  `cerebrate-gimp` (the Cerebrate ⇄ GIMP tool contracts: exact calls,
+  returns, refusals), `sweethome3d`, `design-python` and `reference-research`.
+  [`agents/install-agent-skills buckminster`](../../agents/install-agent-skills)
+  symlinks them into its workspace `skills/`, so a `git pull` of
+  `/opt/overmind` updates them. See [agents/README.md](../../agents/README.md).
 - [`design-checkpoint`](design-checkpoint) runs **on Overmind as `openclaw`**
   and uses only the Python standard library. It pulls files with
   `openclaw nodes invoke ... file.fetch`, so the worker never needs SSH access
@@ -161,8 +158,8 @@ corners for `gimp-item-transform-perspective`).
   Revoke the token with `docker exec cerebrate-mcp python -m
   cerebrate_mcp.uploads revoke buckminster`.
 
-  Its skill is [`buckminster/skills/design-python`](buckminster/skills/design-python/SKILL.md),
-  linked by `install-buckminster-skills`. `sudo bash install-buckminster-python`
+  Its skill is [`design-python`](../../agents/buckminster/skills/design-python/SKILL.md),
+  linked by `agents/install-agent-skills`. `sudo bash install-buckminster-python`
   hands the environment to `openclaw`, copies the skill beside it as
   `README.md`, and adds the environment exception to `AGENTS.md`.
 - **Pixel operations GIMP lacks** become reviewed plug-in procedures in
@@ -215,8 +212,8 @@ the person sees every change live.
   - The tools appear as `sweethome3d_*` while the node is connected and the app is open.
   - The node excludes `clear_scene`, `load_home` (it replaces the open scene without asking) and
     `delete_level`.
-- **Agents:** the [`sweethome3d`](buckminster/skills/sweethome3d/SKILL.md) skill is linked by
-  `install-buckminster-skills`. [`install-buckminster-sweethome3d`](install-buckminster-sweethome3d) on Overmind (sudo):
+- **Agents:** the [`sweethome3d`](../../agents/buckminster/skills/sweethome3d/SKILL.md) skill is linked by
+  `agents/install-agent-skills`. [`install-buckminster-sweethome3d`](install-buckminster-sweethome3d) on Overmind (sudo):
   - adds `sweethome3d_*` to Buckminster's `alsoAllow` and to every other agent's `deny`.
 - **Tested 2026-10-27, directly against the plug-in:**
   - 401 without the token; 46 tools with it.
@@ -262,7 +259,7 @@ displays, so close such windows by hand. Not patched.
 
 Agent edits keep each object in a layer group, holding its original pixels
 and its repairs (see the
-[`interior-scene-editing`](../../.claude/skills/interior-scene-editing/SKILL.md) skill). Every
+[`interior-scene-editing`](../../agents/buckminster/skills/interior-scene-editing/SKILL.md) skill). Every
 layer is still movable on its own. With the Move tool's default "Pick a layer
 or guide", dragging on the canvas grabs whatever is under the cursor (a
 patch, a cutout), and that member drifts out of alignment with its group.
@@ -355,3 +352,16 @@ wanted, run it in a container on the SSD, not as a host package.
 
 Read-only permissions guard against accidents only. The owner can `chmod`
 them back.
+
+## Claude Code on the Mac
+
+Claude Code can drive the same GIMP and Cerebrate tools, through MCP servers registered per user (local
+scope in `~/.claude.json`), not in this repository:
+
+- `gimp` runs `uvx --from gimp-agent-mcp==0.5.0 gimp-agent-mcp serve` with `GIMP_AGENT_ALLOW_PYTHON=0`,
+  the same server and settings as Buckminster's;
+- `cerebrate` is `http://127.0.0.1:18002/mcp`, through an SSH tunnel to Overmind's loopback-only endpoint:
+  `ssh -N -L 127.0.0.1:18002:127.0.0.1:8002 overmind-01`.
+
+Buckminster's GIMP skills are in [`agents/buckminster/skills/`](../../agents/buckminster/skills/); Claude
+Code doesn't load them automatically (they were in `.claude/skills/` until 2026-11-02), but can read them.

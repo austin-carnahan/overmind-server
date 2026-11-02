@@ -17,8 +17,8 @@ repository.
 | Reference scene `bedroom-v1.xcf` (never modified by a run) | `~/DesignStudio/workspaces/bedroom/` (hash in [assets/manifest.yaml](assets/manifest.yaml)) |
 | Downloaded assets (originals, never edited) | `~/DesignStudio/workspaces/room-v1-capstone/assets/` |
 | Run outputs (working XCF, before/clean/annotated renders) | `~/DesignStudio/workspaces/room-v1-capstone/runs/<run_id>/` |
-| Shared skills | [`.claude/skills/gimp`](../../.claude/skills/gimp/SKILL.md), [`.claude/skills/interior-scene-editing`](../../.claude/skills/interior-scene-editing/SKILL.md) |
-| Tool contracts (Cerebrate, `overmind-*`) | [`services/design-studio/buckminster/skills/cerebrate-gimp/SKILL.md`](../../services/design-studio/buckminster/skills/cerebrate-gimp/SKILL.md) |
+| Shared skills | [`gimp`](../../agents/buckminster/skills/gimp/SKILL.md), [`interior-scene-editing`](../../agents/buckminster/skills/interior-scene-editing/SKILL.md) (Buckminster's; in `.claude/skills/` until 2026-11-02) |
+| Tool contracts (Cerebrate, `overmind-*`) | [`cerebrate-gimp`](../../agents/buckminster/skills/cerebrate-gimp/SKILL.md) |
 | Earlier bedroom experiments (1–4) | [`models/field-notes.md`](../../models/field-notes.md) |
 
 ## A run

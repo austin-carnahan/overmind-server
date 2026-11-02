@@ -9,7 +9,7 @@ How Cerebrate (`cerebrate__*`) and GIMP (`gimp_gimp_*`, plus Overmind's `overmin
 connect: the exact calls, what they return, and what to do when one refuses. **What to edit and why**
 (scene structure, choosing masks, protecting objects, rebuilding surfaces, placement, shadows) is in
 the `interior-scene-editing` skill; general GIMP technique is in the `gimp` skill
-(`.claude/skills/` in the overmind-server repository).
+(in `agents/buckminster/skills/` of the overmind-server repository).
 
 Tool names here are OpenClaw's. Other clients prefix the same tools differently (Claude Code:
 `mcp__gimp__gimp_*`, `mcp__cerebrate__*`).

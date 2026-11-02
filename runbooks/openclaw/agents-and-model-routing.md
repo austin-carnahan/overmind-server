@@ -45,11 +45,12 @@ create/schedule). See
 [MCP Servers and Tool Access](sandboxing-and-trust.md#mcp-servers-and-tool-access)
 for the real sandboxing interaction.
 
-Skills: four Garmin skills its Skill Workshop created (food logging, recipes,
-run/walk and strength workouts), plus `garmin-workouts` in its workspace
-`skills/`: the raw workout model and read-back validation. That was
-`runbooks/garmin-workouts.md` until 2026-11-02; the two workout skills now
-point to the skill. Soma's skills aren't kept in this repository.
+Skills: [`garmin-workouts`](../../agents/soma/skills/garmin-workouts/SKILL.md)
+(the raw workout model and read-back validation; `runbooks/garmin-workouts.md`
+until 2026-11-02), linked from the repo, plus four Garmin skills its Skill
+Workshop created (food logging, recipes, run/walk and strength workouts). The
+two workout skills point to `garmin-workouts`. See
+[agents/README.md](../../agents/README.md) for how skills are kept.
 
 ### Buckminster (`buckminster`)
 
@@ -62,21 +63,15 @@ Workspace: `/home/openclaw/.openclaw/agents/buckminster/workspace`
 `USER.md`, `MEMORY.md`, and `skills/`).
 
 **Skills, not runbooks (since 2026-11-02).** Its procedures and verified tool
-knowledge are skills, symlinked into `skills/` from this repository by
-[`install-buckminster-skills`](../../services/design-studio/install-buckminster-skills),
-so they're always the version `/opt/overmind` has pulled:
-
-- its own, in [`services/design-studio/buckminster/skills/`](../../services/design-studio/buckminster/skills/):
-  `gimp-worker`, `cerebrate-gimp`, `sweethome3d`, `design-python`,
-  `reference-research` (with the Composio notes as a reference file);
-- the shared GIMP skills Claude Code also uses: `gimp` and
-  `interior-scene-editing` from `.claude/skills/`.
-
-Third-party skills (`composio-cli`, `interior-design-expert`) are copies in
-the same folder. OpenClaw follows the symlinks because both repo roots are in
-`skills.load.allowSymlinkTargets`. Buckminster reads these but doesn't edit
-them: lessons go to the user (or its Skill Workshop), and the operator
-updates the repo.
+knowledge are skills in [`agents/buckminster/skills/`](../../agents/buckminster/skills/),
+symlinked into its workspace `skills/` by `agents/install-agent-skills
+buckminster`, so they're always the version `/opt/overmind` has pulled:
+`gimp`, `interior-scene-editing`, `gimp-worker`, `cerebrate-gimp`,
+`sweethome3d`, `design-python`, and `reference-research` (with the Composio
+notes as a reference file). Third-party skills (`interior-design-expert`,
+`composio-cli`) are in `.agents/skills/`. Buckminster reads its skills but
+doesn't edit them: lessons go to the user (or its Skill Workshop), and the
+operator updates the repo. See [agents/README.md](../../agents/README.md).
 
 **This is the first agent scoped to only its own tools.** It uses
 `tools.profile: "minimal"` plus `alsoAllow: ["group:fs", "group:memory",

@@ -5,13 +5,13 @@
 # - hand the environment to `openclaw`, so Buckminster can add packages (bin/uv add) and read its artifact
 #   upload token (.secrets/);
 # - add the one exception to "no writes under /mnt/substrate/design-studio/" to AGENTS.md once.
-# The skill itself is linked into the workspace by install-buckminster-skills.
+# The skill itself is linked into the workspace by agents/install-agent-skills.
 # Workspace files are read at session start: no Gateway restart needed. Idempotent.
 #
 #   sudo bash <checkout>/services/design-studio/install-buckminster-python
 set -euo pipefail
 
-src=$(cd "$(dirname "$0")" && pwd)/buckminster/skills/design-python/SKILL.md
+src=$(cd "$(dirname "$0")/../.." && pwd)/agents/buckminster/skills/design-python/SKILL.md
 env=/mnt/substrate/design-studio/python
 ws=/home/openclaw/.openclaw/agents/buckminster/workspace
 exception='- **Your Python environment** (`/mnt/substrate/design-studio/python/`) is yours to manage: add packages there (`bin/uv add`). It is the one exception to "no direct writes under /mnt/substrate/design-studio/"; project folders stay `design-checkpoint`'"'"'s.'

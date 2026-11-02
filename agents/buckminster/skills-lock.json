@@ -1,0 +1,11 @@
+{
+  "version": 1,
+  "skills": {
+    "interior-design-expert": {
+      "source": "curiositech/some_claude_skills",
+      "sourceType": "github",
+      "skillPath": ".claude/skills/interior-design-expert/SKILL.md",
+      "computedHash": "08e71bf9382fc9d3d4d1f09b01c21cc69552f57f6774d4ae3612654d7a6d0955"
+    }
+  }
+}

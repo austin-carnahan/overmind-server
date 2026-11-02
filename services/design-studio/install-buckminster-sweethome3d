@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Give Buckminster the Sweet Home 3D tools that the Mac node publishes (nodeHost.mcp.servers.sweethome3d,
-# see services/design-studio/README.md). Its skill is linked by install-buckminster-skills.
+# see services/design-studio/README.md). Its skill is linked by agents/install-agent-skills.
 # - tool policy, appended to what each agent already has (never replaced): "sweethome3d_*" (node tools
 #   take one underscore) added to Buckminster's tools.alsoAllow, and to every other agent's tools.deny,
 #   since node tools are visible to all agents by default.

@@ -15,7 +15,7 @@ these notes say otherwise.
   - **bedroom.jpg**: 4000×3000 phone photo,
     `~/DesignStudio/workspaces/spike-a/` on the Mac.
 
-## Current recipes (procedures: the [`interior-scene-editing`](../.claude/skills/interior-scene-editing/SKILL.md) skill; call contracts: [`cerebrate-gimp.md`](../services/design-studio/buckminster/cerebrate-gimp.md))
+## Current recipes (procedures: the [`interior-scene-editing`](../agents/buckminster/skills/interior-scene-editing/SKILL.md) skill; call contracts: the [`cerebrate-gimp`](../agents/buckminster/skills/cerebrate-gimp/SKILL.md) skill)
 
 | Step | Recipe today | Evidence |
 | --- | --- | --- |

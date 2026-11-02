@@ -1,0 +1,70 @@
+#!/usr/bin/env bash
+# Install one OpenClaw agent's skills from this checkout. Runs as `openclaw`, which owns the workspaces
+# and the config (it re-runs itself with `sudo -u openclaw` if started as anyone else).
+# - Ours: each agents/<agent>/skills/<name>/ becomes a symlink in <workspace>/skills/, so a `git pull` of
+#   this checkout updates it with no re-install. OpenClaw follows workspace skill symlinks only into
+#   roots listed in skills.load.allowSymlinkTargets, so agents/ is added there (config backed up first).
+# - Third-party: agents/<agent>/skills-lock.json, if present, is copied into the workspace and restored
+#   with the pinned skills CLI into <workspace>/.agents/skills/ (fetched from upstream again).
+# Skills for every agent (agents/skills/) load through skills.load.extraDirs instead; see agents/README.md.
+# Skill changes apply without a Gateway restart. Idempotent.
+#
+#   bash /opt/overmind/agents/install-agent-skills <agent-id>        (main, soma, buckminster, …)
+set -euo pipefail
+
+agent=${1:?usage: install-agent-skills <agent-id>}
+here=$(cd "$(dirname "$0")" && pwd)
+src=$here/$agent
+cfg=/home/openclaw/.openclaw/openclaw.json
+skills_cli=skills@1.7.4
+
+[ "$(id -un)" = openclaw ] || exec sudo -u openclaw bash "$here/install-agent-skills" "$@"
+cd ~
+[ -d "$src" ] || { echo "no $src" >&2; exit 1; }
+oc() { bash -lc "openclaw $*"; }
+
+ws=$(oc config get "agents.entries.$agent.workspace" 2>/dev/null | tail -n 1 | tr -d '"')
+case $ws in /*) ;; *) [ "$agent" = main ] && ws=$HOME/.openclaw/workspace || ws=$HOME/.openclaw/agents/$agent/workspace ;; esac
+[ -d "$ws" ] || { echo "no workspace at $ws" >&2; exit 1; }
+echo "== $agent: $ws"
+
+if [ -d "$src/skills" ]; then
+    mkdir -p "$ws/skills"
+    for d in "$src"/skills/*/; do
+        d=${d%/}; dest=$ws/skills/$(basename "$d")
+        [ -f "$d/SKILL.md" ] || { echo "no SKILL.md in $d" >&2; exit 1; }
+        if [ -e "$dest" ] && [ ! -L "$dest" ]; then
+            echo "$dest exists and isn't a link; leaving it (remove it to link $d)" >&2
+            continue
+        fi
+        ln -sfn "$d" "$dest"
+        echo "linked skills/$(basename "$d")"
+    done
+    for l in "$ws"/skills/*; do  # links to skills since removed from the repo
+        if [ -L "$l" ] && [ ! -e "$l" ]; then rm "$l"; echo "removed dangling skills/$(basename "$l")"; fi
+    done
+fi
+
+if [ -f "$src/skills-lock.json" ]; then
+    cp "$src/skills-lock.json" "$ws/skills-lock.json"
+    (cd "$ws" && NO_COLOR=1 DO_NOT_TRACK=1 npx -y "$skills_cli" experimental_install -y 2>&1 | grep -E "Restor|Found|rror" || true)
+fi
+
+echo "== skills.load.allowSymlinkTargets"
+current=$(oc config get skills.load.allowSymlinkTargets --json 2>/dev/null | sed -n '/^\[/,$p' || true)
+wanted=$(CURRENT="${current:-[]}" python3 - "$here" <<'EOF'
+import json, os, sys
+cur = json.loads(os.environ["CURRENT"] or "[]")
+print(json.dumps(cur + [sys.argv[1]]) if sys.argv[1] not in cur else "")
+EOF
+)
+if [ -z "$wanted" ]; then
+    echo "already trusts $here"
+else
+    backup="$cfg.bak-skill-links-$(date +%Y%m%d-%H%M%S)"
+    cp -p "$cfg" "$backup" && echo "backup: $backup"
+    oc config set skills.load.allowSymlinkTargets "'$wanted'" --strict-json
+fi
+
+echo "== $agent's workspace skills"
+oc skills list --agent "$agent" 2>/dev/null | grep -E "openclaw-workspace|openclaw-project" || true
