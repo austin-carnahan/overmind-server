@@ -1,6 +1,6 @@
 ---
 name: gimp-worker
-description: Operate GIMP on the macbook-m1 worker through GIMP Agent MCP (gimp_gimp_* tools): verified setup, seeing your own work (export, file_fetch, view_image), checkpoints and restore, the launcher, network drops, and known bugs. Use before and during any GIMP work on the Mac.
+description: "Operate GIMP on the macbook-m1 worker through GIMP Agent MCP (gimp_gimp_* tools): verified setup, seeing your own work (export, file_fetch, view_image), checkpoints and restore, the launcher, network drops, and known bugs. Use before and during any GIMP work on the Mac."
 ---
 
 # GIMP on the Mac worker

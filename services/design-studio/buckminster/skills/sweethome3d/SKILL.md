@@ -1,6 +1,6 @@
 ---
 name: sweethome3d
-description: Build and edit rooms in 3D with Sweet Home 3D on the Mac (sweethome3d_* tools, which change the open project live): units and coordinates, walls, furniture, renders, saving and checkpoints. Use for 3D room layouts and renders.
+description: "Build and edit rooms in 3D with Sweet Home 3D on the Mac (sweethome3d_* tools, which change the open project live): units and coordinates, walls, furniture, renders, saving and checkpoints. Use for 3D room layouts and renders."
 ---
 
 # Sweet Home 3D: rooms in 3D, edited live on the Mac

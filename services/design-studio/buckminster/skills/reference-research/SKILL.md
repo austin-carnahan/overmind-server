@@ -1,6 +1,6 @@
 ---
 name: reference-research
-description: Find reference images and ideas for a design brief across many sources (Pinterest, Are.na, design publications, licensed photo libraries, museum collections, makers' catalogs) with web_search and web_fetch, keep provenance, and use Pinterest and Bright Data through Composio. Use when gathering inspiration or references.
+description: "Find reference images and ideas for a design brief across many sources (Pinterest, Are.na, design publications, licensed photo libraries, museum collections, makers' catalogs) with web_search and web_fetch, keep provenance, and use Pinterest and Bright Data through Composio. Use when gathering inspiration or references."
 ---
 
 # Reference research
