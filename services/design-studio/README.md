@@ -116,6 +116,23 @@ SSD.
   `openclaw nodes invoke ... file.fetch`, so the worker never needs SSH access
   to Overmind.
 
+## Switching the Mac's design tools off and on
+
+The GIMP and Sweet Home 3D tools are specialized, so they stay off while
+nobody is using them (since 2026-11-10). Both entries remain in the Mac
+node's `~/.openclaw/openclaw.json` with `enabled: false`:
+
+```sh
+openclaw config set nodeHost.mcp.servers.gimp.enabled true          # or false
+openclaw config set nodeHost.mcp.servers.sweethome3d.enabled true   # or false
+openclaw node restart
+```
+
+While enabled, the GIMP server is a `uvx` process that holds `~/.cache/uv/.lock`,
+which blocks `uv cache` maintenance. The Sweet Home 3D entry retries
+`127.0.0.1:9878` all day when the app isn't open. The node's other commands
+(files, Ollama) are unaffected either way.
+
 ## Agent capabilities: code on Overmind, named operations in GIMP
 
 Agents call named GIMP operations with parameters; they never send code to
