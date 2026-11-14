@@ -380,5 +380,7 @@ scope in `~/.claude.json`), not in this repository:
 - `cerebrate` is `http://127.0.0.1:18002/mcp`, through an SSH tunnel to Overmind's loopback-only endpoint:
   `ssh -N -L 127.0.0.1:18002:127.0.0.1:8002 overmind-01`.
 
-Buckminster's GIMP skills are in [`agents/buckminster/skills/`](../../agents/buckminster/skills/); Claude
-Code doesn't load them automatically (they were in `.claude/skills/` until 2026-11-02), but can read them.
+Buckminster's GIMP skills are in [`agents/buckminster/skills/`](../../agents/buckminster/skills/).
+Claude Code loads `gimp` and `interior-scene-editing` through symlinks in `.claude/skills/` (since
+2026-11-13), so there's still one copy. Start Claude Code in this repository's root: the MCP servers
+above are registered for that folder only.
