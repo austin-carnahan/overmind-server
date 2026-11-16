@@ -372,15 +372,24 @@ them back.
 
 ## Claude Code on the Mac
 
-Claude Code can drive the same GIMP and Cerebrate tools, through MCP servers registered per user (local
+Claude Code can drive the same GIMP, Cerebrate and Sweet Home 3D tools, through MCP servers registered per user (local
 scope in `~/.claude.json`), not in this repository:
 
 - `gimp` runs `uvx --from gimp-agent-mcp==0.5.0 gimp-agent-mcp serve` with `GIMP_AGENT_ALLOW_PYTHON=0`,
   the same server and settings as Buckminster's;
 - `cerebrate` is `http://127.0.0.1:18002/mcp`, through an SSH tunnel to Overmind's loopback-only endpoint:
-  `ssh -N -L 127.0.0.1:18002:127.0.0.1:8002 overmind-01`.
+  `ssh -N -L 127.0.0.1:18002:127.0.0.1:8002 overmind-01`;
+- `sweethome3d` is `http://127.0.0.1:9878/mcp` (since 2026-11-13), the plug-in inside the Sweet Home 3D
+  app, so it exists only while the app is open (`open -a "Sweet Home 3D"`). A `headersHelper` reads the
+  bearer token from the plug-in's `sh3d-mcp.token` at connect time, so the token isn't copied into
+  `~/.claude.json`. `clear_scene`, `load_home` and `delete_level` are denied in the repository's ignored
+  `.claude/settings.local.json`, matching Buckminster's `toolFilter`. Rollback: remove the entry from
+  `~/.claude.json` (a `~/.claude.json.bak-sh3d-*` backup was taken) and the three deny rules.
 
 Buckminster's GIMP skills are in [`agents/buckminster/skills/`](../../agents/buckminster/skills/).
-Claude Code loads `gimp` and `interior-scene-editing` through symlinks in `.claude/skills/` (since
-2026-11-13), so there's still one copy. Start Claude Code in this repository's root: the MCP servers
+Claude Code loads `gimp`, `interior-scene-editing`, `cerebrate-gimp`, `reference-research`,
+`design-python` and `sweethome3d` through symlinks in `.claude/skills/` (since 2026-11-13), so there's
+still one copy. `gimp-worker` isn't linked: it describes Buckminster's remote node. Claude Code
+doesn't use Buckminster's artifact-upload token (`design-python`'s `overmind-artifact put`): GIMP runs
+on the same Mac, so it loads computed results from local files. Start Claude Code in this repository's root: the MCP servers
 above are registered for that folder only.
